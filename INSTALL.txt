@@ -1,0 +1,29 @@
+Idols of Ash - Zonda CoopSync (full-sync online co-op, up to 4 players)
+Built for game version 1.41. Every player needs the mod installed.
+
+INSTALL
+1. Steam > right-click Idols of Ash > Manage > Browse local files.
+2. Copy "override.cfg" and the "mods-unpacked" folder into that folder,
+   next to idols_of_ash.exe.
+3. Launch the game normally through Steam.
+
+PLAY
+1. On the main menu press F2. Type a name and a shared password.
+2. One player clicks Host. Everyone else clicks Join with the same password.
+3. The HOST picks the level and difficulty (campaign or sandbox).
+   Guests follow automatically. Guests should not start levels themselves.
+4. Press F2 again to close the panel.
+
+WHAT SYNCS
+- Everyone sees each other (body, name, health, rope and hook).
+- One shared centipede, run by the host, hunts whoever is closest.
+  It can bite and knock back any player.
+- Health pickups are shared: whoever grabs one, it is gone for everyone.
+- Level start, restarts, and the ending trigger are shared.
+- Deaths: everyone gets 1 free respawn per run (you come back next to a
+  living teammate with 3 s of immunity). Die again and you spectate;
+  JUMP switches who you watch. When the last living player dies, the run
+  restarts for the whole team.
+
+UNINSTALL
+Delete override.cfg and the mods-unpacked folder from the game folder.
