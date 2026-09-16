@@ -52,7 +52,9 @@ def mesh_block(args):
         return bi, None
     verts = verts + lo
     g = F.gradient(verts)
-    nrm = -g / np.maximum(np.linalg.norm(g, axis=1, keepdims=True), 1e-9)
+    gl = np.linalg.norm(g, axis=1, keepdims=True)
+    nrm = -g / np.maximum(gl, 1e-9)
+    nrm[gl[:, 0] < 1e-6] = (0.0, 1.0, 0.0)   # flat sky cap has no gradient
     probe = F.eval(verts + nrm * 2.5)
     ao = np.clip(0.35 + 0.65 * np.clip(-probe / 2.5, 0.0, 1.0), 0.35, 1.0)
     vi = np.clip(np.rint((verts - lo) / VOX).astype(np.int64), 0, np.array(X.shape) - 1)
@@ -172,8 +174,11 @@ def write_glb(path, nodes, material_names):
     for name, prims in nodes:
         gp = []
         for pr in prims:
-            pos = np.ascontiguousarray(pr["pos"], dtype=np.float32)
-            nrm = np.ascontiguousarray(pr["nrm"], dtype=np.float32)
+            # 1 cm positions and 1/48 normal steps: invisible in game, compresses far better
+            pos = np.ascontiguousarray(np.round(pr["pos"].astype(np.float64) * 100.0) / 100.0, dtype=np.float32)
+            nq = np.round(pr["nrm"].astype(np.float64) * 48.0) / 48.0
+            nq /= np.maximum(np.linalg.norm(nq, axis=1, keepdims=True), 1e-9)
+            nrm = np.ascontiguousarray(nq, dtype=np.float32)
             c = np.clip(pr["ao"] * 255.0, 0, 255).astype(np.uint8)
             col = np.ascontiguousarray(np.stack([c, c, c, np.full_like(c, 255)], axis=1))
             ia = add_acc(pos, 5126, "VEC3", 34962, minmax=True)
