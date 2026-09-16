@@ -16,14 +16,87 @@ PLAY
 
 WHAT SYNCS
 - Everyone sees each other (body, name, health, rope and hook).
-- One shared centipede, run by the host, hunts whoever is closest.
-  It can bite and knock back any player.
-- Health pickups are shared: whoever grabs one, it is gone for everyone.
+- Centipedes are run by the host. With one centipede it hunts whoever is
+  closest; with several, they split up and each takes a different player.
+- Health pickups are NOT shared. Each player collects their own.
 - Level start, restarts, and the ending trigger are shared.
-- Deaths: everyone gets 1 free respawn per run (you come back next to a
-  living teammate with 3 s of immunity). Die again and you spectate;
-  JUMP switches who you watch. When the last living player dies, the run
-  restarts for the whole team.
+- Deaths: everyone gets 1 free respawn per run (you come back on solid
+  ground next to a living teammate, with 3 s of immunity). Die again and
+  you spectate; JUMP switches who you watch. Reaching a checkpoint
+  refreshes the team's respawn AND revives anyone who is spectating.
+  When the last living player dies, the run restarts for the whole team.
+
+ALL MAPS UNLOCKED
+Every sandbox map is unlocked for everyone, without touching campaign
+progress or firing Steam achievements.
+
+NEW MAP: INFERNO (sandbox)
+A 1100 m custom descent, roughly twice the campaign's depth, in three parts:
+  - Hell: red rock, firelight, and traps.
+  - The Dark: an 80 m stretch with no light at all. Follow your friends'
+    name tags.
+  - The Frozen Circle: ice, blizzards, and a frozen lake at the bottom.
+Traps to watch for:
+  - Sand shelves crumble about a second after you stand on them, and snap
+    your rope if your hook is in one. Stone shelves always hold.
+  - Fire vents flare on a timer and burn you if you are standing in one.
+  - Boulders (and icicles, lower down) drop when you land underneath.
+  - Hot updrafts throw your body and your thrown hook.
+  - Spike beds on the walls hurt, cut your rope, and shove you off.
+  - Ice shelves in the frozen section tilt toward the pit. Keep moving or
+    hook in.
+  - A second centipede is released once someone passes 330 m down.
+Rest platforms every ~95 m are checkpoints: they heal you and bring
+spectators back into the run.
+
+NEW MAP: THE UNDERDARK (sandbox)
+The big one. About 2,550 m of descent (deeper than the campaign's 2,150),
+mostly sideways through caverns: 51 rooms, 10 biomes, about 6 km of
+horizontal travel (71% of the route, vs about 43% in the campaign). Long
+drops are broken up by galleries: land, walk a tunnel, find the next drop. Every player builds the exact
+same world. You start at a surface camp; the cave mouth is in the cliff.
+  THE MOUTH > OSSUARY > THE BURROWS > FUNGAL HOLLOW > ROOTWORKS >
+  DROWNED GALLERIES > SUNKEN VILLAGE > CRYSTAL VEINS > THE FOUNDRY (and
+  THE CRUCIBLE) > THE NEST
+How it plays:
+  - Shafts between biomes: hook the shelves and rappel down. Sand shelves
+    RUMBLE AND SHAKE for a second, then drop (and cut your rope). Stone holds.
+  - THE BURROWS: a small room with three holes barely taller than you. One
+    goes through (110 m of crawl-tight tunnel with two vertical drops); the
+    other two are dead ends. No rope room in there, just walk. If you hear
+    breathing, keep moving.
+  - Chasms: hook the pillar tops and swing across. Fall in, and there are
+    stairs on the near wall to climb back out.
+  - Puzzles: light all 4 kilns in the Kiln Hall to open the door. In the
+    Plate Hall, every living climber stands on a plate (alone, the door opens
+    for 16 s, so run). Three idol fragments are hidden in side caves and on a
+    village rooftop; the Foundry door needs all three.
+  - THE CRUCIBLE: 12 iron bars over lava. Hook a bar, swing, throw again.
+    Keep the rope short or you dip into the lava. You can climb onto a bar
+    to rest.
+  - The Stalker (Ossuary and Drowned Galleries): it only moves while nobody
+    is looking at it. Someone always has to watch it. It is very fast.
+  - Centipedes are released by triggers, and the Nest at the bottom has
+    three. Take the idol from the altar to win.
+  - Name tags show through walls on this map, so you can find each other in
+    the dark. Top right shows biome, depth, and run time.
+  - Checkpoints at every biome landing. Dying solo reloads you at the team's
+    furthest checkpoint; in co-op you respawn next to a teammate as usual.
+  - Ending: take the idol from the altar in the Nest. That wakes the nest and
+    opens the sealed tunnel behind the altar. Run for the light.
+  - Music and ambience change per biome (the game's own ambience system only
+    runs in the campaign, so the map brings its own).
+
+ENHANCED GRAPHICS (F4, per player, remembered between sessions)
+F4 cycles:  OFF  >  LOW  >  HIGH  >  HIGH + HD
+  - LOW:  bumpy stone (normal maps), glow, filmic color, shadows on the 8
+          nearest lights.
+  - HIGH: LOW + light bouncing off rock (SDFGI), indirect light, reflections,
+          shadows on the 20 nearest lights.
+  - HD:   HIGH at your screen's full resolution instead of the game's 640x360
+          (changes the pixelated look, costs the most FPS).
+Works in the campaign and every map. Off by default. The F2 panel shows
+FPS and the current graphics mode.
 
 UNINSTALL
 Delete override.cfg and the mods-unpacked folder from the game folder.

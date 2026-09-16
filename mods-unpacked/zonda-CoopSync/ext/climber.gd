@@ -74,6 +74,9 @@ func coop_enter_spectator() -> void:
 	velocity = Vector3.ZERO
 	AirVelocity = Vector3.ZERO
 	additional_velocity_next_frame = Vector3.ZERO
+	LastVelocity = Vector3.ZERO
+	PlayerCamera.rotation = Vector3.ZERO
+	PlayerCamera.DutchAngleOffset = 0.0
 	grapple_claw_is_enabled = false
 	collision_layer = 0
 	collision_mask = 0
@@ -86,13 +89,43 @@ func coop_enter_spectator() -> void:
 		cut_from_black()
 
 
+func coop_revive_at_checkpoint() -> void:
+	if not coop_spectating:
+		return
+	hud.set_to_black()
+	CoopSync.show_banner("Checkpoint reached! Rejoining the run...", 3.0)
+	await get_tree().create_timer(1.0).timeout
+	if not is_inside_tree():
+		return
+	coop_spectating = false
+	grapple_claw_is_enabled = true
+	collision_layer = 2
+	collision_mask = 1
+	var spot: Vector3 = CoopSync.respawn_point_for(self)
+	set_climber_state(defaultClimberState)
+	velocity = Vector3.ZERO
+	AirVelocity = Vector3.ZERO
+	additional_velocity_next_frame = Vector3.ZERO
+	teleport_to_location(spot)
+	health = healthMax
+	recent_damage_buffer = 0.0
+	lethalDamageHandled = false
+	_coop_invuln_until_ms = Time.get_ticks_msec() + RESPAWN_GRACE_MS
+	cut_from_black()
+
+
 func _physics_process(delta: float) -> void:
 	if coop_spectating:
+		global_rotation = Vector3.ZERO
 		var target = CoopSync.spectate_target(_coop_spec_index)
 		if target and Camera:
-			var cam_forward: Vector3 = -Camera.global_basis.z
-			var desired: Vector3 = target.global_position - cam_forward * 3.0 + Vector3.UP * 1.2
-			global_position = global_position.lerp(desired, clampf(delta * 10.0, 0.0, 1.0))
+			var target_forward: Vector3 = -target.global_basis.z
+			target_forward.y = 0.0
+			if target_forward.length_squared() < 0.0001:
+				target_forward = Vector3.FORWARD
+			target_forward = target_forward.normalized()
+			var desired: Vector3 = target.global_position - target_forward * 3.5 + Vector3.UP * 1.6
+			global_position = global_position.lerp(desired, clampf(delta * 8.0, 0.0, 1.0))
 			CoopSync.show_banner("Spectating %s   (JUMP = next player)" % target.player_name, 0.5)
 		elif not target:
 			CoopSync.show_banner("Spectating. Waiting for a living player...", 0.5)
@@ -100,7 +133,7 @@ func _physics_process(delta: float) -> void:
 		AirVelocity = Vector3.ZERO
 		additional_velocity_next_frame = Vector3.ZERO
 		return
-	if is_on_floor() and not _coop_respawning and health > 0.0:
+	if is_on_floor() and get_floor_normal().y > 0.8 and not (activeClimberState is ClimberState_Attached) and not _coop_respawning and health > 0.0:
 		_coop_last_ground_pos = global_position
 		_coop_has_ground = true
 	super(delta)
@@ -118,3 +151,38 @@ func _input(event: InputEvent) -> void:
 			_coop_spec_index += 1
 		return
 	super(event)
+
+
+func on_bit() -> void:
+	if in_ending_state and CoopSync.in_session() and not CoopSync.is_host:
+		return
+	super()
+
+
+func ending_cut() -> void:
+	player_audio_enabled = false
+	hud.set_to_black()
+	PlayerCamera.LookAtOverrideNode = null
+
+	await get_tree().process_frame
+
+	var rope_fallen = get_node("%Rope_Fallen")
+	rope_fallen.visible = true
+
+	var new_player_transform: Transform3D = get_node("%BottomEndingPlayerNode").global_transform
+	var target_origin: Vector3 = new_player_transform.origin
+	if CoopSync.in_session():
+		target_origin += CoopSync.local_player_slot_offset()
+	teleport_to_location(target_origin)
+	global_rotation = Vector3.ZERO
+	PlayerCamera.set_camera_rotation(new_player_transform.basis.get_rotation_quaternion().get_euler())
+	enter_injured_state()
+
+	await get_tree().create_timer(4.0).timeout
+	cut_from_black()
+	Game.audio.start_ending_music()
+
+	var rope_swish = get_node("%Rope_Swish")
+	rope_swish.visible = false
+	rope_swish_for_ending.visible = false
+	in_ending_state = true

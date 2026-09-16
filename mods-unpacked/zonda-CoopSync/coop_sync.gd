@@ -15,8 +15,14 @@ const LobbyUiScript := preload("res://mods-unpacked/zonda-CoopSync/lobby_ui.gd")
 const EXTENSIONS := [
 	["res://scripts/climber.gd", "ext/climber.gd"],
 	["res://scripts/centipede.gd", "ext/centipede.gd"],
-	["res://treasure_pickup.gd", "ext/treasure_pickup.gd"],
 	["res://scripts/ending_trigger_area.gd", "ext/ending_trigger_area.gd"],
+	["res://scripts/lore_point.gd", "ext/lore_point.gd"],
+	["res://scenes/sandbox_map_option.gd", "ext/sandbox_map_option.gd"],
+]
+
+const MOD_MAPS := [
+	["INFERNO", "res://mods-unpacked/zonda-CoopSync/maps/inferno.tscn"],
+	["THE UNDERDARK", "res://mods-unpacked/zonda-CoopSync/maps/underdark/underdark.tscn"],
 ]
 
 var local_name := "Player"
@@ -47,12 +53,20 @@ var _last_unhook_ms: Dictionary = {}
 var _welcome_queue: Array = []
 
 var respawns_left := 1
+var _maps_unlocked := false
 var perf_mod_usec_frame := 0
 var perf_mod_usec_avg := 0.0
 var _perf_extra_usec := 0
 var _banner_layer: CanvasLayer = null
 var _banner_label: Label = null
 var _banner_until_ms := 0
+
+# Custom map support: events every player applies (traps, puzzles, pickups), the team's
+# furthest checkpoint, and a few per-map display toggles. Survives death reloads of the
+# same map, cleared on the main menu.
+var map_state := {"scene": "", "checkpoint": -1, "events": {}}
+var nametags_through_walls := false
+var gfx: Node = null
 
 
 func _init() -> void:
@@ -80,6 +94,8 @@ func _ready() -> void:
 	get_tree().node_removed.connect(_on_node_removed)
 	lobby_ui = LobbyUiScript.new()
 	get_tree().root.call_deferred("add_child", lobby_ui)
+	gfx = load(MOD_DIR + "gfx.gd").new()
+	add_child(gfx)
 	_build_banner()
 	print("[CoopSync] ready")
 
@@ -120,6 +136,7 @@ func perf_add(usec: int) -> void:
 
 
 func _process(delta: float) -> void:
+	_try_unlock_all_maps()
 	if not Game.is_steam_enabled():
 		return
 	var t0 := Time.get_ticks_usec()
@@ -132,7 +149,25 @@ func _process(delta: float) -> void:
 func perf_text() -> String:
 	var fps := Engine.get_frames_per_second()
 	var frame_ms := 1000.0 / maxf(fps, 1.0)
-	return "FPS %d  |  frame %.1f ms  |  mod %.2f ms  |  physics %d Hz" % [fps, frame_ms, perf_mod_usec_avg / 1000.0, Engine.physics_ticks_per_second]
+	var g: String = gfx.perf_label() if gfx else "?"
+	return "FPS %d  |  frame %.1f ms  |  mod %.2f ms  |  gfx %s (F4)" % [fps, frame_ms, perf_mod_usec_avg / 1000.0, g]
+
+
+func _try_unlock_all_maps() -> void:
+	if _maps_unlocked:
+		return
+	if SandboxDataManager == null or SandboxDataManager.loaded_data == null:
+		return
+	_maps_unlocked = true
+	# Unlock the maps themselves without touching campaign progress, so no
+	# Steam achievements fire for difficulties that were never actually beaten.
+	SandboxDataManager.safe_unlock_map_of_type("CAMPAIGN (INVERTED)", "res://scenes/FogLands_Invert.tscn", SandboxData.EDifficultyLevel.Nightmare)
+	SandboxDataManager.safe_unlock_map_of_type("FIRST KILN", "res://scenes/ViperPit.tscn", SandboxData.EDifficultyLevel.Nightmare)
+	SandboxDataManager.safe_unlock_map_of_type("FIRST KILN (INVERTED)", "res://scenes/first_kiln_invert.tscn", SandboxData.EDifficultyLevel.Nightmare)
+	for m in MOD_MAPS:
+		if FileAccess.file_exists(m[1]):
+			SandboxDataManager.safe_unlock_map_of_type(m[0], m[1], SandboxData.EDifficultyLevel.Normal)
+	print("[CoopSync] all sandbox maps unlocked")
 
 
 func _process_inner(delta: float) -> void:
@@ -222,27 +257,81 @@ func spectate_target(index: int) -> Node3D:
 	return list[posmod(index, list.size())]
 
 
+func local_player_slot_offset() -> Vector3:
+	var ids: Array = [_my_steam_id]
+	for id in _peers.keys():
+		ids.append(id)
+	ids.sort()
+	var idx: int = ids.find(_my_steam_id)
+	if idx <= 0:
+		return Vector3.ZERO
+	var angle: float = float(idx) * (TAU / 4.0)
+	return Vector3(cos(angle), 0.0, sin(angle)) * 0.9
+
+
+const _SPAWN_OFFSETS := [
+	Vector3(0.0, 0.0, 0.0), Vector3(0.7, 0.0, 0.0), Vector3(-0.7, 0.0, 0.0), Vector3(0.0, 0.0, 0.7),
+	Vector3(0.0, 0.0, -0.7), Vector3(1.2, 0.0, 1.2), Vector3(-1.2, 0.0, -1.2), Vector3(1.2, 0.0, -1.2),
+]
+
+
 func respawn_point_for(c: Node3D) -> Vector3:
-	var best: Node3D = null
-	var best_d := INF
-	for rp in _active_remote_players():
-		var d: float = c.global_position.distance_squared_to(rp.global_position)
-		if d < best_d:
-			best_d = d
-			best = rp
-	if best:
-		if best.has_ground:
-			return best.last_ground_pos + Vector3(0.5, 0.4, 0.5)
-		var floor_hit := _floor_below(c, best.global_position, 12.0)
-		if floor_hit != Vector3.INF:
-			return floor_hit + Vector3(0.5, 0.9, 0.5)
-		return best.global_position + Vector3(0.8, 0.6, 0.8)
+	# Candidates in priority order: the nearest friend's last solid ground, then the friends
+	# themselves, then our own last ground. Every candidate is physics-checked so we never
+	# come back hanging in the air or inside a wall.
+	var remotes := _active_remote_players()
+	var here: Vector3 = c.global_position
+	remotes.sort_custom(func(a, b): return here.distance_squared_to(a.global_position) < here.distance_squared_to(b.global_position))
+	var candidates: Array = []
+	for rp in remotes:
+		if rp.has_ground:
+			candidates.append(rp.last_ground_pos)
+		candidates.append(rp.global_position)
 	if c.get("_coop_has_ground"):
-		return c.get("_coop_last_ground_pos") + Vector3.UP * 0.4
-	var own_floor := _floor_below(c, c.global_position, 12.0)
+		candidates.append(c.get("_coop_last_ground_pos"))
+	candidates.append(here)
+	for cand in candidates:
+		var spot := _settle_on_ground(c, cand)
+		if spot != Vector3.INF:
+			return spot
+	# Nothing solid near anyone (everyone mid-rope): a longer probe straight down from the nearest friend.
+	if remotes.size() > 0:
+		var deep := _floor_below(c, remotes[0].global_position, 40.0)
+		if deep != Vector3.INF:
+			return deep + Vector3.UP * 0.9
+		return remotes[0].global_position
+	var own_floor := _floor_below(c, here, 40.0)
 	if own_floor != Vector3.INF:
 		return own_floor + Vector3.UP * 0.9
-	return c.global_position + Vector3.UP * 0.5
+	return here + Vector3.UP * 0.5
+
+
+func _settle_on_ground(c: Node3D, from: Vector3) -> Vector3:
+	if not c.is_inside_tree() or c.get_world_3d() == null:
+		return Vector3.INF
+	var space := c.get_world_3d().direct_space_state
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.42
+	cap.height = 1.5
+	for off in _SPAWN_OFFSETS:
+		var start: Vector3 = from + off + Vector3.UP * 1.0
+		var ray := PhysicsRayQueryParameters3D.create(start, start + Vector3.DOWN * 4.0, 1)
+		var hit: Dictionary = space.intersect_ray(ray)
+		if hit.is_empty():
+			continue
+		var n: Vector3 = hit["normal"]
+		if n.y < 0.75:
+			continue  # too steep, we would slide straight off
+		var center: Vector3 = hit["position"] + Vector3.UP * 0.9
+		var q := PhysicsShapeQueryParameters3D.new()
+		q.shape = cap
+		q.transform = Transform3D(Basis.IDENTITY, center)
+		q.collision_mask = 1
+		q.exclude = [c.get_rid()]
+		if space.intersect_shape(q, 1).size() > 0:
+			continue  # would clip into rock
+		return center
+	return Vector3.INF
 
 
 func _floor_below(c: Node3D, from: Vector3, dist: float) -> Vector3:
@@ -250,7 +339,7 @@ func _floor_below(c: Node3D, from: Vector3, dist: float) -> Vector3:
 		return Vector3.INF
 	var ray := PhysicsRayQueryParameters3D.create(from + Vector3.UP * 0.5, from + Vector3.DOWN * dist, 1)
 	var hit: Dictionary = c.get_world_3d().direct_space_state.intersect_ray(ray)
-	if hit.size() > 0:
+	if hit.size() > 0 and hit["normal"].y > 0.6:
 		return hit["position"]
 	return Vector3.INF
 
@@ -438,7 +527,10 @@ func _track_scene_changes() -> void:
 		_local_player = null
 	_purge_puppets()
 	respawns_left = 1
-	_await_spawn_sync = is_guest()
+	nametags_through_walls = false
+	if _last_scene_path.contains("MainMenu"):
+		map_state = {"scene": "", "checkpoint": -1, "events": {}}
+	_await_spawn_sync = is_guest() and _is_gameplay_scene(_last_scene_path)
 	print("[CoopSync] scene -> ", _last_scene_path)
 	if is_host and _lobby_id != 0:
 		_broadcast_level()
@@ -728,12 +820,32 @@ func _handle_message(data: PackedByteArray) -> void:
 				_apply_level(msg)
 		"death":
 			on_remote_death(str(msg.get("n", "A player")))
-		"pickup":
-			_on_remote_pickup(str(msg.get("path", "")), msg.get("pos", Vector3.ZERO), msg.has("pos"))
 		"ending":
 			on_remote_ending()
 		"unhook":
 			_on_remote_unhook()
+		"checkpoint":
+			if msg.has("cp"):
+				_note_checkpoint(str(msg.get("s", "")), int(msg["cp"]))
+			on_checkpoint_reached()
+		"mapev":
+			_apply_map_event(str(msg.get("s", "")), str(msg.get("k", "")), msg.get("d", {}), bool(msg.get("p", true)))
+		"maps":
+			if str(msg.get("s", "")) == _last_scene_path and not SceneLoader.is_transitioning():
+				var root := get_tree().current_scene
+				if root and root.has_method("coop_map_stream"):
+					root.coop_map_stream(msg.get("d", {}), int(msg.get("ts", 0)))
+		"mapsync_req":
+			if is_host and str(msg.get("s", "")) == map_state.get("scene", ""):
+				_send_to(from, {"t": "mapsync", "from": _my_steam_id, "s": map_state["scene"],
+						"cp": map_state["checkpoint"], "ev": map_state["events"]}, true)
+		"mapsync":
+			if from == _host_steam_id:
+				var sc := str(msg.get("s", ""))
+				_note_checkpoint(sc, int(msg.get("cp", -1)))
+				var ev: Dictionary = msg.get("ev", {})
+				for k in ev.keys():
+					_apply_map_event(sc, str(k), ev[k], true)
 
 
 # ---------------------------------------------------------------- outgoing state
@@ -752,7 +864,7 @@ func _broadcast_state() -> void:
 		"cam": p.Camera.global_rotation.y if p.Camera else p.global_rotation.y,
 		"hp": p.health,
 		"alive": not p.get("coop_spectating"),
-		"gnd": p.is_on_floor(),
+		"gnd": p.is_on_floor() and p.get_floor_normal().y > 0.8 and not (p.activeClimberState is ClimberState_Attached),
 	}
 	if p.Rope and p.Rope.is_setup and p.activeClimberState and p.activeClimberState.is_rope_active() and is_instance_valid(p.Rope._claw) and p.Rope._claw.visible:
 		var pts := PackedVector3Array()
@@ -784,15 +896,48 @@ func _on_player_state(from: int, msg: Dictionary) -> void:
 		return
 	var rp = _peers.get(from)
 	if not is_instance_valid(rp):
-		rp = _spawn_remote_player(from, str(msg.get("n", "Player")))
+		rp = _spawn_remote_player(from, sanitize_name(str(msg.get("n", "Player"))))
 		if rp == null:
 			return
 	rp.update_state(msg)
 	if _await_spawn_sync and from == _host_steam_id and is_instance_valid(_local_player) and _local_player_age > 1.2:
 		_await_spawn_sync = false
-		var pos: Vector3 = msg.get("pos", Vector3.ZERO)
-		_local_player.teleport_to_location(pos + Vector3(0.8, 0.3, 0.8))
+		var host_pos: Vector3 = msg.get("pos", Vector3.ZERO)
+		_local_player.teleport_to_location(_safe_spawn_near(host_pos))
 		print("[CoopSync] spawned next to host")
+
+
+func _is_gameplay_scene(path: String) -> bool:
+	if path.is_empty():
+		return false
+	if Game.active_sandbox_map_data and Game.active_sandbox_map_data.scene_path == path:
+		return true
+	return false
+
+
+func _safe_spawn_near(host_pos: Vector3) -> Vector3:
+	# Never shove a player into geometry: only use the side offset if the path there is clear.
+	var target: Vector3 = host_pos + Vector3(0.8, 0.3, 0.8)
+	if not is_instance_valid(_local_player) or not _local_player.is_inside_tree():
+		return target
+	var space: World3D = _local_player.get_world_3d()
+	if space == null:
+		return target
+	var ray: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(host_pos + Vector3.UP * 0.3, target, 1)
+	if space.direct_space_state.intersect_ray(ray).size() > 0:
+		return host_pos
+	return target
+
+
+func sanitize_name(raw: String) -> String:
+	# Some setups return a file path (or nothing) from Steam's persona name, which then
+	# rides along as a player's display name. Reject anything that is not name-shaped.
+	var n := raw.strip_edges()
+	if n.is_empty():
+		return "Player"
+	if n.contains("\\") or n.contains("/") or n.contains(":"):
+		return "Player"
+	return n.substr(0, 24)
 
 
 func _spawn_remote_player(peer_id: int, player_name: String):
@@ -854,50 +999,6 @@ func on_remote_death(who: String) -> void:
 		c.took_lethal_damage()
 
 
-func broadcast_pickup(path: String, pos: Vector3) -> void:
-	_send_all({"t": "pickup", "from": _my_steam_id, "path": path, "pos": pos}, true)
-
-
-func _on_remote_pickup(path: String, pos: Vector3, has_pos: bool) -> void:
-	if path.is_empty():
-		return
-	var node := get_node_or_null(NodePath(path))
-	if node and node.has_method("coop_remote_consume"):
-		print("[CoopSync] remote pickup consumed by path: ", path)
-		node.coop_remote_consume()
-		return
-	if not has_pos:
-		print("[CoopSync] remote pickup NOT found by path (no pos): ", path)
-		return
-	var scene := get_tree().current_scene
-	if scene == null:
-		return
-	var best: Node3D = null
-	var best_d := 2.25
-	for ember in _find_embers(scene):
-		var d: float = ember.global_position.distance_squared_to(pos)
-		if d < best_d:
-			best_d = d
-			best = ember
-	if best:
-		print("[CoopSync] remote pickup consumed by position: ", String(best.get_path()))
-		if best.has_method("coop_remote_consume"):
-			best.coop_remote_consume()
-		else:
-			best.queue_free()
-	else:
-		print("[CoopSync] remote pickup NOT found: ", path, " ", str(pos))
-
-
-func _find_embers(root: Node) -> Array:
-	var out: Array = []
-	if root is Node3D and root.scene_file_path == "res://Treasure_Pickup.tscn":
-		out.append(root)
-	for c in root.get_children():
-		out.append_array(_find_embers(c))
-	return out
-
-
 func broadcast_ending() -> void:
 	_send_all({"t": "ending", "from": _my_steam_id}, true)
 
@@ -906,6 +1007,124 @@ func on_remote_ending() -> void:
 	var c = Game.climber
 	if is_instance_valid(c) and c.is_inside_tree() and not c.in_ending_state and not c.ending_should_trigger_next_step_on_next_collision and not c.prevent_player_death:
 		Game.trigger_ending()
+
+
+# ---------------------------------------------------------------- custom maps
+
+func _map_state_for(scene: String) -> Dictionary:
+	if str(map_state.get("scene", "")) != scene:
+		map_state = {"scene": scene, "checkpoint": -1, "events": {}}
+	return map_state
+
+
+func _note_checkpoint(scene: String, id: int) -> void:
+	if scene.is_empty():
+		return
+	var st := _map_state_for(scene)
+	if id > int(st["checkpoint"]):
+		st["checkpoint"] = id
+
+
+func map_checkpoint_for(scene: String) -> int:
+	# Takes the path explicitly: a map's _ready runs a frame before this autoload
+	# notices the scene change, so _last_scene_path can still be the previous scene.
+	if str(map_state.get("scene", "")) != scene:
+		return -1
+	return int(map_state["checkpoint"])
+
+
+func map_events_for(scene: String) -> Dictionary:
+	if str(map_state.get("scene", "")) != scene:
+		return {}
+	return map_state["events"]
+
+
+func map_event_done(key: String) -> bool:
+	return str(map_state.get("scene", "")) == _last_scene_path and map_state["events"].has(key)
+
+
+func map_events() -> Dictionary:
+	if str(map_state.get("scene", "")) != _last_scene_path:
+		return {}
+	return map_state["events"]
+
+
+func map_event(key: String, data: Dictionary = {}, persist: bool = true) -> void:
+	# Applies locally right away, then tells everyone else. Persistent events are
+	# idempotent, so a trap or puzzle step never fires twice for the same player.
+	if persist and map_event_done(key):
+		return
+	var scene := _last_scene_path
+	_apply_map_event(scene, key, data, persist)
+	if in_session():
+		_send_all({"t": "mapev", "from": _my_steam_id, "s": scene, "k": key, "d": data, "p": persist}, true)
+
+
+func _apply_map_event(scene: String, key: String, data, persist: bool) -> void:
+	if scene.is_empty() or key.is_empty():
+		return
+	if persist:
+		var st := _map_state_for(scene)
+		if st["events"].has(key):
+			return
+		st["events"][key] = data
+	if scene != _last_scene_path or SceneLoader.is_transitioning():
+		return
+	var root := get_tree().current_scene
+	if root and root.has_method("coop_map_event"):
+		root.coop_map_event(key, data if typeof(data) == TYPE_DICTIONARY else {})
+
+
+func map_stream(data: Dictionary) -> void:
+	if in_session():
+		_send_all({"t": "maps", "from": _my_steam_id, "s": _last_scene_path, "ts": Time.get_ticks_msec(), "d": data}, false)
+
+
+func map_is_authority() -> bool:
+	return not in_session() or is_host
+
+
+func map_checkpoint(id: int) -> void:
+	_note_checkpoint(_last_scene_path, id)
+	if in_session():
+		_send_all({"t": "checkpoint", "from": _my_steam_id, "s": _last_scene_path, "cp": id}, true)
+		on_checkpoint_reached()
+	else:
+		show_banner("Checkpoint reached.", 3.0)
+
+
+func map_request_sync() -> void:
+	_map_state_for(_last_scene_path)
+	if in_session() and not is_host:
+		_send_to(_host_steam_id, {"t": "mapsync_req", "from": _my_steam_id, "s": _last_scene_path}, true)
+
+
+func my_id() -> int:
+	return _my_steam_id
+
+
+func alive_player_nodes() -> Array:
+	return _alive_player_nodes()
+
+
+func alive_player_count() -> int:
+	return _alive_player_nodes().size()
+
+
+func remote_players() -> Array:
+	return _active_remote_players()
+
+
+func broadcast_checkpoint() -> void:
+	_send_all({"t": "checkpoint", "from": _my_steam_id}, true)
+
+
+func on_checkpoint_reached() -> void:
+	respawns_left = 1
+	show_banner("Checkpoint reached. Respawns refreshed for the team.", 4.0)
+	var c = Game.climber
+	if is_instance_valid(c) and c.is_inside_tree() and c.get("coop_spectating") and c.has_method("coop_revive_at_checkpoint"):
+		c.coop_revive_at_checkpoint()
 
 
 func _on_remote_unhook() -> void:

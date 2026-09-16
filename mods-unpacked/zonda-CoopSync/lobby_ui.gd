@@ -139,9 +139,9 @@ func _set_panel_visible(v: bool) -> void:
 
 
 func _read_inputs() -> Array:
-	var player_name := _name_edit.text.strip_edges()
-	if player_name.is_empty():
-		player_name = Game.steam_name if Game.steam_name != "" else "Player"
+	var player_name := CoopSync.sanitize_name(_name_edit.text)
+	if player_name == "Player":
+		player_name = CoopSync.sanitize_name(Game.steam_name)
 	return [player_name, _password_edit.text.strip_edges()]
 
 

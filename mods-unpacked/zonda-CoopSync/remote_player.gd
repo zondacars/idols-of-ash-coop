@@ -7,6 +7,15 @@ const FEET_OFFSET := -0.78
 const INTERP_DELAY_MS := 60
 const TELEPORT_DIST_SQ := 400.0
 
+const SFX_HOOK_THROWN := "res://sfx/soundsnap/Grapple_THrow.wav"
+const SFX_ROPE_CREAK := "res://sfx/soundsnap/202422-EFX_INT_Hanging_by_Rope_Creak.wav"
+const SFX_HOOK_ATTACHED := [
+	"res://sfx/soundsnap/273276-Builder-Game-Item-Pickaxe-Hit-Metal-3.wav",
+	"res://sfx/soundsnap/273280-Builder-Game-Item-Pickaxe-Hit-Stone-Metal-1.wav",
+	"res://sfx/soundsnap/273281-Builder-Game-Item-Pickaxe-Hit-Stone-Metal-2.wav",
+	"res://sfx/soundsnap/273272-Builder-Game-Item-Pickaxe-Broken-3.wav",
+]
+
 var peer_id: int = 0
 var player_name := "Player"
 var scene_path := ""
@@ -25,6 +34,11 @@ var _rope_visuals: Array = []
 var _rope_lines: Array = []
 var _rope_materials: Array = []
 var _rope_material_base: Material = null
+
+var _sfx_hook_thrown: AudioStreamPlayer3D
+var _sfx_hook_attached: AudioStreamPlayer3D
+var _sfx_rope_loop: AudioStreamPlayer3D
+var _had_rope := false
 
 
 func _ready() -> void:
@@ -66,6 +80,25 @@ func _ready() -> void:
 		add_child(claw)
 		claw_node = claw
 
+	_sfx_hook_thrown = AudioStreamPlayer3D.new()
+	_sfx_hook_thrown.stream = load(SFX_HOOK_THROWN)
+	_sfx_hook_thrown.volume_db = -40.0
+	_sfx_hook_thrown.bus = &"MainBus"
+	add_child(_sfx_hook_thrown)
+
+	_sfx_hook_attached = AudioStreamPlayer3D.new()
+	_sfx_hook_attached.volume_db = -10.0
+	_sfx_hook_attached.attenuation_filter_cutoff_hz = 10000.0
+	_sfx_hook_attached.bus = &"MainBus"
+	add_child(_sfx_hook_attached)
+
+	_sfx_rope_loop = AudioStreamPlayer3D.new()
+	_sfx_rope_loop.stream = load(SFX_ROPE_CREAK)
+	_sfx_rope_loop.volume_db = -14.0
+	_sfx_rope_loop.bus = &"MainBus"
+	_sfx_rope_loop.autoplay = false
+	add_child(_sfx_rope_loop)
+
 
 func _build_body() -> void:
 	var ps = load(MODEL_PATH)
@@ -93,18 +126,34 @@ func _strip_physics(n: Node) -> void:
 
 
 func update_state(msg: Dictionary) -> void:
+	# During a scene change this node can keep receiving packets after it has left the
+	# tree. Touching audio or global transforms then just spams errors, so bail out.
+	if not is_inside_tree():
+		return
 	var now := Time.get_ticks_msec()
-	player_name = str(msg.get("n", player_name))
+	player_name = CoopSync.sanitize_name(str(msg.get("n", player_name)))
 	scene_path = str(msg.get("scene", ""))
 	var hp: float = float(msg.get("hp", 100.0))
 	var label_text := "%s  ♥ %d" % [player_name, int(round(hp))]
 	if _label.text != label_text:
 		_label.text = label_text
+	if _label.no_depth_test != CoopSync.nametags_through_walls:
+		_label.no_depth_test = CoopSync.nametags_through_walls
 
 	var was_attached := attached
 	attached = bool(msg.get("att", false))
 	if attached and not was_attached:
 		attached_time = 0.0
+		if is_instance_valid(claw_node):
+			_sfx_hook_attached.global_position = claw_node.global_position
+		_sfx_hook_attached.stream = load(SFX_HOOK_ATTACHED.pick_random())
+		_sfx_hook_attached.play()
+
+	var has_rope_now: bool = msg.has("rope")
+	if has_rope_now and not _had_rope:
+		_sfx_hook_thrown.global_position = msg.get("pos", global_position)
+		_sfx_hook_thrown.play()
+	_had_rope = has_rope_now
 
 	var snap := {
 		"pos": msg.get("pos", global_position),
@@ -174,6 +223,12 @@ func _process_inner(delta: float) -> void:
 		_draw_rope(ra, rb, k01)
 	else:
 		_hide_rope()
+
+	if has_rope and not attached:
+		if not _sfx_rope_loop.playing:
+			_sfx_rope_loop.play()
+	elif _sfx_rope_loop.playing:
+		_sfx_rope_loop.stop()
 
 
 func _ensure_rope_pool(n: int) -> void:

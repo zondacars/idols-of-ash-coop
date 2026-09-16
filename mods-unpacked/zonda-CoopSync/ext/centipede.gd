@@ -14,6 +14,24 @@ var _coop_attacking := false
 var _coop_dummy_attack = null
 
 
+func on_teeth_bite() -> void:
+	if not CoopSync.in_session():
+		super()
+		return
+
+	if not is_instance_valid(Game.climber) or not Game.climber.is_inside_tree():
+		return
+
+	var dist_sq_to_climber: float = global_position.distance_squared_to(Game.climber.global_position)
+	if dist_sq_to_climber < 9.0:
+		chomp_sfx.play()
+		last_dealt_damage_time = Time.get_ticks_msec()
+		Game.climber.take_damage(75.0)
+		Game.climber.additional_velocity_next_frame += global_position.direction_to(Game.climber.global_position) * 15.0
+		Game.audio.play_player_was_bit()
+		Game.climber.on_bit()
+
+
 func _ready() -> void:
 	if CoopSync.is_guest():
 		coop_puppet = true
