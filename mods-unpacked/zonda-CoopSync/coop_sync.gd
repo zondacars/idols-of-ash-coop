@@ -96,6 +96,8 @@ func _ready() -> void:
 	get_tree().root.call_deferred("add_child", lobby_ui)
 	gfx = load(MOD_DIR + "gfx.gd").new()
 	add_child(gfx)
+	if FileAccess.file_exists(MOD_DIR + "probe.flag") and FileAccess.file_exists(MOD_DIR + "debug_probe.gd"):
+		add_child(load(MOD_DIR + "debug_probe.gd").new())   # developer measuring tool, not shipped
 	_build_banner()
 	print("[CoopSync] ready")
 
@@ -369,9 +371,25 @@ func _alive_player_nodes() -> Array:
 	return out
 
 
+var _lure_node: Node3D = null
+var _lure_until_ms := 0
+
+
+func set_lure(node: Node3D, seconds: float) -> void:
+	# a map can pull every centipede toward one spot (the bell)
+	_lure_node = node
+	_lure_until_ms = Time.get_ticks_msec() + int(seconds * 1000.0)
+
+
+func lure_active() -> bool:
+	return is_instance_valid(_lure_node) and Time.get_ticks_msec() < _lure_until_ms
+
+
 func target_player_for(c: Node3D) -> Node3D:
 	if not is_instance_valid(c) or not c.is_inside_tree():
 		return null
+	if lure_active():
+		return _lure_node
 	var live_cents := 0
 	for cent in Game.centipedes:
 		if is_instance_valid(cent):
@@ -433,6 +451,8 @@ func target_player_distance(c: Node3D, default_distance: float = 999.9) -> float
 
 
 func target_attached_claw_node(c: Node3D) -> Node3D:
+	if lure_active():
+		return null
 	var n := target_player_for(c)
 	if n == null:
 		return null

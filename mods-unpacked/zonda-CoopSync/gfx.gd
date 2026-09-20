@@ -167,7 +167,7 @@ func _process(delta: float) -> void:
 
 func _register_light(l: Light3D) -> void:
 	var id := l.get_instance_id()
-	if _light_ids.has(id):
+	if _light_ids.has(id) or l.has_meta("zonda_no_shadow"):
 		return
 	_light_ids[id] = true
 	_lights.append([l, l.shadow_enabled])

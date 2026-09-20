@@ -263,10 +263,20 @@ class Bowl(Prim):
 # ---------------------------------------------------------------- field
 
 class Field:
-    def __init__(self, prims, sky_y):
+    def __init__(self, prims, sky_y, solids=()):
         self.prims = prims
         self.sky_y = sky_y
         self.boxes = [p.aabb() for p in prims]
+        self.solids = list(solids)
+        self.solid_boxes = [s.aabb() for s in self.solids]
+        self.rift = next((p for p in prims if p.kind == "rift"), None)
+
+    def solids_for_box(self, lo, hi):
+        out = []
+        for i, (a, b) in enumerate(self.solid_boxes):
+            if np.all(a <= hi) and np.all(b >= lo):
+                out.append(i)
+        return out
 
     def prims_for_box(self, lo, hi):
         out = []
@@ -292,6 +302,13 @@ class Field:
                     best[m] = d[m]
                     owner[m] = i
                 f = smin(f, d, 3.0)
+            if self.solids:
+                # solids put rock back into the air: balconies, spans, roots, the Lid
+                sidx = self.solids_for_box(P.min(axis=0), P.max(axis=0))
+                if sidx:
+                    ctx = {"rift": self.rift}
+                    for j in sidx:
+                        f = np.maximum(f, -self.solids[j].sdf(P, n0, n1, n2, ctx))
         # everything above the sky line is open, which caps the rim plateau
         f = np.where(P[:, 1] > self.sky_y, np.minimum(f, -1.0), f)
         if want_owner:

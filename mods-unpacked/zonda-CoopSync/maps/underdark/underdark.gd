@@ -20,22 +20,30 @@ const CLAW_LAYER := 2
 
 # per-biome look: [wall albedo, floor albedo, ambient, fog color, fog density, bg energy]
 const LOOKS := [
-	[Color(0.78, 0.7, 0.58), Color(0.72, 0.62, 0.5), Color(0.5, 0.45, 0.38), Color(0.18, 0.16, 0.13), 0.62, 0.35],
-	[Color(0.85, 0.82, 0.72), Color(0.8, 0.76, 0.66), Color(0.32, 0.3, 0.26), Color(0.03, 0.03, 0.03), 0.78, 0.04],
-	[Color(0.45, 0.62, 0.42), Color(0.35, 0.55, 0.32), Color(0.16, 0.36, 0.22), Color(0.02, 0.07, 0.04), 0.66, 0.06],
-	[Color(0.55, 0.42, 0.3), Color(0.45, 0.34, 0.25), Color(0.32, 0.22, 0.14), Color(0.05, 0.03, 0.02), 0.7, 0.05],
-	[Color(0.45, 0.55, 0.58), Color(0.38, 0.48, 0.5), Color(0.22, 0.3, 0.34), Color(0.18, 0.23, 0.27), 0.74, 0.08],
-	[Color(0.6, 0.58, 0.62), Color(0.5, 0.48, 0.52), Color(0.24, 0.22, 0.28), Color(0.04, 0.03, 0.05), 0.72, 0.05],
-	[Color(0.62, 0.76, 0.95), Color(0.55, 0.7, 0.9), Color(0.25, 0.38, 0.55), Color(0.04, 0.08, 0.14), 0.7, 0.1],
-	[Color(0.6, 0.35, 0.25), Color(0.5, 0.28, 0.2), Color(0.5, 0.18, 0.08), Color(0.2, 0.04, 0.01), 0.6, 0.3],
-	[Color(0.5, 0.22, 0.24), Color(0.42, 0.18, 0.2), Color(0.42, 0.08, 0.08), Color(0.12, 0.01, 0.01), 0.72, 0.18],
+	[Color(0.78, 0.7, 0.58), Color(0.72, 0.62, 0.5), Color(0.5, 0.45, 0.38), Color(0.085, 0.078, 0.064), 0.82, 0.3],
+	[Color(0.85, 0.82, 0.72), Color(0.8, 0.76, 0.66), Color(0.36, 0.34, 0.3), Color(0.066, 0.068, 0.062), 0.84, 0.1],
+	[Color(0.45, 0.62, 0.42), Color(0.35, 0.55, 0.32), Color(0.18, 0.4, 0.25), Color(0.028, 0.085, 0.055), 0.84, 0.1],
+	[Color(0.55, 0.42, 0.3), Color(0.45, 0.34, 0.25), Color(0.36, 0.25, 0.16), Color(0.082, 0.056, 0.03), 0.84, 0.1],
+	[Color(0.45, 0.55, 0.58), Color(0.38, 0.48, 0.5), Color(0.24, 0.32, 0.36), Color(0.045, 0.072, 0.088), 0.86, 0.1],
+	[Color(0.6, 0.58, 0.62), Color(0.5, 0.48, 0.52), Color(0.28, 0.25, 0.32), Color(0.06, 0.05, 0.088), 0.84, 0.1],
+	[Color(0.62, 0.76, 0.95), Color(0.55, 0.7, 0.9), Color(0.27, 0.4, 0.58), Color(0.038, 0.075, 0.13), 0.82, 0.1],
+	[Color(0.6, 0.35, 0.25), Color(0.5, 0.28, 0.2), Color(0.5, 0.18, 0.08), Color(0.125, 0.044, 0.012), 0.8, 0.2],
+	[Color(0.5, 0.22, 0.24), Color(0.42, 0.18, 0.2), Color(0.42, 0.08, 0.08), Color(0.09, 0.012, 0.012), 0.8, 0.18],
 	[Color(0.62, 0.55, 0.45), Color(0.55, 0.48, 0.4), Color(0.14, 0.11, 0.08), Color(0.01, 0.01, 0.01), 0.9, 0.0],
+	# 10 and 11 are surfaces, not places: bone (the Ribs) and bark (the great roots)
+	[Color(1.9, 1.8, 1.5), Color(1.9, 1.8, 1.5), Color(0.36, 0.34, 0.3), Color(0.066, 0.068, 0.062), 0.84, 0.1],
+	[Color(0.4, 0.27, 0.16), Color(0.46, 0.31, 0.18), Color(0.36, 0.25, 0.16), Color(0.082, 0.056, 0.03), 0.84, 0.1],
 ]
 
 var L: Dictionary = {}
 var _env: Environment
 var _cur_biome := -1
 var _blend := 0.0
+var _look_now: Array = []
+var _dimmed: Dictionary = {}
+var _dress_mat: Array = []
+var _sky: DirectionalLight3D
+var _glow: DirectionalLight3D
 var _look_from: Array = []
 var _look_to: Array = []
 var _chunks: Array = []          # [MeshInstance3D, center, radius]
@@ -70,6 +78,22 @@ var _crystal_n := 0
 var _lava_kill_y := -1e9
 var _lava_box: Array = []       # [center, d, s, half_w, half_l]
 var _bars: Array = []
+var _bells: Dictionary = {}
+var _platforms: Dictionary = {}
+var _fall_speed := 0.0
+var _lethal_fall := 30.0
+var _bruise_from := 19.0
+var _bruise_per := 4.5
+var _bruise_told := false
+# The game pins ambient energy to 0.18 every frame (world_environment.gd), so the only way to
+# lift the dark is through the ambient COLOUR. And its colour-correction ramp clips to white at
+# about 0.28 raw and crushes below 0.06, so everything here lives between those two numbers.
+const AMB_GAIN := 2.3
+# light that falls down the rift from far above, per biome. It is what lets you see a balcony
+# 300 m away. Off inside the side caves.
+const SKYGLOW := [0.34, 0.3, 0.22, 0.24, 0.24, 0.24, 0.28, 0.1, 0.0, 0.0]
+const VIEW_RANGE := 425.0        # the campaign shows 150-300 m of void; the rift needs the same
+const SOLID_RANGE := 150.0
 var _mat_lava: ShaderMaterial
 var _lights: Array = []
 var _nest_lights: Array = []
@@ -87,6 +111,9 @@ func _ready() -> void:
 		push_error("[Underdark] layout.json missing")
 		return
 	L = JSON.parse_string(f.get_as_text())
+	_lethal_fall = float(L.get("rules", {}).get("lethal_fall_speed", 30.0))
+	_bruise_from = float(L.get("rules", {}).get("bruise_from", 19.0))
+	_bruise_per = float(L.get("rules", {}).get("bruise_per", 4.5))
 	_debug_tour = FileAccess.file_exists(DIR + "tour.flag")
 	_build_materials()
 	_setup_environment()
@@ -110,6 +137,12 @@ func _ready() -> void:
 	_place_kilns()
 	_place_plates()
 	_place_fragments()
+	_place_bells()
+	_place_lanterns()
+	_place_platforms()
+	_place_spars()
+	_place_falls()
+	_place_ghosts()
 	_place_bars()
 	_place_lava()
 	_place_ambience()
@@ -143,12 +176,18 @@ func _build_materials() -> void:
 		fl.albedo_color = LOOKS[i][1]
 		fl.vertex_color_use_as_albedo = true
 		fl.cull_mode = BaseMaterial3D.CULL_DISABLED
+		fl.metallic = 0.0                       # the game's sand is half metal, which reads as black with no sky to reflect
 		fl.uv1_scale = Vector3(0.09, 0.09, 0.09)
 		_floor_mat.append(fl)
+		var dm: StandardMaterial3D = w.duplicate()
+		dm.vertex_color_use_as_albedo = false
+		dm.albedo_color = Color(LOOKS[i][0].r * 0.62, LOOKS[i][0].g * 0.62, LOOKS[i][0].b * 0.62)
+		dm.cull_mode = BaseMaterial3D.CULL_BACK
+		_dress_mat.append(dm)
 	_mat_bar = StandardMaterial3D.new()
 	_mat_bar.albedo_color = Color(0.32, 0.12, 0.08)
-	_mat_bar.metallic = 0.7
-	_mat_bar.roughness = 0.45
+	_mat_bar.metallic = 0.2
+	_mat_bar.roughness = 0.6
 	_mat_crystal = StandardMaterial3D.new()
 	# the game's environment doubles brightness and color-corrects, so anything emissive
 	# and blue turns pure white. Dark albedo, no emission, let the room lights do it.
@@ -165,16 +204,20 @@ func _build_materials() -> void:
 shader_type spatial;
 render_mode unshaded, cull_disabled;
 uniform float t = 0.0;
+varying vec3 wp;
+void vertex() { wp = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz; }
 float h(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float n(vec2 p) { vec2 i = floor(p); vec2 f = fract(p); f = f * f * (3.0 - 2.0 * f);
 	return mix(mix(h(i), h(i + vec2(1, 0)), f.x), mix(h(i + vec2(0, 1)), h(i + vec2(1, 1)), f.x), f.y); }
 void fragment() {
-	vec2 p = VERTEX.xz * 0.08 + vec2(t * 0.03, t * 0.02);
+	vec2 p = wp.xz * 0.045 + vec2(t * 0.02, t * 0.013);
 	float v = n(p) * 0.6 + n(p * 2.3 + t * 0.05) * 0.3 + n(p * 5.1) * 0.1;
-	vec3 dark = vec3(0.35, 0.03, 0.0); vec3 hot = vec3(1.0, 0.55, 0.08);
-	float k = smoothstep(0.35, 0.75, v);
+	// linear values. The game doubles brightness in display space and clips to white there,
+	// so linear 0.064 is already white. These land on deep red and orange.
+	vec3 dark = vec3(0.008, 0.0008, 0.0); vec3 hot = vec3(0.062, 0.0095, 0.0006);
+	float k = smoothstep(0.4, 0.78, v);
 	ALBEDO = mix(dark, hot, k);
-	EMISSION = ALBEDO * (0.8 + 2.2 * k);
+	EMISSION = vec3(0.0);
 }
 """
 	_mat_lava.shader = sh
@@ -298,11 +341,30 @@ func _place_props() -> void:
 			body.position = n.position
 			add_child(body)
 		var ruin: bool = path.contains("Village_") or path.contains("Ghost_Tower")
+		if path.contains("Plant_"):
+			_dim_materials(n, 0.3)
 		for mi in n.find_children("*", "GeometryInstance3D", true, false):
 			(mi as GeometryInstance3D).visibility_range_end = float(p.get("vis", 300.0))
 			(mi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			if ruin:
 				(mi as GeometryInstance3D).material_override = _mat_ruin
+
+
+func _dim_materials(n: Node, k: float) -> void:
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		for si in m.mesh.get_surface_count():
+			var src: Material = m.get_active_material(si)
+			if not (src is StandardMaterial3D):
+				continue
+			if not _dimmed.has(src):
+				var d: StandardMaterial3D = src.duplicate()
+				d.albedo_color = Color(d.albedo_color.r * k, d.albedo_color.g * k, d.albedo_color.b * k, d.albedo_color.a)
+				d.emission_enabled = false
+				_dimmed[src] = d
+			m.set_surface_override_material(si, _dimmed[src])
 
 
 func _place_dress() -> void:
@@ -326,17 +388,20 @@ func _place_dress() -> void:
 		var hit := _v(d["hit"])
 		var nrm := _v(d["n"])
 		var embed := float(d.get("embed", 0.45))
-		var r: float
-		if bool(d.get("up", false)):
-			r = ab.size.y * 0.5 * sc
-		else:
-			r = maxf(ab.size.x, ab.size.z) * 0.5 * sc
-		var centre_off: Vector3 = ab.get_center() * sc
-		n.position = hit + nrm * (r * (1.0 - 2.0 * embed)) - Vector3(0, centre_off.y, 0)
 		n.rotation = Vector3(float(d.get("tilt", 0.0)), float(d.get("yaw", 0.0)), float(d.get("roll", 0.0)))
 		n.scale = Vector3.ONE * sc
+		# Several kit rocks have their pivot at one end, so the mesh centre must be pushed
+		# back through the same rotation, or the piece ends up floating out in the room.
+		var basis := Basis.from_euler(n.rotation)
+		var centre_off: Vector3 = basis * (ab.get_center() * sc)
+		var half: Vector3 = ab.size * 0.5 * sc
+		var reach: float = absf(basis.x.dot(nrm)) * half.x + absf(basis.y.dot(nrm)) * half.y + absf(basis.z.dot(nrm)) * half.z
+		n.position = hit + nrm * (reach * (1.0 - 2.0 * embed)) - centre_off
 		add_child(n)
+		# same stone as the wall it grows out of, or it reads as a slab pasted on
+		var db := clampi(_biome_at(hit), 0, _dress_mat.size() - 1)
 		for mi in n.find_children("*", "GeometryInstance3D", true, false):
+			(mi as GeometryInstance3D).material_override = _dress_mat[db]
 			(mi as GeometryInstance3D).visibility_range_end = 240.0
 			(mi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 		placed += 1
@@ -378,7 +443,7 @@ func _add_light(pos: Vector3, color: Color, energy: float, rng: float) -> OmniLi
 	o.shadow_enabled = false
 	o.position = pos
 	o.distance_fade_enabled = true
-	o.distance_fade_begin = 140.0
+	o.distance_fade_begin = 380.0 if rng >= 60.0 else 140.0      # landmark lights carry across the rift
 	o.distance_fade_length = 40.0
 	add_child(o)
 	_lights.append(o)
@@ -387,18 +452,79 @@ func _add_light(pos: Vector3, color: Color, energy: float, rng: float) -> OmniLi
 
 func _place_fires() -> void:
 	for f in L.get("fires", []):
-		_add_fire(_v(f["pos"]), float(f["scale"]))
+		_add_fire(_v(f["pos"]), float(f["scale"]), bool(f.get("beacon", false)))
 
 
-func _add_fire(pos: Vector3, s: float) -> Node3D:
-	var ps: PackedScene = load(PYRELIGHT)
-	if ps == null:
-		return null
-	var n: Node3D = ps.instantiate()
-	n.position = pos
-	n.scale = Vector3(s, s, s)
-	add_child(n)
-	return n
+var _dot_tex: GradientTexture2D
+
+
+func _soft_dot() -> GradientTexture2D:
+	if _dot_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		_dot_tex = GradientTexture2D.new()
+		_dot_tex.gradient = g
+		_dot_tex.fill = GradientTexture2D.FILL_RADIAL
+		_dot_tex.fill_from = Vector2(0.5, 0.5)
+		_dot_tex.fill_to = Vector2(0.5, 0.0)
+		_dot_tex.width = 64
+		_dot_tex.height = 64
+	return _dot_tex
+
+
+func _add_fire(pos: Vector3, s: float, beacon: bool = false) -> Node3D:
+	# The game's "Pyrelight" is the tall pillar the campaign puts over its kiln shrines,
+	# so it only belongs at checkpoints. Everything else gets an actual flame.
+	if beacon:
+		var ps: PackedScene = load(PYRELIGHT)
+		if ps == null:
+			return null
+		var n: Node3D = ps.instantiate()
+		n.position = pos
+		n.scale = Vector3(s, s, s)
+		add_child(n)
+		return n
+	var flame := CPUParticles3D.new()
+	flame.amount = 12
+	flame.lifetime = 0.9
+	flame.explosiveness = 0.0
+	flame.randomness = 0.6
+	flame.local_coords = false
+	flame.direction = Vector3.UP
+	flame.spread = 14.0
+	flame.gravity = Vector3(0, 1.4, 0)
+	flame.initial_velocity_min = 0.7 * s
+	flame.initial_velocity_max = 1.6 * s
+	flame.scale_amount_min = 0.5 * s
+	flame.scale_amount_max = 1.1 * s
+	flame.damping_min = 0.6
+	flame.damping_max = 1.4
+	var grad := Gradient.new()
+	# kept dim on purpose: the game doubles brightness in post, bright fire turns white
+	grad.set_color(0, Color(0.55, 0.3, 0.08, 0.5))
+	grad.set_color(1, Color(0.25, 0.04, 0.0, 0.0))
+	grad.add_point(0.4, Color(0.5, 0.16, 0.02, 0.4))
+	flame.color_ramp = grad
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.55, 0.7)
+	var fm := StandardMaterial3D.new()
+	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fm.blend_mode = BaseMaterial3D.BLEND_MODE_MIX
+	fm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+	fm.albedo_texture = _soft_dot()
+	fm.vertex_color_use_as_albedo = true
+	fm.disable_receive_shadows = true
+	quad.material = fm
+	flame.mesh = quad
+	flame.position = pos + Vector3(0, 0.25 * s, 0)
+	flame.visibility_range_end = 140.0
+	add_child(flame)
+	var fl := Flicker.new()
+	fl.setup(_add_light(pos + Vector3(0, 0.9 * s, 0), Color(1.0, 0.6, 0.25), 1.1 * s, 13.0 * s))
+	add_child(fl)
+	return flame
 
 
 func _place_embers() -> void:
@@ -679,6 +805,79 @@ func _finale(by: String) -> void:
 
 # ------------------------------------------------------------------ the crucible
 
+func _place_lanterns() -> void:
+	# points of light hung along the rift, so the eye can measure the dark
+	var sphere := QuadMesh.new()
+	sphere.size = Vector2(1.0, 1.0)
+	var mats: Dictionary = {}
+	for ln in L.get("lanterns", []):
+		var col := _c(ln["color"])
+		var key := col.to_html()
+		if not mats.has(key):
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.albedo_texture = _soft_dot()
+			m.albedo_color = Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.9)
+			m.disable_fog = true
+			mats[key] = m
+		var mi := MeshInstance3D.new()
+		mi.mesh = sphere
+		mi.material_override = mats[key]
+		mi.position = _v(ln["pos"])
+		mi.scale = Vector3.ONE * float(ln["s"])
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visibility_range_end = 520.0
+		add_child(mi)
+
+
+func _place_platforms() -> void:
+	var wood: StandardMaterial3D = load("res://Art/Textures/Wood_01.tres")
+	for d in L.get("platforms", []):
+		var pf := HangingPlatform.new()
+		pf.setup(d, _mat_bar if str(d["kind"]) == "iron" else wood, _mat_bar)
+		add_child(pf)
+		_platforms[str(d["id"])] = pf
+
+
+func _place_spars() -> void:
+	for d in L.get("spars", []):
+		var sp := CrystalSpar.new()
+		sp.setup(_v(d["a"]), _v(d["b"]), float(d["r"]))
+		add_child(sp)
+
+
+func _place_falls() -> void:
+	for d in L.get("falls", []):
+		var wf := Waterfall.new()
+		wf.setup(_v(d["pos"]), float(d["height"]), _v(d["push"]))
+		add_child(wf)
+
+
+func _place_ghosts() -> void:
+	var ps: PackedScene = load("res://Art/Knight.glb")
+	if ps == null:
+		return
+	var gm := StandardMaterial3D.new()
+	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gm.albedo_color = Color(0.1, 0.14, 0.16, 0.3)
+	gm.cull_mode = BaseMaterial3D.CULL_BACK
+	for g in L.get("ghosts", []):
+		var gh := Ghost.new()
+		gh.setup(ps, gm, _v(g["pos"]), float(g["yaw"]))
+		add_child(gh)
+
+
+func _place_bells() -> void:
+	for b in L.get("bells", []):
+		var bell := Bell.new()
+		bell.setup(b, _mat_bar)
+		add_child(bell)
+		_bells[str(b["id"])] = bell
+
+
 func _place_bars() -> void:
 	for b in L.get("bars", []):
 		var bar := MonkeyBar.new()
@@ -696,14 +895,22 @@ func _place_lava() -> void:
 		var hw := float(lv["half_w"])
 		var hl := float(lv["half_l"])
 		var mi := MeshInstance3D.new()
-		var pm := PlaneMesh.new()
-		pm.size = Vector2(hw * 2.0, hl * 2.0)
-		pm.subdivide_width = 24
-		pm.subdivide_depth = 12
-		mi.mesh = pm
+		var stl := SurfaceTool.new()
+		stl.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var rr := maxf(hw, hl) * 1.25
+		for i in 48:
+			var a0 := TAU * float(i) / 48.0
+			var a1 := TAU * float(i + 1) / 48.0
+			stl.set_normal(Vector3.UP)
+			stl.add_vertex(Vector3.ZERO)
+			stl.set_normal(Vector3.UP)
+			stl.add_vertex(Vector3(cos(a1) * rr, 0, sin(a1) * rr))
+			stl.set_normal(Vector3.UP)
+			stl.add_vertex(Vector3(cos(a0) * rr, 0, sin(a0) * rr))
+		mi.mesh = stl.commit()
 		mi.material_override = _mat_lava
 		mi.position = c
-		mi.rotation.y = -yaw
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
 		_add_light(c + Vector3(0, 6, 0), Color(1.0, 0.45, 0.1), 3.0, 70.0)
 		_add_light(c + d * hw * 0.6 + Vector3(0, 6, 0), Color(1.0, 0.45, 0.1), 2.0, 50.0)
@@ -828,6 +1035,14 @@ func coop_map_event(key: String, data: Dictionary) -> void:
 			for s in _stalkers:
 				if s.id == sid:
 					s.bite_local()
+	elif key.begins_with("pfdrop_"):
+		var pid := key.substr(7)
+		if _platforms.has(pid):
+			_platforms[pid].drop_now()
+	elif key.begins_with("bell_"):
+		var bid := key.substr(5)
+		if _bells.has(bid):
+			_bells[bid].toll()
 	elif key == "idol":
 		_finale(str(data.get("by", "")))
 	elif key.begins_with("barsink_"):
@@ -963,6 +1178,31 @@ func _finish(by: String) -> void:
 
 # ------------------------------------------------------------------ per frame
 
+func _physics_process(_delta: float) -> void:
+	# On Normal the game caps fall damage at 62 HP, so jumping down was always the fast way.
+	# Here the rule is the rope's own length: fall further than 25 m (30 m/s) and you die,
+	# and even a one-balcony jump costs a third of your health. The rope is the way down.
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree() or c.get("coop_spectating"):
+		_fall_speed = 0.0
+		return
+	if c.is_on_floor():
+		if _fall_speed > _lethal_fall and c.health > 0.0 and not c.lethalDamageHandled and not c.prevent_player_death:
+			CoopSync.show_banner("The fall killed you. In the Underdark, trust the rope.", 4.0)
+			c.take_damage(1000.0)
+		elif _fall_speed > _bruise_from and c.health > 0.0 and not c.lethalDamageHandled and not c.prevent_player_death:
+			# take_damage halves what it is given
+			c.take_damage((_fall_speed - _bruise_from) * _bruise_per * 2.0)
+			if not _bruise_told:
+				_bruise_told = true
+				CoopSync.show_banner("That landing cost you. Let the rope out instead of jumping.", 4.0)
+		_fall_speed = 0.0
+	elif c.activeClimberState is ClimberState_Attached:
+		_fall_speed = minf(_fall_speed, maxf(0.0, -c.velocity.y))
+	else:
+		_fall_speed = maxf(_fall_speed * 0.98, -c.velocity.y)
+
+
 func _process(delta: float) -> void:
 	_clock += delta
 	_mat_lava.set_shader_parameter("t", _clock)
@@ -999,11 +1239,13 @@ func _update_lod(delta: float) -> void:
 		var best := 1e9
 		for p in centers:
 			best = minf(best, (p - entry[1]).length() - entry[2])
-		var want: bool = best < 170.0
+		var want: bool = best < VIEW_RANGE
 		if mi.visible != want:
 			mi.visible = want
-			var body: StaticBody3D = mi.get_child(0)
-			body.collision_layer = 1 if want else 0
+		var body: StaticBody3D = mi.get_child(0)
+		var solid: int = 1 if best < SOLID_RANGE else 0
+		if body.collision_layer != solid:
+			body.collision_layer = solid
 
 
 func _setup_environment() -> void:
@@ -1012,15 +1254,62 @@ func _setup_environment() -> void:
 		return
 	_env = we.environment.duplicate()
 	we.environment = _env
-	_env.fog_depth_end = 220.0
+	_env.fog_depth_begin = 14.0
+	_env.fog_depth_end = 400.0
 	_look_from = LOOKS[0]
 	_look_to = LOOKS[0]
 	_apply_look(LOOKS[0])
+	_make_sky_lights()
+
+
+func _make_sky_lights() -> void:
+	# added late on purpose: the game collects the level's directional lights one frame after
+	# load and switches them off 250 m down. These two are not in its list.
+	await get_tree().create_timer(1.0).timeout
+	_sky = DirectionalLight3D.new()
+	_sky.set_meta("zonda_no_shadow", true)
+	_sky.shadow_enabled = false
+	_sky.light_energy = 0.0
+	_sky.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
+	_sky.rotation = Vector3(deg_to_rad(-62.0), deg_to_rad(35.0), 0.0)
+	add_child(_sky)
+	_glow = DirectionalLight3D.new()                      # the lava lake, from underneath
+	_glow.set_meta("zonda_no_shadow", true)
+	_glow.shadow_enabled = false
+	_glow.light_energy = 0.0
+	_glow.light_color = Color(1.0, 0.34, 0.07)
+	_glow.sky_mode = DirectionalLight3D.SKY_MODE_LIGHT_ONLY
+	_glow.rotation = Vector3(deg_to_rad(76.0), deg_to_rad(-25.0), 0.0)
+	add_child(_glow)
+
+
+func _in_zone(p: Vector3) -> bool:
+	for z in L.get("zones", []):
+		var c := _v(z["center"])
+		if p.y > float(z["floor"]) - 8.0 and p.y < float(z["top"]) + 8.0:
+			if (Vector3(p.x, 0, p.z) - Vector3(c.x, 0, c.z)).length() < float(z["radius"]):
+				return true
+	return false
+
+
+func _update_sky_lights(delta: float, p: Vector3) -> void:
+	if _sky == null or _glow == null or _look_now.is_empty():
+		return
+	var inside := _in_zone(p)
+	var want: float = 0.0 if inside else float(SKYGLOW[clampi(_cur_biome, 0, SKYGLOW.size() - 1)])
+	_sky.light_energy = lerpf(_sky.light_energy, want, minf(1.0, delta * (8.0 if _debug_tour else 0.7)))
+	var a: Color = _look_now[2]
+	var m := maxf(0.001, maxf(a.r, maxf(a.g, a.b)))
+	_sky.light_color = Color(a.r / m, a.g / m, a.b / m).lerp(Color.WHITE, 0.35)
+	var lake := float(L["lava"][0]["center"][1]) if L.get("lava", []).size() > 0 else -1e9
+	var heat := 0.0 if inside else clampf(1.0 - (p.y - lake) / 430.0, 0.0, 1.0)
+	_glow.light_energy = lerpf(_glow.light_energy, 0.42 * heat * heat, minf(1.0, delta * (8.0 if _debug_tour else 0.7)))
 
 
 func _apply_look(k: Array) -> void:
-	_env.ambient_light_color = k[2]
-	_env.ambient_light_energy = 0.7
+	_look_now = k.duplicate()
+	var amb: Color = k[2]
+	_env.ambient_light_color = Color(amb.r * AMB_GAIN, amb.g * AMB_GAIN, amb.b * AMB_GAIN)
 	_env.fog_light_color = k[3]
 	_env.fog_density = k[4]
 	_env.background_color = k[3]
@@ -1031,15 +1320,15 @@ func _apply_look(k: Array) -> void:
 
 
 func _biome_at(p: Vector3) -> int:
-	var best := -1
-	var bd := 1e9
 	for z in L.get("zones", []):
 		var c := _v(z["center"])
-		var d := (Vector3(p.x, 0, p.z) - Vector3(c.x, 0, c.z)).length() + absf(p.y - c.y) * 0.5
-		if d < bd:
-			bd = d
-			best = int(z["biome"])
-	return best
+		if p.y > float(z["floor"]) - 8.0 and p.y < float(z["top"]) + 8.0:
+			if (Vector3(p.x, 0, p.z) - Vector3(c.x, 0, c.z)).length() < float(z["radius"]):
+				return int(z["biome"])
+	for st in L.get("strata", []):
+		if p.y <= float(st["top"]) and p.y > float(st["bottom"]):
+			return int(st["biome"])
+	return 0 if p.y > -40.0 else 8
 
 
 func _update_environment(delta: float) -> void:
@@ -1051,6 +1340,7 @@ func _update_environment(delta: float) -> void:
 	var b := _biome_at(c.global_position)
 	if b < 0:
 		return
+	_update_sky_lights(delta, c.global_position)
 	if b != _cur_biome:
 		_cur_biome = b
 		_look_from = _current_look()
@@ -1059,7 +1349,7 @@ func _update_environment(delta: float) -> void:
 		if _music:
 			_music.set_biome(b)
 	if _blend < 1.0:
-		_blend = minf(1.0, _blend + delta * 0.25)
+		_blend = minf(1.0, _blend + delta * (6.0 if _debug_tour else 0.25))
 		var mixed: Array = []
 		for i in _look_to.size():
 			if _look_to[i] is Color:
@@ -1070,7 +1360,9 @@ func _update_environment(delta: float) -> void:
 
 
 func _current_look() -> Array:
-	return [_wall_mat[0].albedo_color, _floor_mat[0].albedo_color, _env.ambient_light_color, _env.fog_light_color, _env.fog_density, _env.background_energy_multiplier]
+	if not _look_now.is_empty():
+		return _look_now.duplicate()
+	return LOOKS[0].duplicate()
 
 
 # ------------------------------------------------------------------ hud
@@ -1115,6 +1407,10 @@ func _update_tour(delta: float) -> void:
 	if stops.is_empty():
 		return
 	_tour_t -= delta
+	if _tour_i >= 0 and _tour_i < stops.size() and stops[_tour_i].get("air", false):
+		c.velocity = Vector3.ZERO
+		c.AirVelocity = Vector3.ZERO
+		c.global_position = _v(stops[_tour_i]["pos"])
 	if _tour_t < 0.9 and not _tour_shot_done and _tour_i >= 0:
 		_tour_shot_done = true
 		var img := get_viewport().get_texture().get_image()
@@ -2211,4 +2507,379 @@ class MusicDirector extends Node:
 				p.play()
 			if nv < 0.005 and p.playing:
 				p.stop()
+
+
+class Flicker extends Node:
+	var light: OmniLight3D
+	var base := 1.0
+	var t := 0.0
+
+	func setup(l: OmniLight3D) -> void:
+		light = l
+		base = l.light_energy
+		t = randf() * 10.0
+
+	func _process(delta: float) -> void:
+		if not is_instance_valid(light):
+			return
+		t += delta
+		light.light_energy = base * (0.82 + 0.18 * sin(t * 9.1) + 0.1 * sin(t * 23.7))
+
+
+class Bell extends Node3D:
+	# An old miners' bell hung from the roof. Hit it with your hook and every centipede
+	# in the map comes to the sound for 20 seconds instead of coming for you.
+	var id := ""
+	var bell: Node3D
+	var pos: Vector3
+	var sfx: AudioStreamPlayer3D
+	var area: Area3D
+	var cool := 0.0
+	var swing := 0.0
+	var lure_left := 0.0
+
+	func setup(b: Dictionary, mat: Material) -> void:
+		id = str(b["id"])
+		pos = Vector3(b["pos"][0], b["pos"][1], b["pos"][2])
+		var sc := float(b["scale"])
+		var ps: PackedScene = load("res://Art/Ancient_Kiln.glb")
+		bell = Node3D.new()
+		if ps:
+			var k: Node3D = ps.instantiate()
+			for body in k.find_children("*", "StaticBody3D", true, false):
+				body.queue_free()
+			k.rotation = Vector3(PI, 0, 0)     # the kiln dome upside down reads as a bell
+			k.scale = Vector3.ONE * sc * 0.42
+			for mi in k.find_children("*", "GeometryInstance3D", true, false):
+				(mi as GeometryInstance3D).material_override = mat
+			bell.add_child(k)
+		# clapper
+		var cl := MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.35 * sc
+		sm.height = 0.7 * sc
+		cl.mesh = sm
+		cl.material_override = mat
+		cl.position = Vector3(0, -1.5 * sc, 0)
+		bell.add_child(cl)
+		bell.position = pos
+		add_child(bell)
+		# chain up to the roof
+		var ch := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.12
+		cm.bottom_radius = 0.12
+		cm.height = maxf(0.5, float(b["ceiling"]) - pos.y)
+		ch.mesh = cm
+		ch.material_override = mat
+		ch.position = Vector3(pos.x, (pos.y + float(b["ceiling"])) * 0.5, pos.z)
+		add_child(ch)
+		# hookable: the claw needs something solid with an upward face to land on
+		var body2 := StaticBody3D.new()
+		body2.collision_layer = 1
+		var cs := CollisionShape3D.new()
+		var cyl := CylinderShape3D.new()
+		cyl.radius = 1.5 * sc
+		cyl.height = 2.0 * sc
+		cs.shape = cyl
+		body2.add_child(cs)
+		body2.position = pos
+		add_child(body2)
+
+	func _ready() -> void:
+		sfx = U.sfx(SFX_METAL[1], 6.0, pos, self, 400.0)
+		area = Area3D.new()
+		area.collision_layer = 0
+		area.collision_mask = 2 | 4     # the claw and players
+		var cs := CollisionShape3D.new()
+		var sph := SphereShape3D.new()
+		sph.radius = 3.4
+		cs.shape = sph
+		area.add_child(cs)
+		area.position = pos
+		add_child(area)
+
+	func _process(delta: float) -> void:
+		cool = maxf(0.0, cool - delta)
+		if swing > 0.0:
+			swing -= delta
+			var k: float = swing / 2.5
+			bell.rotation.z = sin(swing * 11.0) * 0.32 * k
+			bell.rotation.x = cos(swing * 9.0) * 0.22 * k
+		if lure_left > 0.0:
+			lure_left -= delta
+			if CoopSync.map_is_authority():
+				CoopSync.set_lure(bell, lure_left)
+		if cool > 0.0:
+			return
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree():
+			return
+		var hit := false
+		if is_instance_valid(c.Rope._claw) and c.Rope._claw.visible:
+			hit = (c.Rope._claw.global_position - pos).length() < 3.2
+		if not hit and c.velocity.length() > 7.0 and (c.global_position - pos).length() < 3.4:
+			hit = true
+		if hit:
+			cool = 6.0
+			CoopSync.map_event("bell_" + id, {}, false)
+
+	func toll() -> void:
+		swing = 2.5
+		lure_left = 20.0
+		cool = 6.0
+		sfx.play()
+		Game.audio.play_dark_transition2()
+		CoopSync.show_banner("The bell rings. Everything hunting turns toward it.", 5.0)
+
+
+class Ghost extends Node3D:
+	# One of the climbers who came before. Stands where the way continues, watching it.
+	# Fades when the local player comes close; each player sees their own.
+	const WHISPERS := ["res://sfx/soundsnap/1022742.audio-HUMAN_VOCAL_Female_4_Breath_Medium_01.wav",
+			"res://sfx/soundsnap/463323-HUMAN_BREATH_Female-Deep_Opened_Mouth_Normal_Speed_Breath-B.wav"]
+	var body: Node3D
+	var mat: StandardMaterial3D
+	var fading := false
+	var t := 0.0
+
+	func setup(ps: PackedScene, base: StandardMaterial3D, pos: Vector3, yaw: float) -> void:
+		body = ps.instantiate()
+		mat = base.duplicate()
+		for mi in body.find_children("*", "GeometryInstance3D", true, false):
+			(mi as GeometryInstance3D).material_override = mat
+			(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			(mi as GeometryInstance3D).visibility_range_end = 70.0
+		position = pos
+		rotation.y = yaw
+		add_child(body)
+		t = randf() * 6.0
+
+	func _process(delta: float) -> void:
+		t += delta
+		if fading:
+			mat.albedo_color.a = maxf(0.0, mat.albedo_color.a - delta * 0.3)
+			body.position.y += delta * 0.25
+			if mat.albedo_color.a <= 0.0:
+				queue_free()
+			return
+		body.position.y = sin(t * 0.8) * 0.04
+		var c = Game.climber
+		if is_instance_valid(c) and c.is_inside_tree() and (c.global_position - global_position).length() < 10.0:
+			fading = true
+			var p := U.sfx(WHISPERS[randi() % WHISPERS.size()], -8.0, Vector3(0, 1.5, 0), self, 22.0)
+			p.play()
+
+
+# ================================================================== the rift's furniture
+
+class HangingPlatform extends Node3D:
+	# A deck hung on chains over the void (village floors, foundry gantries, rests on the
+	# Crucible). Some are rigged: stand on one too long and its chains let go, for everyone.
+	var id := ""
+	var deck: MeshInstance3D
+	var body: StaticBody3D
+	var rigged := false
+	var gone := false
+	var stand := 0.0
+	var top: Vector3
+	var half: Vector3
+	var sfx: AudioStreamPlayer3D
+	var chains: Array = []
+
+	func setup(d: Dictionary, mat: Material, chain_mat: Material) -> void:
+		id = str(d["id"])
+		rigged = bool(d.get("drop", false))
+		top = Vector3(d["pos"][0], d["pos"][1], d["pos"][2])
+		var sz := Vector3(d["size"][0], d["size"][1], d["size"][2])
+		half = sz * 0.5
+		deck = MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = sz
+		deck.mesh = bm
+		deck.material_override = mat
+		deck.position = top - Vector3(0, sz.y * 0.5, 0)
+		deck.rotation.y = float(d.get("yaw", 0.0))
+		body = StaticBody3D.new()
+		body.collision_layer = 1
+		body.physics_material_override = load("res://physics_materials/stone.tres")
+		var cs := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = sz
+		cs.shape = bs
+		body.add_child(cs)
+		deck.add_child(body)
+		add_child(deck)
+		var clen := float(d.get("chain", 0.0))
+		if clen > 0.0:
+			for cx in [-1.0, 1.0]:
+				for cz in [-1.0, 1.0]:
+					var ch := MeshInstance3D.new()
+					var cm := CylinderMesh.new()
+					cm.top_radius = 0.08
+					cm.bottom_radius = 0.08
+					cm.height = clen
+					cm.radial_segments = 5
+					ch.mesh = cm
+					ch.material_override = chain_mat
+					ch.position = Vector3(cx * (half.x - 0.4), clen * 0.5 + sz.y * 0.5, cz * (half.z - 0.4))
+					deck.add_child(ch)
+					chains.append(ch)
+
+	func _ready() -> void:
+		if rigged:
+			sfx = U.sfx(SFX_RUMBLE, 2.0, top, self, 55.0)
+
+	func _process(delta: float) -> void:
+		if not rigged or gone:
+			return
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree():
+			return
+		var q: Vector3 = c.global_position - top
+		if c.is_on_floor() and absf(q.x) < half.x + 0.5 and absf(q.z) < half.z + 0.5 and q.y > -0.5 and q.y < 2.5:
+			stand += delta
+			if stand > 1.4:
+				CoopSync.map_event("pfdrop_" + id, {})
+		else:
+			stand = maxf(0.0, stand - delta)
+
+	func drop_now() -> void:
+		if gone:
+			return
+		gone = true
+		if sfx:
+			sfx.play()
+		Game.audio.play_rope_snap_sfx()
+		var start := deck.position
+		var tw := create_tween()
+		for i in 10:
+			tw.tween_property(deck, "position", start + Vector3(randf_range(-0.15, 0.15), -0.04 * i, randf_range(-0.15, 0.15)), 0.09)
+		tw.tween_property(deck, "position:y", start.y - 260.0, 4.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
+		tw.parallel().tween_property(deck, "rotation:z", 0.9, 4.0)
+		tw.tween_callback(func(): body.collision_layer = 0; deck.visible = false)
+		for ch in chains:
+			ch.visible = false
+		var c = Game.climber
+		if is_instance_valid(c) and c.activeClimberState is ClimberState_Attached and is_instance_valid(c.Rope._claw):
+			if (c.Rope._claw.global_position - top).length() < half.length() + 2.0:
+				c.set_climber_state(c.defaultClimberState)
+
+
+class CrystalSpar extends Node3D:
+	# A crystal grown clean across the rift: a six-sided prism with a flat top face, slick
+	# as glass. Step on and you slide where it goes.
+	var a: Vector3
+	var b: Vector3
+	var r := 7.0
+	var down: Vector3
+	var t_axis: Vector3
+	var length := 0.0
+
+	func setup(pa: Vector3, pb: Vector3, radius: float) -> void:
+		a = pa
+		b = pb
+		r = radius
+		length = (b - a).length()
+		t_axis = (b - a) / length
+		var u := Vector3.UP.cross(t_axis).normalized()
+		var v := t_axis.cross(u).normalized()       # the deck normal, mostly up
+		down = t_axis if t_axis.y < 0.0 else -t_axis
+		var half_h := r * 0.866
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var ring: Array = []
+		for k in 6:
+			var ang := deg_to_rad(60.0 * k)          # vertices at 0,60,..: a flat face sits on top
+			ring.append(u * cos(ang) * r + v * sin(ang) * r - v * half_h)
+		for k in 6:
+			var p0: Vector3 = ring[k]
+			var p1: Vector3 = ring[(k + 1) % 6]
+			var nrm := ((p0 + p1) * 0.5 + v * half_h).normalized()
+			for tri in [[a + p0, a + p1, b + p1], [a + p0, b + p1, b + p0]]:
+				for q in tri:
+					st.set_normal(nrm)
+					st.add_vertex(q)
+		var mi := MeshInstance3D.new()
+		mi.mesh = st.commit()
+		var m := StandardMaterial3D.new()
+		m.albedo_color = Color(0.12, 0.24, 0.42)
+		m.roughness = 0.25
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		mi.material_override = m
+		mi.visibility_range_end = 420.0
+		add_child(mi)
+		# collision: a box whose top is the prism's top face (the deck line a-b)
+		var body := StaticBody3D.new()
+		body.collision_layer = 1
+		var cs := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = Vector3(r, half_h * 2.0, length)
+		cs.shape = bs
+		body.add_child(cs)
+		body.transform = Transform3D(Basis(u, v, t_axis), (a + b) * 0.5 - v * half_h)
+		add_child(body)
+
+	func _physics_process(_delta: float) -> void:
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree() or not c.is_on_floor():
+			return
+		var q: Vector3 = c.global_position - a
+		var along := q.dot(t_axis)
+		if along < 6.0 or along > length - 14.0:
+			return
+		var off := q - t_axis * along
+		if off.length() < r * 0.9 + 1.2:
+			c.additional_velocity_next_frame += down * 0.085     # glass: you go where it goes
+
+
+class Waterfall extends Node3D:
+	# Water pouring out of the wall into nothing. It shoves you toward the edge.
+	var top: Vector3
+	var height := 30.0
+	var push: Vector3
+
+	func setup(p: Vector3, h: float, shove: Vector3) -> void:
+		top = p
+		height = h
+		push = shove
+
+	func _ready() -> void:
+		var ps := CPUParticles3D.new()
+		ps.amount = 90
+		ps.lifetime = 2.2
+		ps.local_coords = false
+		ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		ps.emission_box_extents = Vector3(2.2, 0.3, 2.2)
+		ps.direction = Vector3.DOWN
+		ps.spread = 6.0
+		ps.gravity = Vector3(0, -14.0, 0)
+		ps.initial_velocity_min = 3.0
+		ps.initial_velocity_max = 6.0
+		ps.scale_amount_min = 0.7
+		ps.scale_amount_max = 1.5
+		var quad := QuadMesh.new()
+		quad.size = Vector2(0.9, 3.2)
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_color = Color(0.09, 0.12, 0.13, 0.22)
+		m.albedo_texture = get_parent()._soft_dot()
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		quad.material = m
+		ps.mesh = quad
+		ps.position = top
+		ps.visibility_range_end = 200.0
+		add_child(ps)
+		var snd := U.sfx(SFX_WIND, -6.0, top - Vector3(0, height * 0.8, 0), self, 50.0)
+		snd.finished.connect(func(): snd.play())
+		snd.play()
+
+	func _physics_process(_delta: float) -> void:
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree():
+			return
+		var q: Vector3 = c.global_position - top
+		if q.y < 2.0 and q.y > -height and Vector2(q.x, q.z).length() < 3.6:
+			c.additional_velocity_next_frame += push * 0.012
 

@@ -91,13 +91,15 @@ class Route:
         self.intents = []         # deferred placement callbacks run against the final field
         self.slabs = []           # dicts: biome, poly (N,2), top, bottom
         self.columns = []         # dicts: biome, x, z, bottom, top, radius
-        self.L = {k: [] for k in ["checkpoints", "props", "lights", "fires", "embers", "crumbles",
+        self.L = {k: [] for k in ["ghosts", "bells", "checkpoints", "props", "lights", "fires", "embers", "crumbles",
                                    "vents", "droppers", "spikes", "ice", "texts", "gates", "plates",
                                    "kilns", "fragments", "stalkers", "centipedes", "dying_lights",
                                    "ambience", "barriers", "tour", "zones", "altar", "bars", "lava", "dress", "finish"]}
         self.L["biomes"] = BIOMES
         self.ids = {}
         self.tube_plans = []
+        self._feature_i = 0
+        self._descent_style = 0
         self.extra_allow = set()   # tube groups the next chamber/tunnel may sit next to
 
     # ------------------------------------------------------------ bookkeeping
@@ -114,7 +116,7 @@ class Route:
         for p in prims:
             pb = p.aabb()
             for q, g in zip(self.prims, self.groups):
-                if g in allow_groups:
+                if g in allow_groups or q.kind == "rift":
                     continue
                 if self._boxes_overlap(pb, q.aabb(), margin):
                     return None
@@ -148,7 +150,7 @@ class Route:
         self.bowl_group = self.group
         return b
 
-    def chamber(self, biome, rx, ry, rz, amp=(5.0, 2.6, 0.7), name="", tries=14):
+    def chamber(self, biome, rx, ry, rz, amp=(5.0, 2.6, 0.7), name="", tries=14, lights=True):
         rx, ry, rz = rx * SCALE, ry * SCALE, rz * SCALE
         if self.landing is None:
             self.steer()
@@ -201,7 +203,7 @@ class Route:
                 for i in range(max(3, int(n_dress * 0.25))):
                     piece = pick_weighted(self.rng, RUBBLE)
                     self.intents.append(("rubble", dict(ch=ch, scene=piece[0], scale=self.rng.uniform(*piece[1]))))
-            n_lights = max(4, int(max(rx, rz) / 7.0))
+            n_lights = max(4, int(max(rx, rz) / 7.0)) if lights else 0
             for i in range(n_lights):
                 a = 2 * math.pi * (i + self.rng.uniform(0.1, 0.9)) / n_lights
                 lx = math.cos(a) * rx * 0.78
@@ -209,8 +211,9 @@ class Route:
                 h = self.rng.uniform(4.0, min(9.0, ry * 0.6))
                 self.L["lights"].append({"pos": v3(ch.world_point(lx, lz, floor + h)), "color": GLOW[biome],
                                          "energy": 1.2, "range": round(max(26.0, min(rx, rz) * 1.0), 1)})
-            self.L["lights"].append({"pos": v3([c[0], floor + ry * 0.9, c[2]]), "color": GLOW[biome],
-                                     "energy": 0.6, "range": round(max(rx, rz) * 1.3, 1)})
+            if lights:
+                self.L["lights"].append({"pos": v3([c[0], floor + ry * 0.9, c[2]]), "color": GLOW[biome],
+                                         "energy": 0.6, "range": round(max(rx, rz) * 1.3, 1)})
             return ch
         raise RuntimeError("could not place chamber %s near %s" % (name, self.cursor))
 
@@ -265,7 +268,7 @@ class Route:
 
     SHAFT_SPACING = {1: (10.0, 13.0), 3: (11.0, 14.0), 4: (12.0, 15.0), 5: (12.0, 15.0), 6: (13.0, 16.0), 7: (13.0, 16.0), 8: (14.0, 17.0)}
 
-    def shaft(self, biome, drop, R=9.0, crumble_ratio=0.35, ice=False, spacing=None, glow=None):
+    def shaft(self, biome, drop, R=9.0, crumble_ratio=0.35, ice=False, spacing=None, glow=None, spiral=False, big_every=6):
         drop = drop * SCALE
         # Spacing widens with depth. The campaign's next hold on the way down is a median
         # 18.5 m away (75th percentile 28 m) on a 25 m rope; these shafts run 19 to 24 m.
@@ -288,8 +291,21 @@ class Route:
             levels.append((y, ang))
             y -= self.rng.uniform(*spacing)
             ang += math.radians(self.rng.uniform(70, 125)) * self.rng.choice([1, -1])
+        if spiral:
+            # a staircase of ledges winding down the wall: walkable, no rope needed
+            yy2 = ch.floor_y - 3.0
+            ang2 = self.rng.uniform(0, 2 * math.pi)
+            while yy2 > bottom_floor + 4.0:
+                self.intents.append(("shaft_shelf", dict(biome=biome, S=S, y=yy2, ang=ang2, R=R, ice=False, big=False, wide=True)))
+                if self.rng.random() < 0.25:
+                    self.intents.append(("wall_light", dict(S=S, y=yy2 + 2.0, ang=ang2, color=glow or GLOW[biome])))
+                yy2 -= self.rng.uniform(3.0, 4.0)
+                ang2 += math.radians(self.rng.uniform(38, 52))
+            self.L["tour"].append({"pos": v3(S + np.array([0, -drop * 0.5, 0])),
+                                   "look": v3(S + np.array([0, -drop, 0])), "label": "%s spiral" % BIOMES[biome]})
+            return {"S": S, "top": ch.floor_y, "bottom": bottom_floor, "R": R, "group": g}
         for li, (ly, la) in enumerate(levels):
-            big = li % 6 == 5
+            big = li % big_every == big_every - 1
             self.intents.append(("shaft_shelf", dict(biome=biome, S=S, y=ly, ang=la, R=R, ice=ice and not big, big=big)))
             if self.rng.random() < crumble_ratio:
                 a2 = la + math.radians(self.rng.uniform(120, 220))
@@ -313,6 +329,63 @@ class Route:
                                "label": "%s shaft" % BIOMES[biome]})
         return {"S": S, "top": ch.floor_y, "bottom": bottom_floor, "R": R, "group": g}
 
+    FEATURES = ["gap", "boulders", "dark", "gauntlet", "swing", "lore", "pit"]
+
+    def feature(self, ch, kind, rng=None):
+        """Give a room one thing to do, so no room is just empty floor."""
+        rng = rng or self.rng
+        if kind == "gap":
+            self.chasm(ch, min(9.0, ch.r[0] * 0.3), 15.0, spacing=8.0, spikes=False)
+            self.text(ch.arrival + ch.d * 6, 7.0, rng.choice([
+                "The floor has split. The far side is close enough to reach.",
+                "A crack running the length of the room.",
+            ]))
+        elif kind == "boulders":
+            for i in range(3):
+                p = ch.world_point(rng.uniform(-0.5, 0.6) * ch.r[0], rng.uniform(-0.5, 0.5) * ch.r[2], ch.floor_y)
+                self.intents.append(("dropper", dict(kind="boulder", x=p[0], z=p[2], y_floor=ch.floor_y, ceiling_from=ch.floor_y + 3)))
+            self.scatter_floor(ch, 5, lambda p: self.prop(A + "Stone_09.glb", p, yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.4, 0.8)))
+            self.text(ch.arrival + ch.d * 5, 6.0, "Loose rock overhead. Do not stand still.")
+        elif kind == "dark":
+            for i in range(2):
+                self.L["ambience"].append({"pos": v3(ch.world_point(rng.uniform(-20, 20), rng.uniform(-20, 20), ch.floor_y + 3)),
+                                           "sounds": BREATHS + WHISPERS, "min": 5.0, "max": 12.0, "range": 30.0, "db": 0.0})
+            self.scatter_floor(ch, 6, lambda p: self.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28)))
+            self.intents.append(("ember", dict(pos=ch.world_point(0.5 * ch.r[0], 0, ch.floor_y))))
+            self.text(ch.arrival + ch.d * 4, 7.0, "No light in here at all. Something is breathing.")
+        elif kind == "gauntlet":
+            for i in range(3):
+                p = ch.world_point(rng.uniform(-0.5, 0.6) * ch.r[0], rng.uniform(-0.45, 0.45) * ch.r[2], ch.floor_y)
+                self.intents.append(("spike_bed", dict(x=p[0], z=p[2], y_from=ch.floor_y + 3, push=v3(ch.d))))
+            for i in range(2):
+                p = ch.world_point(rng.uniform(-0.4, 0.5) * ch.r[0], rng.uniform(-0.4, 0.4) * ch.r[2], ch.floor_y)
+                self.intents.append(("dropper", dict(kind="icicle", x=p[0], z=p[2], y_floor=ch.floor_y, ceiling_from=ch.floor_y + 3)))
+            self.text(ch.arrival + ch.d * 5, 6.0, "Spines underfoot, and more hanging above.")
+        elif kind == "swing":
+            self.chasm(ch, min(12.0, ch.r[0] * 0.42), 18.0, spacing=8.5)
+            self.text(ch.arrival + ch.d * 5, 7.0, "Hook the pillar tops and keep your feet off the floor.")
+        elif kind == "lore":
+            c = ch.world_point(rng.uniform(-0.3, 0.3) * ch.r[0], rng.uniform(-0.3, 0.3) * ch.r[2], ch.floor_y)
+            for i in range(5):
+                q = c + np.array([rng.uniform(-4, 4), 0, rng.uniform(-4, 4)])
+                self.prop(rng.choice(CORPSES), q, yaw=rng.uniform(0, 6.28))
+            self.prop(A + "Tent.glb", c + np.array([5, 0, 2]), yaw=rng.uniform(0, 6.28))
+            self.fire(c + np.array([1.5, 0, -1.0]), 0.5)
+            self.intents.append(("ember", dict(pos=c + np.array([-2.0, 0, 1.5]))))
+            self.text(c, 8.0, rng.choice([
+                "A camp. They got this far, set the fire, and never packed it up.",
+                "Five of them, around a fire that went out a long time ago.",
+                "Someone slept here. The bedding still holds the shape of a body.",
+            ]))
+        elif kind == "pit":
+            for i in range(4):
+                p = ch.world_point(rng.uniform(-0.55, 0.6) * ch.r[0], rng.uniform(-0.5, 0.5) * ch.r[2], ch.floor_y)
+                self.intents.append(("vent", dict(x=p[0], z=p[2], y=ch.floor_y + 3)))
+            self.text(ch.arrival + ch.d * 5, 6.0, "Gas vents. They flare on their own time.")
+        elif kind == "crystals":
+            self.scatter_floor(ch, 14, lambda p: self.intents.append(("crystal", dict(pos=p, s=rng.uniform(1.0, 2.6)))))
+        return ch
+
     def descent(self, biome, drop, R=10.0, crumble_ratio=0.35, ice=False, glow=None, seg=95.0):
         """A long descent broken into drops of about `seg` m (pre-scale), each followed by a
         horizontal gallery: landing room, a walk, and a ledge room for the next drop. The last
@@ -320,20 +393,38 @@ class Route:
         n = max(1, int(round(drop / seg)))
         part = drop / n
         for i in range(n):
-            self.shaft(biome, part, R=R, crumble_ratio=crumble_ratio, ice=ice, glow=glow)
+            # vary the descents: wide pit, narrow chimney, or a walkable spiral ramp
+            style = self._descent_style % 3
+            self._descent_style += 1
+            if style == 0:
+                self.shaft(biome, part, R=R * 1.35, crumble_ratio=crumble_ratio * 0.6, ice=ice, glow=glow,
+                           spacing=(13.0, 17.0), big_every=4)
+            elif style == 1:
+                self.shaft(biome, part, R=R * 0.72, crumble_ratio=min(0.85, crumble_ratio + 0.3), ice=ice, glow=glow,
+                           spacing=(8.0, 11.0))
+            else:
+                self.shaft(biome, part, R=R * 1.1, crumble_ratio=crumble_ratio, ice=ice, glow=glow, spiral=True)
             if i == n - 1:
                 break
+            dark = (self._feature_i % 7) == 2
             land = self.chamber(biome, self.rng.uniform(18, 24), self.rng.uniform(11, 14), self.rng.uniform(16, 22),
-                                amp=(3.0, 2.0, 0.6), name="%s gallery %d" % (BIOMES[biome], i + 1))
+                                amp=(3.0, 2.0, 0.6), name="%s gallery %d" % (BIOMES[biome], i + 1), lights=not dark)
             self.L["tour"].append({"pos": v3(land.arrival + np.array([0, 1.8, 0])),
                                    "look": v3(land.exit + np.array([0, 2, 0])), "label": land.name})
             self.intents.append(("ember", dict(pos=land.arrival + land.d * 3 + land.s * 2)))
-            self.fire(land.arrival + land.d * 2 - land.s * 3, 0.4, energy=0.9, rng=16)
+            if not dark:
+                self.fire(land.arrival + land.d * 2 - land.s * 3, 0.4, energy=0.9, rng=16)
+            self.feature(land, self.FEATURES[self._feature_i % len(self.FEATURES)])
+            self._feature_i += 1
             turn = self.rng.choice([-1, 1]) * self.rng.uniform(35, 70)
             self.tunnel(biome, [(self.rng.uniform(45, 70), self.rng.uniform(2, 5), turn),
                                 (self.rng.uniform(30, 50), self.rng.uniform(1, 4), -turn * 0.6)], r=5.2)
-            self.chamber(biome, self.rng.uniform(22, 28), self.rng.uniform(13, 16), self.rng.uniform(18, 24),
-                         amp=(3.5, 2.0, 0.6), name="%s ledge %d" % (BIOMES[biome], i + 1))
+            ledge = self.chamber(biome, self.rng.uniform(22, 28), self.rng.uniform(13, 16), self.rng.uniform(18, 24),
+                                 amp=(3.5, 2.0, 0.6), name="%s ledge %d" % (BIOMES[biome], i + 1))
+            self.feature(ledge, self.FEATURES[self._feature_i % len(self.FEATURES)])
+            self._feature_i += 1
+            if biome == CRYSTAL:
+                self.feature(ledge, "crystals")
 
     def chasm(self, ch, half_w, depth, spacing=8.0, spikes=True):
         half_w = half_w * SCALE
@@ -473,9 +564,14 @@ class Route:
         self.intents.append(("light", dict(pos=np.array(pos, dtype=float), color=color, energy=energy,
                                            range=rng, snap=snap, lift=lift)))
 
-    def fire(self, pos, scale=0.6, light=True, energy=1.3, rng=20.0):
+    def fire(self, pos, scale=0.6, light=True, energy=1.3, rng=20.0, beacon=False):
         self.intents.append(("fire", dict(pos=np.array(pos, dtype=float), scale=scale, light=light,
-                                          energy=energy, range=rng)))
+                                          energy=energy, range=rng, beacon=beacon)))
+
+    def bell(self, ch, lx_frac=0.0, lz_frac=0.0, scale=2.2):
+        """A hanging bell. Hook it and every centipede comes to the sound."""
+        p = ch.world_point(lx_frac * ch.r[0], lz_frac * ch.r[2], ch.floor_y)
+        self.intents.append(("bell", dict(x=float(p[0]), z=float(p[2]), y=ch.floor_y, scale=scale)))
 
     def text(self, pos, r, text):
         self.L["texts"].append({"pos": v3(np.array(pos) + np.array([0, 1.5, 0])), "r": r, "text": text})
@@ -546,6 +642,7 @@ def build(seed):
     R.fire(m1.world_point(-8, 6, m1.floor_y), 0.7)
     R.scatter_floor(m1, 5, lambda p: R.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28)))
     R.ceiling_spikes(m1, 6)
+    R.feature(m1, "lore")
     R.text(m1.arrival, 8.0, "Below the hall, the floor is gone.")
     R.light(m1.world_point(0, 0, m1.floor_y), [0.9, 0.75, 0.6], 0.6, 30, lift=10)
     R.descent(OSSUARY, 180, R=10.0, crumble_ratio=0.45)
@@ -582,11 +679,15 @@ def build(seed):
     o2 = R.chamber(OSSUARY, 30, 20, 30, name="Ossuary Well")
     R.scatter_floor(o2, 12, lambda p: R.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28)))
     R.text(o2.arrival, 8.0, "Something pale is coiled in the dark. It does not move while you watch it.")
+    R.bell(o2, lx_frac=-0.45, lz_frac=0.15, scale=2.4)
+    R.text(o2.world_point(-0.45 * o2.r[0], 0.15 * o2.r[2] + 7, o2.floor_y), 7.0,
+           "A bell, hung from the roof by the old miners. Throw your hook at it. Anything hunting will come to the sound instead of to you.")
     R.ceiling_spikes(o2, 6)
     stalk1_home = o2.world_point(-4, 12, o2.floor_y + 6)
     z1 = [[v3([o2.c[0], o2.floor_y, o2.c[2]]), 40.0]]
     R.descent(OSSUARY, 200, R=10.0, crumble_ratio=0.75)
     o3a = R.chamber(OSSUARY, 26, 15, 24, name="Ossuary Landing")
+    R.feature(o3a, "dark")
     R.scatter_floor(o3a, 6, lambda p: R.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28)))
     z1.append([v3([o3a.c[0], o3a.floor_y, o3a.c[2]]), 34.0])
     t = R.tunnel(OSSUARY, [(55, 9, -20)], r=4.6)
@@ -623,6 +724,7 @@ def build(seed):
            r0=1.5, name="dead end B", decor=dict(end_corpse=True, end_corpses=4, end_text="A pocket of bones. No way on. The hole you dropped through is above you."))
     br = R.chamber(BURROWS, 13, 9, 12, amp=(1.6, 1.0, 0.4), name="Breathing Room")
     R.text(br.arrival, 6.0, "You can stand. Your knees are bleeding. Ahead, green light.")
+    R.feature(br, "lore")
     R.intents.append(("ember", dict(pos=br.arrival + br.d * 4 + br.s * 2)))
     R.fire(br.arrival + br.d * 3 - br.s * 3, 0.4, energy=0.8, rng=14)
 
@@ -666,6 +768,7 @@ def build(seed):
     t = R.tunnel(FUNGAL, [(55, 10, -20)], r=5.5)
     R.intents.append(("gate", dict(id=gate_k, kind="kilns", need=4, tunnel=t, dist=12.0)))
     f3 = R.chamber(FUNGAL, 34, 20, 30, name="Spore Drop")
+    R.feature(f3, "swing")
     R.scatter_floor(f3, 20, lambda p: R.prop(rng.choice(PLANTS_L), p, yaw=rng.uniform(0, 6.28), scale=rng.uniform(2.5, 5.0)))
     R.descent(ROOTS, 260, R=12.5, crumble_ratio=0.3, glow=[0.4, 1.0, 0.6])
 
@@ -720,12 +823,16 @@ def build(seed):
     R.chasm(d3, 16.0, 24.0, spacing=11.5)
     zd.append([v3([d3.c[0], d3.floor_y, d3.c[2]]), 58.0])
     R.text(d3.arrival, 8.0, "You cannot see the bottom. Good.")
+    cen_d = R.next_id("cen")
+    L["centipedes"].append({"id": cen_d, "trigger": [v3(d3.arrival), 12.0],
+                            "spawn": [v3(d3.world_point(0.85 * d3.r[0], 0.2 * d3.r[2], d3.floor_y + 4))]})
     L["stalkers"].append({"id": "stalker2", "home": v3(d3.world_point(0.7 * d3.r[0], 10, d3.floor_y + 6)), "zone": zd, "speed": 30.0})
     for i in range(3):
         L["ambience"].append({"pos": v3(d3.world_point(rng.uniform(-30, 30), rng.uniform(-20, 20), d3.floor_y - 10)),
                               "sounds": BREATHS, "min": 10.0, "max": 25.0, "range": 40.0, "db": 0.0})
     t = R.tunnel(DROWNED, [(50, 14, -30)], r=5.5)
     d4 = R.chamber(DROWNED, 30, 18, 28, name="Drowned Drop")
+    R.feature(d4, "gauntlet")
     R.descent(VILLAGE, 240, R=12.0, crumble_ratio=0.4)
 
     # ---------------------------------------------------------- 5 SUNKEN VILLAGE
@@ -760,6 +867,7 @@ def build(seed):
                             "spawn": [v3(t["points"][0] + np.array([0, 2.5, 0]))]})
     R.text(mid, 6.0, "Did the wall just breathe?")
     v2 = R.chamber(VILLAGE, 36, 20, 32, name="Village Well")
+    R.feature(v2, "boulders")
     R.prop(A + "WaterWheel.glb", v2.world_point(-6, 10, v2.floor_y), yaw=rng.uniform(0, 6.28), scale=1.2)
     R.descent(CRYSTAL, 250, R=11.5, crumble_ratio=0.3, ice=True, glow=[0.5, 0.75, 1.0])
 
@@ -780,6 +888,9 @@ def build(seed):
     x2 = R.chamber(CRYSTAL, 46, 22, 36, name="Crystal Chasm")
     R.chasm(x2, 14.0, 22.0, spacing=12.5)
     R.scatter_floor(x2, 16, lambda p: R.intents.append(("crystal", dict(pos=p, s=rng.uniform(1.0, 2.4)))), min_r=0.45)
+    cen_x = R.next_id("cen")
+    L["centipedes"].append({"id": cen_x, "trigger": [v3(x2.arrival + x2.d * 10), 11.0],
+                            "spawn": [v3(x2.world_point(-0.85 * x2.r[0], -0.3 * x2.r[2], x2.floor_y + 4))]})
     frag3 = R.side_cave(x2, -1, 46, 5.0, room=(13, 9, 13), lx_frac=0.62)
     if frag3 is None:
         frag3 = R.side_cave(x2, 1, 46, 5.0, room=(13, 9, 13), lx_frac=0.62)
@@ -792,6 +903,7 @@ def build(seed):
     R.text(x2.arrival, 8.0, "Across the chasm, a side passage glows.")
     t = R.tunnel(CRYSTAL, [(50, 10, 20)], r=5.5)
     x3 = R.chamber(CRYSTAL, 34, 20, 30, name="Crystal Drop")
+    R.feature(x3, "gap")
     R.scatter_floor(x3, 10, lambda p: R.intents.append(("crystal", dict(pos=p, s=rng.uniform(1.0, 2.2)))))
     R.descent(FOUNDRY, 230, R=11.0, crumble_ratio=0.35, ice=True)
 
@@ -888,6 +1000,7 @@ def build(seed):
     altar = n1.world_point(0.72 * n1.r[0], 0, n1.floor_y)
     R.intents.append(("altar", dict(x=altar[0], z=altar[2], y=n1.floor_y + 4)))
     R.text(n1.arrival, 10.0, "At the far end, on the altar, it waits. Like she said.")
+    R.bell(n1, lx_frac=-0.35, lz_frac=0.45, scale=3.0)
     for i in range(4):
         L["ambience"].append({"pos": v3(n1.world_point(rng.uniform(-50, 50), rng.uniform(-40, 40), n1.floor_y + 8)),
                               "sounds": SNARLS + BREATHS, "min": 8.0, "max": 20.0, "range": 50.0, "db": 0.0})
@@ -898,6 +1011,20 @@ def build(seed):
     R.light(asc.world_point(0.2 * asc.r[0], 0.0, asc.floor_y), [1.0, 0.95, 0.85], 3.0, 60.0, lift=30.0)
     R.light(asc.world_point(0.2 * asc.r[0], 0.0, asc.floor_y), [1.0, 0.9, 0.7], 1.2, 30.0, lift=6.0)
     R.text(asc.arrival, 8.0, "Light, far above. Take it home.")
+
+    # the ones who came before: a ghost stands where the way continues, in every room
+    # that has an onward exit. They fade when you come close.
+    for i, ch in enumerate(R.chambers[:-1]):
+        nxt = R.chambers[i + 1]
+        if nxt.from_shaft:
+            # the way on is down: stand at the lip of the hole, looking into it
+            hole = np.array([ch.c[0], ch.floor_y, ch.c[2]]) + hdir(math.atan2(ch.d[2], ch.d[0])) * (0.55 * ch.r[0])
+            away = hole - np.array([ch.c[0], ch.floor_y, ch.c[2]])
+            n = away / max(np.linalg.norm(away), 1e-6)
+            spot = hole - n * (ch.r[0] * 0.2 + 6.0)
+            R.intents.append(("ghost", dict(pos=spot, face=n)))
+        else:
+            R.intents.append(("ghost", dict(pos=ch.exit - ch.d * 5.0, face=ch.d)))
 
     # tour stops for the debug camera: every chamber from its arrival point
     for ch in R.chambers:

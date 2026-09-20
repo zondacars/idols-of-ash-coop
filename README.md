@@ -15,17 +15,22 @@ Unlike the earlier "ghost" co-op mod, this one runs a **shared world**: one set 
 
 ## Custom maps (Sandbox)
 
-### THE UNDERDARK
-A full-length descent through caverns, deeper than the campaign and built for horizontal play.
+### THE UNDERDARK (v4, "The Great Rift")
+One colossal abyss, rebuilt from scratch and modelled on the campaign's own chasm (measured in game: the campaign is 2,100 m deep and 310 to 400 m wide, with 150 to 300 m sightlines).
 
-- About **2,550 m** deep (the campaign is about 2,150 m), **51 rooms**, **10 biomes**, about **6 km** of horizontal travel (71% of the route vs about 43% in the campaign).
-- Biomes: The Mouth, Ossuary, The Burrows, Fungal Hollow, Rootworks, Drowned Galleries, Sunken Village, Crystal Veins, The Foundry (with The Crucible), The Nest.
+- **3,380 m** deep (the campaign is 2,100 m). The rift is **170 to 420 m across**, and you can see the far wall, the ledges below you and the landmarks from hundreds of metres away.
+- Strata: The Mouth, Ossuary, The Burrows, Fungal Hollow, Rootworks, Drowned Galleries, Sunken Village, Crystal Veins, The Foundry (with The Crucible), The Nest.
+- **Set pieces that cross the whole void:** the Span (a broken 288 m stone bridge), four giant roots (385 to 395 m each), two hanging village archipelagos (51 platforms on chains), three crystal spars (about 390 m each).
+- **Landmarks:** The Ribs (a ribcage the size of a street, grown into the Ossuary wall), The Chandelier (18 stalactites under the Lid), The Needles (rock spires standing in the lava lake).
+- **The fall rule:** fall further than your rope is long (25 m) and you die. Shorter falls cost about a third of your health. The rope is the way down.
+- **Ladders:** 38 of the 101 drops are small footholds a full rope apart with nothing else below. Deeper down they shrink and shift sideways. **The Plunge** is 9 in a row, about 200 m.
 - **The Burrows:** crawl-tight tunnels, three holes, only one goes through.
-- **The Crucible:** 12 hanging iron bars over lava. Swing, let go, throw again. One bar doesn't hold.
+- **The Crucible:** 27 hanging iron bars across the whole rift over a lava lake, 3 places to rest, 4 bars that sink.
 - **Puzzles:** light four kilns; pressure plates that need every living player (solo gets a timed door); three idol fragments that open the Foundry door.
-- **The Stalker:** a fast creature that only moves while nobody is looking at it.
-- Crumbling sand ledges (they rumble and shake first), chasms with pillar swings, falling boulders and icicles, fire vents, spike beds, ice shelves, centipede ambushes, per-biome music, and a scripted finale in the Nest.
-- Everything that changes the world is synced for all players, and checkpoints survive a team wipe.
+- **The Stalker:** a fast creature that only moves while nobody is looking at it. **Bells:** hit one with your hook and hunters go to the sound instead of to you.
+- Crumbling sand ledges (they rumble and shake first), rocks that let go above you, fire vents, spike beds, ice shelves, waterfalls that push, 10 centipede ambushes, per-biome music, and a scripted finale in the Nest.
+- Everything that changes the world is synced for all players, and the 20 checkpoints survive a team wipe.
+- Difficulty: about 8 out of 10 (the campaign is about a 5). Leave the "Additional Centipedes" slider at 0, the map places its own.
 
 ### INFERNO
 A shorter, straight 500 m hell shaft with traps.
@@ -62,7 +67,7 @@ To uninstall, delete `override.cfg` and the `mods-unpacked` folder.
 
 The mod is plain GDScript loaded through Godot's `override.cfg` autoload; it does not modify any game files. It extends a few of the game's scripts at runtime and runs a host-authoritative simulation: the host streams centipede transforms, every player streams position, camera, rope and hook; guests run puppet centipedes. Reliable Steam messages carry events (levels, deaths, map events, checkpoints).
 
-THE UNDERDARK is generated offline from a fixed seed (Python: signed distance field caves, marching cubes, hand-meshed crawl tubes) into a glTF file plus a layout file, so every player has the identical world. The generator is in [`tools/underdark`](tools/underdark).
+THE UNDERDARK is generated offline from a fixed seed (Python: a signed distance field for the rift, rock solids put back into it for balconies, spans, ribs and spires, marching cubes, hand-meshed crawl tubes) into a glTF file plus a layout file, so every player has the identical world. The generator is in [`tools/underdark`](tools/underdark).
 
 ## Known limits
 

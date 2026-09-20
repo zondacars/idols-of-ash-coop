@@ -12,8 +12,8 @@ from skimage.measure import marching_cubes
 
 import sdf
 from sdf import Field, Perlin3
-import world
-from world import v3, hdir, godot_yaw_facing
+import rift_world as world
+from rift_world import v3, hdir, godot_yaw_facing
 import tubes
 
 VOX = 2.5
@@ -38,6 +38,15 @@ def mesh_block(args):
     idx = F.prims_for_box(lo - 1, hi + 1)
     if not idx:
         return bi, None
+    if F.rift is not None and len(idx) == 1 and F.prims[idx[0]] is F.rift and not F.solids_for_box(lo - 1, hi + 1):
+        # only the abyss touches this block: skip it when it is plainly all rock or all air
+        g = [np.linspace(lo[k], hi[k], 7) for k in range(3)]
+        GX, GY, GZ = np.meshgrid(g[0], g[1], g[2], indexing="ij")
+        GP = np.stack([GX.ravel(), GY.ravel(), GZ.ravel()], axis=1)
+        m0, m1, m2 = sdf.noise_fields(GP)
+        ge = F.rift.sdf(GP, m0, m1, m2)
+        if ge.min() > 40.0 or ge.max() < -40.0:
+            return bi, None
     X, Y, Z = np.meshgrid(ax[0], ax[1], ax[2], indexing="ij")
     P = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
     f, owner = F.eval(P, idx, want_owner=True)
@@ -60,6 +69,19 @@ def mesh_block(args):
     vi = np.clip(np.rint((verts - lo) / VOX).astype(np.int64), 0, np.array(X.shape) - 1)
     own = owner.reshape(X.shape)[vi[:, 0], vi[:, 1], vi[:, 2]]
     biomes = np.array([F.prims[o].biome if o >= 0 else 0 for o in own], dtype=np.int32)
+    if F.rift is not None:
+        ri = F.prims.index(F.rift)
+        m_r = own == ri
+        if m_r.any():
+            biomes[m_r] = F.rift.biome_at(verts[m_r, 1])     # the rift's strata decide its look
+    # some rock is not rock: bone, bark. Those solids carry their own look.
+    sidx = [j for j in F.solids_for_box(lo - 1, hi + 1) if getattr(F.solids[j], "look", None) is not None]
+    if sidx:
+        m0, m1, m2 = sdf.noise_fields(verts)
+        ctx = {"rift": F.rift}
+        for j in sidx:
+            sd = F.solids[j].sdf(verts, m0, m1, m2, ctx)
+            biomes[sd < 0.9] = F.solids[j].look
     tb = biomes[faces[:, 0]]
     fn = nrm[faces].mean(axis=1)
     floor = fn[:, 1] > 0.55
@@ -264,13 +286,14 @@ def resolve(R, F, report):
                 rw = F.ray_to_rock([S[0], y + 0.6, S[2]], d, 40.0, 0.2)
                 if rw is None:
                     rw = a["R"]
-                protrude = 7.0 if a.get("big") else 4.4
+                protrude = 7.0 if a.get("big") else (5.6 if a.get("wide") else 4.4)
                 inner_r = max(rw - protrude, 1.2)
                 cxz = np.array([S[0], S[2]])
                 probe = cxz + np.array([d[0], d[2]]) * (inner_r + 1.2)
                 if not headroom(probe[0], probe[1], y):
                     continue
-                poly = polar_slab(cxz, d, inner_r, rw + 3.6, 4.6 if a.get("big") else 2.8, rng)
+                half_t = 4.6 if a.get("big") else (4.2 if a.get("wide") else 2.8)
+                poly = polar_slab(cxz, d, inner_r, rw + 3.6, half_t, rng)
                 add_slab(a["biome"], poly, y, y - 1.8, "shelf")
                 if a.get("big"):
                     L["embers"].append({"pos": v3([probe[0], y + 1.3, probe[1]])})
@@ -338,8 +361,8 @@ def resolve(R, F, report):
             fy = floor_at(p[0], p[2], p[1] + 6.0)
             if fy is None:
                 continue
-            L["fires"].append({"pos": v3([p[0], fy, p[2]]), "scale": a["scale"]})
-            if a["light"]:
+            L["fires"].append({"pos": v3([p[0], fy, p[2]]), "scale": a["scale"], "beacon": bool(a.get("beacon", False))})
+            if a["light"] and not a.get("beacon"):
                 L["lights"].append({"pos": v3([p[0], fy + 1.6, p[2]]), "color": [1.0, 0.58, 0.25], "energy": a["energy"], "range": a["range"]})
         elif kind == "ember":
             p = a["pos"]
@@ -461,6 +484,10 @@ def resolve(R, F, report):
             if rw is None:
                 continue
             hit = origin + wdir * rw
+            # keep doorways clear: no rocks near where players enter or leave the room
+            doors = [ch.arrival, ch.exit] + [pl["start"] for pl in R.tube_plans if pl["ch"] is ch]
+            if hit[1] < ch.floor_y + 9.0 and any(math.hypot(hit[0] - dd[0], hit[2] - dd[2]) < 11.0 for dd in doors):
+                continue
             L["dress"].append({"scene": a["scene"], "hit": v3(hit), "n": v3(-wdir), "embed": round(a["embed"], 2),
                                "scale": round(a["scale"], 2), "yaw": round(rng.uniform(0, 6.28), 3),
                                "tilt": round(rng.uniform(-0.5, 0.5), 3), "roll": round(rng.uniform(-0.5, 0.5), 3)})
@@ -473,6 +500,8 @@ def resolve(R, F, report):
                 if e < 0.12 or e > 0.8:
                     continue
                 p = ch.world_point(lx, lz, ch.floor_y + 4.0)
+                if any(math.hypot(p[0] - dd[0], p[2] - dd[2]) < 9.0 for dd in (ch.arrival, ch.exit)):
+                    continue
                 fy = floor_at(p[0], p[2], p[1], 12.0)
                 if fy is None:
                     continue
@@ -512,6 +541,31 @@ def resolve(R, F, report):
             if fy is None:
                 continue
             L["vents"].append({"pos": v3([a["x"], fy, a["z"]]), "period": round(rng.uniform(5.5, 9.0), 2), "phase": round(rng.uniform(0, 9), 2)})
+        elif kind == "bell" and "hang" in a:
+            L["bells"].append({"id": R.next_id("bell"), "pos": v3([a["x"], a["hang"], a["z"]]),
+                               "floor": round(a["y"], 2), "ceiling": round(a["ceiling"], 2), "scale": a["scale"]})
+            L["lights"].append({"pos": v3([a["x"], a["hang"] + 1.0, a["z"]]), "color": [1.0, 0.75, 0.4], "energy": 1.3, "range": 26.0})
+        elif kind == "wall_crumble":
+            rf = R.rift
+            c = rf.point(a["a"], a["y"], 1.9)
+            L["crumbles"].append({"id": R.next_id("cr"), "pos": v3(c - np.array([0, 0.5, 0])), "yaw": round(rng.uniform(0, 6.28), 3), "scale": 0.6})
+        elif kind == "bell":
+            fy = floor_at(a["x"], a["z"], a["y"] + 6.0, 70.0)
+            up = F.ray_to_rock([a["x"], (fy if fy is not None else a["y"]) + 2.0, a["z"]], [0, 1, 0], 120.0, 0.3)
+            if fy is None or up is None:
+                report["errors"].append("bell at %s has no floor or ceiling" % v3([a["x"], a["y"], a["z"]]))
+                continue
+            ceil = fy + 2.0 + up
+            hang = min(ceil - 2.0, fy + 13.0)
+            L["bells"].append({"id": R.next_id("bell"), "pos": v3([a["x"], hang, a["z"]]),
+                               "floor": round(fy, 2), "ceiling": round(ceil, 2), "scale": a["scale"]})
+            L["lights"].append({"pos": v3([a["x"], hang + 1.0, a["z"]]), "color": [1.0, 0.75, 0.4], "energy": 1.1, "range": 22.0})
+        elif kind == "ghost":
+            p = a["pos"]
+            fy = floor_at(p[0], p[2], p[1] + 5.0, 14.0)
+            if fy is None or not headroom(p[0], p[2], fy, 2.0):
+                continue
+            L["ghosts"].append({"pos": v3([p[0], fy, p[2]]), "yaw": round(godot_yaw_facing(np.array(a["face"])) + math.pi, 4)})
         elif kind == "altar":
             fy = floor_at(a["x"], a["z"], a["y"])
             if fy is None:
@@ -623,7 +677,47 @@ def BURROWS_MAT(R):
 
 # ------------------------------------------------------------------ validation
 
+def validate_rift(R, F, report):
+    """Every place the player must stand exists, and every step between them is within a rope."""
+    L = R.L
+    st = L.get("stations", [])
+    bad_floor = 0
+    for s_ in st:
+        p = s_["pos"]
+        if s_["kind"] in ("platform", "gantry"):
+            continue
+        fy = None
+        for up in (4.5, 3.0, 2.0):                            # an overhang may hang low over a ledge: start under it
+            fy = F.floor_below(p[0], p[2], p[1] + up, up + 4.5)   # a root or span arriving may sit a little higher
+            if fy is not None and fy - p[1] <= 3.6 and (p[1] + up) - fy > 1.9:
+                break
+        if fy is None or fy - p[1] > 3.6 or p[1] - fy > 1.6:
+            bad_floor += 1
+            if bad_floor <= 8:
+                report["errors"].append("no floor where expected at %s (%s)" % (p, s_["kind"]))
+    drops = [m["dy"] for m in R.moves if m["type"] == "drop"]
+    gaps = [m["gap"] for m in R.moves if m["type"] in ("swing", "hop") and "gap" in m]
+    hops = [m["dy"] for m in R.moves if m["type"] == "hop"]
+    report["stations"] = len(st)
+    report["stations_without_floor"] = bad_floor
+    report["drops"] = {"count": len(drops), "max": max(drops), "median": float(np.median(drops)), "hard": sum(1 for m in R.moves if m.get("hard"))}
+    report["swing_gaps_max"] = max(gaps) if gaps else 0
+    report["hop_dy_max"] = max(hops) if hops else 0
+    if max(drops) > 23.6:
+        report["errors"].append("a drop of %.1f m is longer than the rope allows" % max(drops))
+    if gaps and max(gaps) > 12.5:
+        report["errors"].append("a gap of %.1f m is too wide to throw across" % max(gaps))
+    spans = [m for m in R.moves if m["type"] in ("span", "spar")]
+    report["spans"] = [(m["type"], m["length"], m["drop"]) for m in spans]
+    report["walk_m"] = round(sum(s2["length"] for s2 in []) , 0)
+
+
 def validate(R, F, report, lo, hi):
+    if getattr(R, "rift", None) is not None:
+        validate_rift(R, F, report)
+        bars = sorted(R.L["bars"], key=lambda b: b["idx"])
+        report["bar_count"] = len(bars)
+        return
     # 1) the air must be one connected region
     from scipy import ndimage
     step = 3.0
@@ -719,7 +813,7 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     R = world.build(sdf.SEED)
     report = {"errors": [], "warnings": []}
-    F = Field([p for p in R.prims if not getattr(p, "phantom", False)], SKY_Y)
+    F = Field([p for p in R.prims if not getattr(p, "phantom", False)], SKY_Y, solids=getattr(R, "solids", ()))
     lo = np.min([b[0] for b in F.boxes], axis=0) - 6
     hi = np.max([b[1] for b in F.boxes], axis=0) + 6
     hi[1] = min(hi[1], SKY_Y + 6)
@@ -746,7 +840,7 @@ def main():
         results = pool.map(mesh_block, jobs, chunksize=1)
     print("meshed (%.1fs)" % (time.time() - t0))
 
-    nb = len(world.BIOMES)
+    nb = max(len(world.BIOMES), 12)
     mat_names = []
     for b in range(nb):
         mat_names += ["B%d_W" % b, "B%d_F" % b]
@@ -820,7 +914,7 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    pal = ["#c8b89a", "#e8e0c8", "#5fd68a", "#8b5a2b", "#4a8f9a", "#9a9aa8", "#8fc0ff", "#ff6a2a", "#b0203a", "#6b5a3a"]
+    pal = ["#c8b89a", "#e8e0c8", "#5fd68a", "#8b5a2b", "#4a8f9a", "#9a9aa8", "#8fc0ff", "#ff6a2a", "#b0203a", "#6b5a3a", "#ffffff", "#5a3a1a"]
     fig, axs = plt.subplots(1, 2, figsize=(22, 11))
     for bi, groups in results:
         if not groups:
