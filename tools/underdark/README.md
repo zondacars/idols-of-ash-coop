@@ -21,8 +21,10 @@ Outputs `out/underdark.glb`, `out/layout.json`, `out/report.json` (validation: c
 `gen.py` now builds the world from `rift_world.py` (the descent) and `sdf_rift.py` (the shapes):
 
 - `Rift`: one meandering abyss whose radius follows control points, with broad wall noise.
-- Solids put rock back into the air: `ShelfSolid` (balconies that follow the real wall), `BeamSolid` (flat-decked spans and roots), `RodSolid` (the Ribs), `ConeSolid` (stalactites and lava needles), `PlugSolid` (the Lid).
+- Solids put rock back into the air: `ShelfSolid` (balconies that follow the real wall), `BeamSolid` (flat-decked spans and roots), `RodSolid` (the Ribs), `ConeSolid` (stalactites and lava needles), `PlugSolid` (the Lid), `TerraceSolid` (the great shelves).
 - `world.py` is kept as a library (chambers, tunnels, tubes, props) for the side caves.
 - The validator checks that every station has a floor, every drop fits the rope and every gap can be thrown across.
 
 Run `python gen.py out`, then copy `out/underdark.glb` and `out/layout.json` into `mods-unpacked/zonda-CoopSync/maps/underdark/`.
+
+v4.2 adds `Builder.terrace()` (a fallen slab the route walks across), `hard_routes()` (the secret ladders and their relics) and the map-side weather, rescue and relic code lives in `maps/underdark/underdark.gd` and `coop_sync.gd`.

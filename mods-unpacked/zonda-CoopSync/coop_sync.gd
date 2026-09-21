@@ -96,6 +96,7 @@ func _ready() -> void:
 	get_tree().root.call_deferred("add_child", lobby_ui)
 	gfx = load(MOD_DIR + "gfx.gd").new()
 	add_child(gfx)
+	_load_relics()
 	if FileAccess.file_exists(MOD_DIR + "probe.flag") and FileAccess.file_exists(MOD_DIR + "debug_probe.gd"):
 		add_child(load(MOD_DIR + "debug_probe.gd").new())   # developer measuring tool, not shipped
 	_build_banner()
@@ -190,6 +191,7 @@ func _process_inner(delta: float) -> void:
 	if _lobby_id == 0:
 		return
 
+	_update_souls(delta)
 	_sync_accum += delta
 	if _sync_accum >= 1.0 / SYNC_HZ:
 		_sync_accum = 0.0
@@ -390,9 +392,13 @@ func target_player_for(c: Node3D) -> Node3D:
 		return null
 	if lure_active():
 		return _lure_node
+	# A map can pin a centipede to a band of depth: it hunts whoever is inside the band and
+	# ignores everyone else, so it stays in its biome after the team has moved on.
+	if c.has_meta("zonda_territory"):
+		return _territory_target(c)
 	var live_cents := 0
 	for cent in Game.centipedes:
-		if is_instance_valid(cent):
+		if is_instance_valid(cent) and not cent.has_meta("zonda_territory"):
 			live_cents += 1
 	if live_cents <= 1:
 		return nearest_player_node(c.global_position)
@@ -412,11 +418,25 @@ func target_player_for(c: Node3D) -> Node3D:
 var _cent_assign_time := 0
 
 
+func _territory_target(c: Node3D) -> Node3D:
+	var t: Array = c.get_meta("zonda_territory")      # [y_top, y_bottom]
+	var best: Node3D = null
+	var bd := 1e18
+	for p in _alive_player_nodes():
+		var y: float = p.global_position.y
+		if y <= float(t[0]) + 15.0 and y >= float(t[1]) - 15.0:
+			var d: float = c.global_position.distance_squared_to(p.global_position)
+			if d < bd:
+				bd = d
+				best = p
+	return best
+
+
 func _recompute_centipede_targets(players: Array) -> void:
 	_cent_assign.clear()
 	var cents: Array = []
 	for cent in Game.centipedes:
-		if is_instance_valid(cent) and cent.is_inside_tree():
+		if is_instance_valid(cent) and cent.is_inside_tree() and not cent.has_meta("zonda_territory"):
 			cents.append(cent)
 	var pairs: Array = []
 	for cent in cents:
@@ -773,6 +793,7 @@ func _on_lobby_chat_update(lobby_id: int, changed_id: int, _making_change_id: in
 		_set_status("Player joined.\nPlayers: %d / %d" % [count, MAX_MEMBERS])
 	else:
 		_remove_remote_player(changed_id)
+		_remove_soul(changed_id)
 		_peer_names.erase(changed_id)
 		if not is_host and changed_id == _host_steam_id:
 			disconnect_session()
@@ -844,6 +865,11 @@ func _handle_message(data: PackedByteArray) -> void:
 			on_remote_ending()
 		"unhook":
 			_on_remote_unhook()
+		"soul":
+			if str(msg.get("s", "")) == _last_scene_path:
+				_spawn_soul(from, sanitize_name(str(msg.get("n", "Player"))), msg.get("p", Vector3.ZERO))
+		"rescue":
+			_on_rescue(int(msg.get("who", 0)), sanitize_name(str(msg.get("n", "A teammate"))), false)
 		"checkpoint":
 			if msg.has("cp"):
 				_note_checkpoint(str(msg.get("s", "")), int(msg["cp"]))
@@ -884,6 +910,7 @@ func _broadcast_state() -> void:
 		"cam": p.Camera.global_rotation.y if p.Camera else p.global_rotation.y,
 		"hp": p.health,
 		"alive": not p.get("coop_spectating"),
+		"cos": cosmetics,
 		"gnd": p.is_on_floor() and p.get_floor_normal().y > 0.8 and not (p.activeClimberState is ClimberState_Attached),
 	}
 	if p.Rope and p.Rope.is_setup and p.activeClimberState and p.activeClimberState.is_rope_active() and is_instance_valid(p.Rope._claw) and p.Rope._claw.visible:
@@ -1141,10 +1168,206 @@ func broadcast_checkpoint() -> void:
 
 func on_checkpoint_reached() -> void:
 	respawns_left = 1
+	_clear_souls()
 	show_banner("Checkpoint reached. Respawns refreshed for the team.", 4.0)
 	var c = Game.climber
 	if is_instance_valid(c) and c.is_inside_tree() and c.get("coop_spectating") and c.has_method("coop_revive_at_checkpoint"):
 		c.coop_revive_at_checkpoint()
+
+
+# ---------------------------------------------------------------- souls: co-op rescue
+# A player who runs out of respawns leaves a soul where they last stood on solid ground.
+# Any living teammate who stays within arm's reach of it for a moment pulls them back into
+# the run, right there, without waiting for the next checkpoint. Works on every map.
+
+const SOUL_REACH := 3.2
+const SOUL_HOLD_S := 1.5
+
+var _souls: Dictionary = {}          # owner steam id -> Node3D
+var _soul_hold := 0.0
+var _soul_holding := 0
+var _soul_clock := 0.0
+
+
+func soul_drop(pos: Vector3) -> void:
+	if not in_session():
+		return
+	_spawn_soul(_my_steam_id, local_name, pos)
+	_send_all({"t": "soul", "from": _my_steam_id, "n": local_name, "p": pos, "s": _last_scene_path}, true)
+
+
+func _spawn_soul(owner_id: int, who: String, pos: Vector3) -> void:
+	_remove_soul(owner_id)
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	var root := Node3D.new()
+	root.name = "CoopSoul_%d" % owner_id
+	root.set_meta("who", who)
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	var tex := GradientTexture2D.new()
+	tex.gradient = g
+	tex.fill = GradientTexture2D.FILL_RADIAL
+	tex.fill_from = Vector2(0.5, 0.5)
+	tex.fill_to = Vector2(0.5, 0.0)
+	tex.width = 64
+	tex.height = 64
+	# the game doubles brightness and clips early, so these stay dim on purpose
+	for spec in [[1.7, Color(0.16, 0.24, 0.3, 0.75)], [0.6, Color(0.3, 0.38, 0.42, 0.95)]]:
+		var mi := MeshInstance3D.new()
+		var qm := QuadMesh.new()
+		qm.size = Vector2(spec[0], spec[0])
+		mi.mesh = qm
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.albedo_texture = tex
+		m.albedo_color = spec[1]
+		m.disable_fog = true
+		m.no_depth_test = nametags_through_walls
+		mi.material_override = m
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+	var l := OmniLight3D.new()
+	l.light_color = Color(0.6, 0.8, 1.0)
+	l.light_energy = 0.5
+	l.omni_range = 9.0
+	l.shadow_enabled = false
+	root.add_child(l)
+	var lab := Label3D.new()
+	lab.text = "%s\n(stay close to pull them back)" % who
+	lab.position = Vector3(0, 1.0, 0)
+	lab.pixel_size = 0.004
+	lab.font_size = 40
+	lab.modulate = Color(0.7, 0.85, 1.0)
+	lab.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lab.no_depth_test = true
+	root.add_child(lab)
+	scene.add_child(root)
+	root.global_position = pos + Vector3(0, 1.1, 0)
+	_souls[owner_id] = root
+
+
+func _remove_soul(owner_id: int) -> void:
+	var n = _souls.get(owner_id)
+	if is_instance_valid(n):
+		n.queue_free()
+	_souls.erase(owner_id)
+
+
+func _clear_souls() -> void:
+	for k in _souls.keys():
+		_remove_soul(k)
+
+
+func soul_position(owner_id: int):
+	var n = _souls.get(owner_id)
+	if is_instance_valid(n) and n.is_inside_tree():
+		return n.global_position - Vector3(0, 1.1, 0)
+	return null
+
+
+func rescue_point_for(c: Node3D, soul_pos) -> Vector3:
+	if soul_pos != null:
+		var spot := _settle_on_ground(c, soul_pos)
+		if spot != Vector3.INF:
+			return spot
+	return respawn_point_for(c)
+
+
+func _update_souls(delta: float) -> void:
+	if _souls.is_empty():
+		return
+	_soul_clock += delta
+	for k in _souls.keys():
+		var n = _souls[k]
+		if not is_instance_valid(n) or not n.is_inside_tree():
+			_souls.erase(k)
+			continue
+		if n.get_child_count() > 1:
+			(n.get_child(0) as Node3D).position.y = sin(_soul_clock * 1.7) * 0.12
+			(n.get_child(1) as Node3D).position.y = sin(_soul_clock * 1.7) * 0.12
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree() or c.get("coop_spectating") or c.health <= 0.0:
+		_soul_hold = 0.0
+		return
+	var near := 0
+	for k in _souls.keys():
+		if k == _my_steam_id:
+			continue
+		var n2: Node3D = _souls[k]
+		if n2.global_position.distance_to(c.global_position + Vector3(0, 0.9, 0)) < SOUL_REACH:
+			near = k
+			break
+	if near == 0:
+		_soul_hold = 0.0
+		_soul_holding = 0
+		return
+	if near != _soul_holding:
+		_soul_holding = near
+		_soul_hold = 0.0
+	_soul_hold += delta
+	var who := str(_souls[near].get_meta("who", "your teammate"))
+	show_banner("Pulling %s back...  stay close" % who, 0.4)
+	if _soul_hold >= SOUL_HOLD_S:
+		_soul_hold = 0.0
+		_soul_holding = 0
+		_send_all({"t": "rescue", "from": _my_steam_id, "who": near, "n": local_name}, true)
+		_on_rescue(near, local_name, true)
+
+
+func _on_rescue(who_id: int, by: String, mine: bool) -> void:
+	var who := "a teammate"
+	var n = _souls.get(who_id)
+	if is_instance_valid(n):
+		who = str(n.get_meta("who", who))
+	var at = soul_position(who_id)
+	_remove_soul(who_id)
+	if who_id == _my_steam_id:
+		var c = Game.climber
+		if is_instance_valid(c) and c.is_inside_tree() and c.get("coop_spectating") and c.has_method("coop_revive_by_rescue"):
+			c.coop_revive_by_rescue(by, at)
+	elif mine:
+		show_banner("You pulled %s back." % who, 4.0)
+	else:
+		show_banner("%s pulled %s back." % [by, who], 4.0)
+
+
+# ---------------------------------------------------------------- relics: cosmetics earned on custom maps
+# Stored per player in user://zonda_cosmetics.cfg. The count rides along in the player state so
+# teammates see it: 1 = gold name tag, 2 = gold rope, 3 = a crown.
+
+const RELIC_FILE := "user://zonda_cosmetics.cfg"
+var cosmetics := 0
+var _relics: Dictionary = {}
+
+
+func _load_relics() -> void:
+	var cf := ConfigFile.new()
+	if cf.load(RELIC_FILE) == OK and cf.has_section("relics"):
+		for k in cf.get_section_keys("relics"):
+			if bool(cf.get_value("relics", k, false)):
+				_relics[str(k)] = true
+	cosmetics = _relics.size()
+
+
+func relic_has(id: String) -> bool:
+	return _relics.has(id)
+
+
+func relic_grant(id: String) -> bool:
+	if _relics.has(id):
+		return false
+	_relics[id] = true
+	cosmetics = _relics.size()
+	var cf := ConfigFile.new()
+	cf.load(RELIC_FILE)
+	cf.set_value("relics", id, true)
+	cf.save(RELIC_FILE)
+	return true
 
 
 func _on_remote_unhook() -> void:

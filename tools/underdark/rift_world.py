@@ -11,7 +11,7 @@ import numpy as np
 import world as W
 from world import *          # Route, BIOMES, biome ids, GLOW, A, CORPSES, PLANTS_*, sounds, v3, hdir ...
 from sdf import Tunnel, noise_fields
-from sdf_rift import Rift, ShelfSolid, BeamSolid, PlugSolid, RodSolid, ConeSolid
+from sdf_rift import Rift, ShelfSolid, BeamSolid, PlugSolid, RodSolid, ConeSolid, TerraceSolid
 
 LOOK_BONE = 10
 LOOK_BARK = 11
@@ -34,9 +34,11 @@ class Builder:
         self.L = self.R.L
         for k in ("strata", "platforms", "spars", "falls", "stations"):
             self.L[k] = []
-        self.L["rules"] = {"lethal_fall_speed": 30.0, "bruise_from": 19.0, "bruise_per": 4.5}
+        self.L["rules"] = {"lethal_fall_speed": 38.0, "bruise_from": 19.0, "bruise_per": 4.5}      # 38 m/s = a 40 m fall
         self.solids = []
         self.moves = []
+        self.terraces = []
+        self.shelves = []
         self.cp = 0
         self.a = 0.0
         self.y = 0.0
@@ -96,15 +98,19 @@ class Builder:
             self.solids.append(ShelfSolid(self.rift, y, 0.5 * (a0 + a1), arc * 0.5 + 2.0 / r, p))
         if lobe_p:
             self.solids.append(ShelfSolid(self.rift, y, a0 + self.dirn * 4.0 / r, 9.0 / r, lobe_p))
-        info = dict(a0=a0, a1=a1, y=y, p=p, r=r, biome=biome, length=length, dirn=self.dirn, i=self.shelf_i, gap=gap)
+        info = dict(a0=a0, a1=a1, y=y, p=p, r=r, biome=biome, length=length, dirn=self.dirn, i=self.shelf_i, gap=gap, label=label)
         self.shelf_i += 1
         n = max(3, int(length / 7.0))
+        if not hasattr(self, "shelves"):
+            self.shelves = []
+        self.shelves.append(info)
         info["pts"] = [self.spot(a0 + (a1 - a0) * f, y, p * 0.5) for f in np.linspace(0.06, 0.94, n)]
         info["angs"] = [a0 + (a1 - a0) * f for f in np.linspace(0.06, 0.94, n)]
         for q in (info["pts"][0], info["pts"][-1]):
             self.station(q, "shelf", biome, label)
         if decor:
             self.decorate(info)
+            self.detail(info)
         self.a = a1
         # the ones who came before stand where you go down
         if info["i"] % 2 == 0:
@@ -169,14 +175,20 @@ class Builder:
         self.a += self.dirn * (2.0 / self.rw())
         return first
 
-    def run(self, biome, y_end, chain_every=2, chain_n=(4, 6), len_rng=(32, 70), dy_rng=(17.5, 22.5), gap_chance=0.45):
+    def run(self, biome, y_end, chain_every=2, chain_n=(4, 6), len_rng=(32, 70), dy_rng=(17.5, 22.5), gap_chance=0.45, terraces=()):
         since = 0
         lobe = None
+        pending = sorted(terraces, reverse=True)
         while self.y - y_end > 1.0:
             L = self.rng.uniform(*len_rng)
             info = self.shelf(biome, L, lobe_p=lobe, gap=self.rng.random() < gap_chance)
             since += 1
             rem = self.y - y_end
+            if pending and self.y - 19.0 <= pending[0] and rem > 62.0:
+                pending.pop(0)
+                lobe = self.terrace(biome)
+                since = 0
+                continue
             if rem <= 22.5:
                 lobe = self.under(rem)
                 continue
@@ -184,6 +196,8 @@ class Builder:
                 lobe = self.under(rem * 0.5)
                 continue
             n_max = int((rem - 24.0) / 23.0)
+            if pending:                      # never let a ladder carry the route past a planned terrace
+                n_max = min(n_max, int((self.y - pending[0] - 12.0) / 23.0))
             if since >= chain_every and n_max >= 3:
                 since = 0
                 self.R.text(info["pts"][-1], 6.0, self.rng.choice([
@@ -214,7 +228,7 @@ class Builder:
                                                       scene=piece[0], scale=rng.uniform(*piece[1]))))
         if i % 2 == 0:
             m = pts[len(pts) // 2]
-            R.L["lights"].append({"pos": v3(m + np.array([0, 5.5, 0])), "color": GLOW[b], "energy": 0.7, "range": 30.0})
+            R.L["lights"].append({"pos": v3(m + np.array([0, 5.5, 0])), "color": GLOW[b], "energy": 0.95, "range": 34.0})
         if i % 3 == 1:
             R.intents.append(("ember", dict(pos=pts[rng.randrange(len(pts))] + np.array([rng.uniform(-1, 1), 0, rng.uniform(-1, 1)]))))
         inner = lambda q, a, d=2.5: q + self.out_dir(a) * d          # toward the wall
@@ -228,7 +242,7 @@ class Builder:
             # the dead stand in rows against the wall, as they do in the campaign
             for q, a in zip(pts, angs):
                 for k in range(rng.randint(0, 2)):
-                    R.prop(rng.choice(STANDING), inner(q, a, rng.uniform(2.0, 4.0)) + np.array([rng.uniform(-2, 2), 0, rng.uniform(-2, 2)]),
+                    R.prop(rng.choice(STANDING), inner(q, a, rng.uniform(1.0, 3.2)) + np.array([rng.uniform(-1.2, 1.2), 0, rng.uniform(-1.2, 1.2)]),
                            yaw=godot_yaw_facing(-self.out_dir(a)), scale=rng.uniform(0.9, 1.15))
         elif b == FUNGAL:
             for q, a in list(zip(pts, angs))[1:-1]:
@@ -271,6 +285,201 @@ class Builder:
         if i % 4 == 3 and len(pts) > 4 and b not in (MOUTH,):
             q, a = pts[len(pts) // 2], angs[len(pts) // 2]
             R.intents.append(("spike_bed", dict(x=float(q[0]), z=float(q[2]), y_from=float(q[1]) + 3, push=v3(-self.out_dir(a)))))
+
+    # ------------------------------------------------------------ terraces: the rift's great shelves
+
+    def in_terrace(self, p, margin=2.0):
+        return any(t["solid"].covers(p, margin) for t in self.terraces)
+
+    def terrace(self, biome, label=None):
+        """Drop onto a fallen shelf that covers most of the rift, cross it, leave by its far corner.
+        Each one leans toward the side the last one left open, so no straight line down stays clear."""
+        rng, R, L = self.rng, self.R, self.L
+        dy = rng.uniform(16.0, 19.0)
+        y_top = self.y - dy
+        r = float(self.rift.radius(y_top))
+        a_mid = self.a
+        if self.terraces:
+            want = self.terraces[-1]["a_mid"] + math.pi
+            d = (want - self.a + math.pi) % (2 * math.pi) - math.pi
+            d = max(-1.25, min(1.25, d))
+            a_mid = self.a + d
+            if abs(d) > 0.05:
+                self.dirn = 1 if d > 0 else -1          # leave by the far corner: the long way across
+        k = 0.2
+        thick = rng.uniform(11.0, 14.5)
+        T = TerraceSolid(self.rift, y_top, a_mid, k, thick)
+        self.solids.append(T)
+        idx = len(self.terraces)
+        name = label or "THE SHELF %s" % ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"][min(idx, 8)]
+        land = self.spot(self.a, y_top, 9.0)
+        self.station(land, "terrace", biome, name)
+        self.moves.append({"type": "drop", "dy": round(dy, 1), "y": y_top})
+        theta = math.acos(-k)
+        a_exit = a_mid + self.dirn * theta
+        corner = self.spot(a_exit - self.dirn * (12.0 / r), y_top, 8.0)
+        self.station(corner, "terrace", biome, name)
+        path = corner - land
+        plen = float(np.linalg.norm(path))
+        pdir = path / plen
+        pside = np.array([-pdir[2], 0.0, pdir[0]])
+        self.terraces.append({"solid": T, "a_mid": a_mid, "y_top": y_top, "thick": thick, "land": land, "corner": corner, "biome": biome, "name": name})
+        self.moves.append({"type": "walk", "length": round(plen, 0), "y": y_top})
+        R.text(land, 10.0, rng.choice([
+            "A shelf of rock the size of a field, fallen across the rift. The only way on is over its far corner. Follow the lamps.",
+            "The rift is floored here, wall to wall, almost. Someone lit a line of lamps across it. It is a long way to the edge.",
+            "Flat ground. It feels wrong after so much rope. The lamps lead to the one corner where the dark opens again.",
+        ]))
+        # the lamp line: lanterns and light every ~28 m from where you land to where you leave
+        nl = max(3, int(plen / 28.0))
+        for j in range(nl + 1):
+            q = land + path * (j / nl) + pside * rng.uniform(-2.5, 2.5)
+            L.setdefault("lanterns_extra", []).append({"pos": v3(q + np.array([0, 2.4, 0])), "color": GLOW[biome], "s": 1.3})
+            if j % 2 == 0:
+                L["lights"].append({"pos": v3(q + np.array([0, 5.0, 0])), "color": GLOW[biome], "energy": 0.9, "range": 32.0})
+        # standing stones and stalagmites off the path: a plateau should not be a parking lot
+        for j in range(int(plen / 16.0)):
+            f = rng.uniform(0.06, 0.94)
+            off = rng.choice([-1, 1]) * rng.uniform(9.0, 34.0)
+            q = land + path * f + pside * off
+            if T.side(q) < 10.0 or self.rift.wall_r(self.rift.bearing(q), y_top) - float(np.hypot(*(q[[0, 2]] - np.array([float(c_) for c_ in self.rift.center(y_top)])))) < 8.0:
+                continue
+            if rng.random() < 0.55:
+                h = rng.uniform(9.0, 20.0)
+                self.solids.append(RodSolid(q - np.array([0, 2.0, 0]), q + np.array([rng.uniform(-2, 2), h, rng.uniform(-2, 2)]), rng.uniform(1.9, 2.8), 1.4, rough=0.14))
+            else:
+                self.solids.append(ConeSolid(q - np.array([0, 2.0, 0]), rng.uniform(8.0, 17.0), rng.uniform(3.0, 4.6), rough=0.3))
+        # a camp halfway, ruins, the dead
+        mid = land + path * 0.5 + pside * 6.0
+        R.prop(A + "Tent.glb", mid + pside * 3.0, yaw=rng.uniform(0, 6.28))
+        R.fire(mid, 0.6)
+        R.intents.append(("ember", dict(pos=mid - pside * 2.5)))
+        for j in range(5):
+            q = land + path * rng.uniform(0.1, 0.9) + pside * rng.uniform(-14, 14)
+            R.prop(rng.choice(CORPSES), q, yaw=rng.uniform(0, 6.28))
+        for j in range(4):
+            q = land + path * rng.uniform(0.15, 0.85) + pside * rng.choice([-1, 1]) * rng.uniform(7, 22)
+            R.prop(A + "Village_Structure_0%d.glb" % rng.randint(1, 4), q, yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.6))
+        for j in range(int(plen / 12.0)):
+            q = land + path * rng.uniform(0.04, 0.96) + pside * rng.uniform(-30, 30)
+            if T.side(q) < 6.0:
+                continue
+            R.prop(rng.choice([A + "Stone_04.glb", A + "Stone_05.glb", A + "Rock_01.glb"]), q, yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.5, 1.4))
+        # on some of them, something lives
+        if idx % 2 == 1:
+            cx, cz = self.rift.center(y_top)
+            den = np.array([float(cx) - T.ca * (k * r - 22.0), y_top + 3.0, float(cz) - T.sa * (k * r - 22.0)])
+            L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(land + path * 0.45 + np.array([0, 1.5, 0])), 14.0], "spawn": [v3(den)]})
+            R.text(land + path * 0.4, 8.0, "The lamps ahead are going out, one by one. Something is walking down the line toward you.")
+        self.tour(land + np.array([0, 22.0, 0]) - pdir * 10.0, land + path * 0.6, name)
+        L["tour"][-1]["air"] = True
+        R.text(corner, 8.0, "The edge. Below the corner, against the wall, there is a ledge. Everything else is air.")
+        # leave by the corner: the next balcony starts just past the chord end, under the slab's lip
+        self.a = a_exit + self.dirn * (4.0 / r)
+        dy2 = thick * 1.25 + rng.uniform(5.0, 6.5)
+        self.y = y_top - min(dy2, 23.0)
+        self.moves.append({"type": "drop", "dy": round(min(dy2, 23.0), 1), "y": self.y})
+        return 18.5
+
+    # ------------------------------------------------------------ the second pass: what makes a balcony a place
+
+    def husk(self, s, scale, n):
+        """A dead centipede lying along the balcony, head toward the way down."""
+        rng, R = self.rng, self.R
+        a = s["angs"][1]
+        step = 1.5 * scale
+        for j in range(n):
+            a += s["dirn"] * step / s["r"]
+            q = self.spot(a, s["y"], s["p"] * 0.5 + 1.6 * math.sin(j * 0.75) + 0.8)
+            tang = np.array([-math.sin(a), 0, math.cos(a)]) * s["dirn"]
+            head = j == n - 1
+            R.prop(A + ("Monster_Head.glb" if head else "Monster_BodySection.glb"),
+                   [q[0], s["y"] + 0.5 * scale, q[2]], yaw=godot_yaw_facing(tang) + rng.uniform(-0.2, 0.2),
+                   scale=scale, rot_x=rng.uniform(-0.12, 0.12), snap=False)
+            if not head and j % 2 == 0:
+                for sgn in (-1, 1):
+                    R.prop(A + "Monster_UpperLeg.glb", [q[0], s["y"] + 0.35 * scale, q[2]],
+                           yaw=godot_yaw_facing(tang) + sgn * 1.45, scale=scale * 1.3, rot_x=0.5, snap=False)
+
+    def detail(self, s):
+        rng, R, L = self.rng, self.R, self.L
+        b, y, p, i = s["biome"], s["y"], s["p"], s["i"]
+        pts, angs = s["pts"], s["angs"]
+        n = len(pts)
+        inner = lambda q, a, d=2.5: q + self.out_dir(a) * d
+        on = lambda q: [q[0], y, q[2]]
+
+        # 1) what hangs underneath: you see it from the balcony below and from the rope
+        for k in range(rng.randint(2, 4)):
+            f = rng.uniform(0.06, 0.62)
+            a = s["a0"] + (s["a1"] - s["a0"]) * f
+            ln = rng.uniform(6.0, 9.0) if b == MOUTH else rng.uniform(9.0, 14.5)
+            base = self.spot(a, y - 1.5, rng.uniform(0.3, 0.75) * p)
+            self.solids.append(ConeSolid(base, -ln, rng.uniform(3.3, 4.6), rough=0.32,
+                                         look=LOOK_BARK if b == ROOTS else None,
+                                         lean=(rng.uniform(-0.05, 0.05), rng.uniform(-0.05, 0.05))))
+
+        # 2) carved columns up the back wall: someone built here
+        if i % 3 == 0 and b in (MOUTH, OSSUARY, DROWNED, VILLAGE, FOUNDRY) and n >= 4 and not s.get("label"):
+            for j in range(0, n - 1, 2):
+                a = 0.5 * (angs[j] + angs[j + 1])
+                foot = self.spot(a, y - 1.5, 0.3)
+                top = self.spot(a, y + rng.uniform(11.0, 16.0), 0.1)
+                self.solids.append(RodSolid(foot, top, 1.8, 1.5, rough=0.08))
+                self.solids.append(RodSolid(top, top + np.array([0, 1.2, 0]), 2.5, 2.5, rough=0.05))     # capital
+
+        # 3) a rope left hanging where the way down is, in the biomes people reached
+        if b in (MOUTH, OSSUARY) and i % 2 == 1:
+            lip = self.spot(angs[-1], y, p + 0.35)
+            R.prop(A + "Rope_Fallen.glb", [lip[0], y - 10.1, lip[2]], yaw=rng.uniform(0, 6.28), scale=1.0, snap=False)
+            R.prop(A + "Fallen_Rope.glb", on(inner(pts[-1], angs[-1], -1.5)), yaw=rng.uniform(0, 6.28), scale=1.6)
+
+        mid = n // 2
+        if b == MOUTH:
+            if i % 3 == 1:
+                R.prop(A + "Player_Corpse.glb", on(inner(pts[-2], angs[-2], -1.0)), yaw=rng.uniform(0, 6.28))
+            for q, a in list(zip(pts, angs))[1::2]:
+                R.prop(A + "Fallen_Rope.glb", on(q + np.array([rng.uniform(-2, 2), 0, rng.uniform(-2, 2)])), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.2, 2.0))
+        elif b == OSSUARY:
+            for q, a in list(zip(pts, angs))[::3]:
+                R.prop(A + "StoneSphere.glb", [inner(q, a, 3.2)[0], y + 0.25, inner(q, a, 3.2)[2]], yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.3, 0.5), snap=False)
+            for k in range(rng.randint(1, 2)):
+                j = rng.randrange(1, n - 1)
+                R.prop(A + "Woman_Crouching.glb", on(inner(pts[j], angs[j], 0.5) + np.array([rng.uniform(-1, 1), 0, rng.uniform(-1, 1)])),
+                       yaw=godot_yaw_facing(self.out_dir(angs[j])), scale=1.0)
+        elif b == FUNGAL:
+            if i % 2 == 0 and s["length"] > 26:
+                sc_ = rng.uniform(1.5, 2.1)
+                self.husk(s, sc_, min(rng.randint(9, 13), int((s["length"] - 12) / (1.5 * sc_))))
+        elif b == ROOTS:
+            if i % 2 == 1 and s["length"] > 22:
+                sc_ = rng.uniform(1.4, 1.8)
+                self.husk(s, sc_, min(rng.randint(8, 11), int((s["length"] - 10) / (1.5 * sc_))))
+            R.prop(A + "Tent.glb", on(inner(pts[mid], angs[mid], 2.5)), yaw=rng.uniform(0, 6.28))
+            R.prop(A + "Fallen_Rope.glb", on(pts[mid]), yaw=rng.uniform(0, 6.28), scale=1.6)
+        elif b == DROWNED:
+            if i % 3 == 0:
+                sc = rng.uniform(0.5, 0.7)
+                q = inner(pts[mid], angs[mid], p * 0.5 - 2.4)
+                R.prop(A + "WaterWheel.glb", [q[0], y + 5.85 * sc - 1.4, q[2]], yaw=godot_yaw_facing(self.out_dir(angs[mid])),
+                       scale=sc, rot_x=rng.uniform(0.15, 0.3), snap=False)
+            for q, a in list(zip(pts, angs))[1::3]:
+                R.prop(A + "Sick_Woman.glb", on(inner(q, a, 1.5)), yaw=rng.uniform(0, 6.28))
+                R.prop(A + "Fallen_Rope.glb", on(q), yaw=rng.uniform(0, 6.28), scale=1.4)
+        elif b == VILLAGE:
+            for q, a in list(zip(pts, angs))[2::3]:
+                R.prop(A + rng.choice(["Roof_Round.glb", "Roof_Rect.glb"]), on(q + np.array([rng.uniform(-1.5, 1.5), 0, rng.uniform(-1.5, 1.5)])),
+                       yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.55, 0.8), rot_x=rng.uniform(-0.2, 0.2))
+            if n >= 5:
+                R.prop(A + "Building_Rect.glb", on(inner(pts[-2], angs[-2], 2.0)), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.2, 1.5))
+                R.prop(A + "Door.glb", [inner(pts[1], angs[1], 3.0)[0], y + 1.3, inner(pts[1], angs[1], 3.0)[2]], yaw=rng.uniform(0, 6.28), scale=1.4, rot_x=0.35, snap=False)
+        elif b == CRYSTAL:
+            for q, a in list(zip(pts, angs))[::2]:
+                R.intents.append(("crystal", dict(pos=inner(q, a, p * 0.5 - 1.2), s=rng.uniform(3.2, 5.0))))
+        elif b == FOUNDRY:
+            for q, a in list(zip(pts, angs))[::3]:
+                R.prop(A + "Tower_02.glb", [inner(q, a, 2.0)[0], y + 0.4, inner(q, a, 2.0)[2]], yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.9, 1.3), snap=False)
+                R.prop(A + "StoneSphere.glb", [q[0] + rng.uniform(-2, 2), y + 0.2, q[2] + rng.uniform(-2, 2)], yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.25, 0.45), snap=False)
 
     # ------------------------------------------------------------ leaving and re-entering the rift
 
@@ -353,6 +562,140 @@ class Builder:
         return p0 + (p1 - p0) * f + np.array([0, up, 0])
 
 
+# ==================================================================== the short way (secret hard routes)
+
+def hard_routes(B):
+    """Three hidden ladders. Each starts a gap-jump behind an ordinary balcony, drops a long way
+    on footholds half the size of the normal ones, with no ember and no checkpoint, and lands on
+    a balcony far below. Whoever reaches the last foothold takes a relic: a cosmetic, for good."""
+    R, L, rng, rift = B.R, B.L, B.rng, B.rift
+    L["relics"] = []
+    L["hard_routes"] = []
+    beams = [s_ for s_ in B.solids if isinstance(s_, BeamSolid)]
+    main = [(np.array(s_["pos"]), rift.bearing(np.array(s_["pos"]))) for s_ in L["stations"]]
+    plats = [np.array(p_["pos"]) for p_ in L["platforms"]]
+
+    def arc_m(a, b, y):
+        return abs((a - b + math.pi) % (2 * math.pi) - math.pi) * float(rift.radius(y))
+
+    def column_clear(a_c, y_hi, y_lo, skip=None):
+        for (p, a) in main:
+            if y_lo + 12 < p[1] < y_hi - 12 and arc_m(a, a_c, p[1]) < 20.0:
+                return False
+        for t_ in B.terraces:
+            if t_ is skip:
+                continue
+            if y_lo - 5 < t_["y_top"] < y_hi + 5 and t_["solid"].side(rift.point(a_c, t_["y_top"], 4.0)) > -12.0:
+                return False
+        for bm in beams:
+            for f in np.linspace(0, 1, 40):
+                q = bm.at(f)
+                if y_lo - 10 < q[1] < y_hi + 10 and np.linalg.norm((rift.point(a_c, q[1], 4.0) - q)[[0, 2]]) < 22.0:
+                    return False
+        for q in plats:
+            if y_lo - 10 < q[1] < y_hi + 10 and np.linalg.norm((rift.point(a_c, q[1], 4.0) - q)[[0, 2]]) < 20.0:
+                return False
+        if y_lo < LID[0] + 40 and y_hi > LID[1] - 20:
+            return False
+        return True
+
+    wanted = [("underdark_relic_1", (OSSUARY, MOUTH)), ("underdark_relic_2", (DROWNED, ROOTS, FUNGAL, VILLAGE)), ("underdark_relic_3", (FOUNDRY, CRYSTAL, VILLAGE, DROWNED))]
+    used_S = []
+    for (rid, biomes) in wanted:
+        best = None
+        for S in B.shelves:
+            if S["biome"] not in biomes or (S.get("label") and S["label"] not in (BIOMES[FUNGAL], BIOMES[DROWNED], "BELOW THE PLATES")) or S["length"] < 20 or any(S is u for u in used_S):
+                continue
+            if any(abs(S["y"] - u["y"]) < 360.0 for u in used_S):
+                continue
+            r_s = float(rift.radius(S["y"]))
+            for j in range(4):
+                # j extra ledges walk the entrance further behind the balcony until a clean line opens below
+                a_c = S["a0"] - S["dirn"] * ((8.0 + 8.5 * j) / r_s)
+                ledges_ok = True
+                for i in range(j + 1):
+                    a_i = S["a0"] - S["dirn"] * ((8.0 + 8.5 * i) / r_s)
+                    y_i = S["y"] - 3.0 - 2.0 * i
+                    if any(abs(p[1] - y_i) < 12.0 and arc_m(a, a_i, y_i) < 13.0 and not (abs(p[1] - S["y"]) < 0.5) for (p, a) in main):
+                        ledges_ok = False
+                if not ledges_ok:
+                    break
+                cands = [({"y": t_["y_top"]}, t_, -30.0) for t_ in B.terraces] + [(T, None, 0.0) for T in B.shelves if not T.get("label")]
+                for (T, terr, bonus) in cands:
+                    span = S["y"] - T["y"]
+                    if not (100.0 <= span <= 340.0):
+                        continue
+                    if terr is not None:
+                        if terr["solid"].side(rift.point(a_c, terr["y_top"], 4.0)) < 14.0:
+                            continue
+                    else:
+                        lo_a, hi_a = sorted((T["a0"], T["a1"]))
+                        mid_a = 0.5 * (lo_a + hi_a)
+                        half = 0.5 * (hi_a - lo_a)
+                        dd = abs((a_c - mid_a + math.pi) % (2 * math.pi) - math.pi)
+                        if dd > half - 6.0 / float(rift.radius(T["y"])):
+                            continue
+                    if not column_clear(a_c, S["y"] - 2.0 - 2.0 * j, T["y"], skip=terr):
+                        continue
+                    score = abs(span - 250.0) + bonus + 15.0 * j
+                    if best is None or score < best[0]:
+                        best = (score, S, T, a_c, j)
+        if best is None:
+            print("hard route %s: no clean column found, skipped" % rid)
+            continue
+        used_S.append(best[1])
+        j_best = best[4]
+        best = best[:4]
+        _, S, T, a_c = best
+        r_ = float(rift.radius(S["y"]))
+        # the way in: small ledges, each a running jump behind the balcony's quiet end
+        for i in range(j_best + 1):
+            a_i = S["a0"] - S["dirn"] * ((8.0 + 8.5 * i) / r_)
+            y = S["y"] - 3.0 - 2.0 * i
+            B.solids.append(ShelfSolid(rift, y, a_i, 2.8 / r_, 6.0, thick=3.2))
+            entry = B.spot(a_i, y, 3.0)
+            B.station(entry, "hard", S["biome"])
+            if i > 0:
+                B.moves.append({"type": "hop", "gap": 2.9, "dy": 2.0, "y": y, "secret": True})
+        L["lanterns"].append({"pos": v3(entry + np.array([0, 2.2, 0])), "color": [0.75, 0.35, 1.0], "s": 0.9})
+        L["lights"].append({"pos": v3(entry + np.array([0, 3.0, 0])), "color": [0.7, 0.35, 1.0], "energy": 0.6, "range": 14.0})
+        R.text(entry, 4.0, "No ember on this road. No kiln, no light, nothing you were sent down here to find. What you skip, you skip.")
+        R.text(S["pts"][0], 5.0, "Scratched into the rock, low down: THE SHORT WAY. Under it someone drew a skull. There is a ledge a running jump past the end of the balcony, and a violet light on it.")
+        B.moves.append({"type": "hop", "gap": 3.2, "dy": 3.0, "y": y, "secret": True})
+        side = rng.choice([-1, 1])
+        n_f = 0
+        last = entry
+        while y - T["y"] > 24.0:
+            rem = y - T["y"]
+            dy = rng.uniform(20.0, 22.8) if rem > 47.0 else max(12.0, rem - 21.0)
+            y -= dy
+            r_ = float(rift.radius(y))
+            side = -side
+            off = rng.uniform(4.5, 7.5)
+            am = a_c + side * (0.5 * off / r_)
+            p_ = 5.0 if n_f % 2 == 0 else 6.5
+            B.solids.append(ShelfSolid(rift, y, am, 2.5 / r_, p_, thick=3.2))
+            q = B.spot(am, y, p_ * 0.5)
+            B.station(q, "hard", S["biome"])
+            B.moves.append({"type": "drop", "dy": round(dy, 1), "y": y, "hard": True, "secret": True, "side": round(off, 1)})
+            if n_f % 3 == 2:
+                L["lights"].append({"pos": v3(q + np.array([0, 3.0, 0])), "color": [0.7, 0.35, 1.0], "energy": 0.45, "range": 13.0})
+            if n_f >= 1 and rng.random() < 0.4:
+                L["droppers"].append({"id": R.next_id("dr"), "kind": "boulder", "hang": v3(B.spot(am, y + dy - 5.0, 1.6)),
+                                      "floor": round(float(y), 2), "trip": [v3(q + np.array([0, 1.0, 0])), 3.2]})
+            if rng.random() < 0.6:
+                R.intents.append(("wall_crumble", dict(a=am + rng.choice([-1, 1]) * rng.uniform(9.0, 13.0) / r_, y=y + rng.uniform(3, 8))))
+            last = q
+            n_f += 1
+        B.moves.append({"type": "drop", "dy": round(y - T["y"], 1), "y": T["y"], "secret": True})
+        L["relics"].append({"id": rid, "pos": v3(last + np.array([0, 1.3, 0])), "n": len(L["relics"]) + 1})
+        R.text(last, 4.0, "Someone left this here for whoever came the short way. Take it. Then look down: the balcony is one rope below.")
+        L["hard_routes"].append({"id": rid, "from_y": round(S["y"], 1), "to_y": round(T["y"], 1), "footholds": n_f, "biome": S["biome"]})
+        B.tour(entry, last, "SHORT WAY %d entry" % len(L["relics"]))
+        B.tour(last, last + np.array([0, -30, 0]), "SHORT WAY %d relic" % len(L["relics"]))
+        main += [(np.array(s_["pos"]), rift.bearing(np.array(s_["pos"]))) for s_ in L["stations"][-(n_f + 1):]]
+
+
 # ==================================================================== things too big to be scenery
 
 def _ang_diff(a, b):
@@ -373,6 +716,8 @@ def megastructures(B):
             Hm = 125.0 if n == 9 else 105.0
             rr = float(rift.radius(y0 - Hm * 0.5))
             half = 0.5 * n * 11.5 / rr
+            if any(y0 - Hm - 40 < t_["y_top"] < y0 + 40 for t_ in B.terraces):
+                continue
             near = [(p, a) for (p, a) in st if y0 - Hm - 28 < p[1] < y0 + 28]
             for a_mid in np.arange(0, 2 * math.pi, math.radians(4)):
                 if all(_ang_diff(a, a_mid) > half + 20.0 / rr for (p, a) in near):
@@ -475,7 +820,7 @@ def build(seed):
     for p in ([-20, 0, 20], [-8, 0, -26], [18, 0, 30]):
         R.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28))
     R.text([-30, 0, 6], 9.0, "A long way down. She said the idol is at the bottom. You believed her.")
-    R.text([38, 0, 0], 8.0, "The mouth of it. Fall further than your rope is long and you will not get up. Shorter falls still break you. Let the rope out.")
+    R.text([38, 0, 0], 8.0, "The mouth of it. Land a fall of forty metres and you will not get up. Shorter falls still break you. Let the rope out.")
     for k in range(20):
         a = k / 20.0 * 2 * math.pi
         L["barriers"].append({"pos": v3([math.cos(a) * 92, 60, math.sin(a) * 92]), "size": [32.0, 120.0, 4.0],
@@ -489,9 +834,12 @@ def build(seed):
     R.feature(m1, "lore")
     R.ceiling_spikes(m1, 6)
     B.tunnel_to_rift(MOUTH, r=6.5, slope=0.16)
-    B.landing(MOUTH, "THE RIFT", "The rock ends. Beyond the lip there is no far wall you can see, and no floor. It goes down further than the light does.")
+    rift_info = B.landing(MOUTH, "THE RIFT", "The rock ends. Beyond the lip there is no far wall you can see, and no floor. It goes down further than the light does.")
+    # THE FOLLOWER: it comes in behind you at the top and hunts the team all the way down
+    L["centipedes"].append({"id": "follower", "follower": True, "trigger": [v3(rift_info["pts"][len(rift_info["pts"]) // 2]), 12.0],
+                            "spawn": [v3(m1.arrival + np.array([0, 3.0, 0]))]})
     lobe = B.under(17.0, switchback=False)
-    B.run(MOUTH, -330, chain_every=3, chain_n=(3, 4), len_rng=(38, 72), dy_rng=(14.0, 18.5), gap_chance=0.15)
+    B.run(MOUTH, -330, chain_every=3, chain_n=(3, 4), len_rng=(38, 72), dy_rng=(14.0, 18.5), gap_chance=0.15, terraces=(-185,))
 
     # ---------------------------------------------------------------- 1 OSSUARY
     info = B.shelf(OSSUARY, 44, lobe_p=17.0, label="OSSUARY")
@@ -499,7 +847,7 @@ def build(seed):
     R.text(info["pts"][1], 9.0, "Someone laid them here. Rows of them, standing, facing the dark. You do not look at the faces.")
     B.tour(info["pts"][1], info["pts"][-1], "Ossuary terraces")
     B.under(18.0)
-    B.run(OSSUARY, -540, chain_every=2)
+    B.run(OSSUARY, -540, chain_every=2, terraces=(-430,))
     # the Span: a broken rock bridge to the far wall, and the bell on its gallows
     info = B.shelf(OSSUARY, 30, lobe_p=17.0, p=14.0)
     R.text(info["pts"][-1], 8.0, "A bridge of fallen stone, broken in the middle. The far side is a hook's throw away.")
@@ -523,7 +871,7 @@ def build(seed):
     R.text(info["pts"][0], 8.0, "Something pale is coiled out there in the dark. It does not move while you watch it.")
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(info["pts"][-1]), 9.0], "spawn": [v3(B.spot(B.a + 0.5, B.y + 10, 3.0))]})
     B.under(17.0)
-    B.run(OSSUARY, -748.0, chain_every=2)
+    B.run(OSSUARY, -748.0, chain_every=2, terraces=(-640,))
     # the Lid seals the rift; the only way on is through the rock
     info = B.shelf(OSSUARY, 40, lobe_p=17.0, p=13.0, label="THE LID")
     R.text(info["pts"][1], 9.0, "Below you the rift is plugged, wall to wall, by one fallen slab the size of a town. There is no way through it. There are holes in the wall.")
@@ -562,7 +910,16 @@ def build(seed):
     lobe = B.under(10.0, switchback=False)
     y_f_end = -1150.0
     step = 0
+    fungal_shelf = False
     while B.y > y_f_end + 20:
+        if not fungal_shelf and B.y < -1000.0:
+            fungal_shelf = True
+            info = B.shelf(FUNGAL, 22, p=12.0)
+            lobe_t = B.terrace(FUNGAL)
+            info = B.shelf(FUNGAL, 26, p=13.0, lobe_p=lobe_t)
+            B.y -= 10.0
+            B.a += B.dirn * (5.0 / info["r"])
+            B.moves.append({"type": "hop", "dy": 10.0, "y": B.y})
         # bracket fungus: many small round shelves, close together, a hopping descent
         Ls = rng.uniform(13, 20)
         info = B.shelf(FUNGAL, Ls, p=rng.uniform(10, 14), lobe_p=None)
@@ -633,7 +990,7 @@ def build(seed):
     R.text(info["pts"][1], 9.0, "The water left. The mist stayed, and the falls still pour out of the walls into nothing. They will push you off if you let them.")
     B.tour(info["pts"][1], info["pts"][-1], "Drowned Galleries")
     B.under(17.0)
-    B.run(DROWNED, -1760, chain_every=2)
+    B.run(DROWNED, -1760, chain_every=2, terraces=(-1660,))
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(B.spot(B.a, B.y, 5.0)), 10.0], "spawn": [v3(B.spot(B.a + B.dirn * 0.5, B.y + 8, 3.0))]})
     info = B.shelf(DROWNED, 36, lobe_p=17.0, p=13.0, label="PLATE HALL")
     B.enter_wall(0.5 * (info["a0"] + info["a1"]))
@@ -749,7 +1106,14 @@ def build(seed):
     B.tour(info["pts"][1], info["pts"][1] - B.out_dir(B.a) * 80 + np.array([0, -120, 0]), "The Foundry")
     B.under(17.0)
     # iron gantries bolted to the wall: long, narrow, and the vents do not care that you are there
+    foundry_shelf = False
     while B.y > LAKE_Y + 120:
+        if not foundry_shelf and B.y < -2890.0:
+            foundry_shelf = True
+            info = B.shelf(FOUNDRY, 30)
+            lobe_t = B.terrace(FOUNDRY)
+            info = B.shelf(FOUNDRY, 34, lobe_p=lobe_t)
+            B.under(18.0, switchback=False)
         r = B.rw()
         Lg = rng.uniform(34, 52)
         a_mid = B.a + B.dirn * (Lg * 0.5 / r)
@@ -773,25 +1137,33 @@ def build(seed):
     B.run(FOUNDRY, LAKE_Y + 22.0, chain_every=1)
     info = B.shelf(FOUNDRY, 40, lobe_p=18.0, p=15.0, label="THE CRUCIBLE")
     B.checkpoint(info["pts"][1], "THE CRUCIBLE", FOUNDRY)
-    R.text(info["pts"][1], 10.0, "No floor. Only the bars, the chains, and the heat. Swing, let go at the top, throw again. Rest where the iron is wide. Not every bar holds.")
+    R.text(info["pts"][1], 10.0, "No floor. Only thin rods of iron, a full rope apart, and the heat. You cannot stand on them. Swing, let go at the top, throw again. Rest where the iron is wide. Not every rod holds.")
     a0 = B.a
     a1 = a0 + math.pi
     p0 = B.spot(a0, B.y + 12.0, 10.0)
     p1 = B.spot(a1, B.y + 12.0, 10.0)
     B.crucible = (p0.copy(), p1.copy())
     span_len = float(np.linalg.norm(p1 - p0))
-    nb = int(span_len / 9.3)
+    # thin rods, a full rope apart (25 m is the rope's maximum): swing, let go, throw again
+    lead = 14.0                                   # the first and last rods sit a throw from their balconies
+    n_gap = int((span_len - 2 * lead) / 25.5)
+    pitch = (span_len - 2 * lead) / n_gap
     d_bar = (p1 - p0) / span_len
     yaw_bar = math.atan2(d_bar[2], d_bar[0])
+    L["rules"]["bar_pitch"] = round(pitch, 2)
     B.tour(info["pts"][1], p0 + (p1 - p0) * 0.5, "The Crucible")
-    for i in range(1, nb):
-        pos = p0 + d_bar * (span_len * i / nb) + np.array([0, rng.uniform(-1.0, 1.5), 0])
-        if i % 9 == 0:
-            L["platforms"].append({"id": R.next_id("pf"), "pos": v3(pos + np.array([0, -13.0, 0])), "size": [9.0, 0.9, 9.0], "yaw": 0.0,
-                                   "kind": "iron", "chain": 40.0, "drop": False})
-            L["embers"].append({"pos": v3(pos + np.array([0, -11.6, 0]))})
-            continue
-        R.intents.append(("bar", dict(idx=i, pos=pos, yaw=yaw_bar, length=12.0, width=2.6, thick=0.8, lava_y=LAKE_Y, sink=(i % 8 == 5))))
+    for i in range(n_gap + 1):
+        pos = p0 + d_bar * (lead + pitch * i) + np.array([0, rng.uniform(-1.0, 1.0), 0])
+        if i > 0 and i < n_gap and i % 4 == 0:
+            # a small cage hung 9 m under this rod: lower yourself onto it, breathe, hook the same rod again
+            L["platforms"].append({"id": R.next_id("pf"), "pos": v3(pos + np.array([0, -9.0, 0])), "size": [5.0, 0.9, 5.0], "yaw": 0.0,
+                                   "kind": "iron", "chain": 40.0, "drop": False, "rest": True})
+            L["embers"].append({"pos": v3(pos + np.array([0, -7.6, 0]))})
+        if i == 1:
+            L["tour"].append({"pos": v3(pos + np.array([0, 0.3, 0])), "look": v3(pos + d_bar * 26.0), "label": "standing on rod 2 (should slide off)"})
+            L["tour"].append({"pos": v3(pos + np.array([0, 2.0, 0]) - d_bar * 7.0), "look": v3(pos), "label": "rod 2 close", "air": True})
+        R.intents.append(("bar", dict(idx=i + 1, pos=pos, yaw=yaw_bar, length=12.0, width=0.22, thick=0.22, lava_y=LAKE_Y,
+                                      sink=(i % 4 == 2))))
     cx, cz = rift.center(LAKE_Y)
     L["lava"].append({"center": v3([float(cx), LAKE_Y, float(cz)]), "yaw": 0.0, "half_w": 215.0, "half_l": 215.0, "kill_top": 5.0})
     for k in range(10):
@@ -862,8 +1234,42 @@ def build(seed):
         eye = p - B.out_dir(a_) * 34.0 + np.array([0, 11.0, 0]) + np.array([-math.sin(a_), 0, math.cos(a_)]) * 16.0
         L["tour"].append({"pos": v3(eye), "look": v3(p + np.array([0, -4.0, 0])), "label": "fly %s %d m" % (BIOMES[st[k]["biome"]], -p[1]), "air": True})
 
+    for k in range(9, len(st), 45):
+        p = np.array(st[k]["pos"])
+        a_ = rift.bearing(p)
+        L["tour"].append({"pos": v3(p + np.array([0, 1.8, 0])), "look": v3(p + np.array([0, 16.0, 0]) - B.out_dir(a_) * 9.0), "label": "up %s %d m" % (BIOMES[st[k]["biome"]], -p[1])})
+    for k in range(2, len(st), 23):
+        p = np.array(st[k]["pos"])
+        a_ = rift.bearing(p)
+        t_ = np.array([-math.sin(a_), 0, math.cos(a_)])
+        nxt = np.array(st[k + 1]["pos"]) if k + 1 < len(st) else p + t_ * 10
+        L["tour"].append({"pos": v3(p + np.array([0, 1.8, 0])), "look": v3(nxt + np.array([0, 1.2, 0])), "label": "along %s %d m" % (BIOMES[st[k]["biome"]], -p[1])})
+
+    # every other centipede belongs to the stratum it was woken in, and stays there
+    for c_ in L["centipedes"]:
+        if c_.get("follower") or "trigger" not in c_:
+            continue
+        yy_ = c_["trigger"][0][1]
+        for (t_, b_, bi_) in STRATA:
+            if t_ >= yy_ > b_:
+                c_["territory"] = [t_, b_]
+
+    # weather that sits in the world (the falling and rising kind follows the camera in game)
+    L["mist"] = []
+    for k_, s_ in enumerate(getattr(B, "shelves", [])):
+        mid_ = s_["pts"][len(s_["pts"]) // 2]
+        if s_["biome"] == FUNGAL and k_ % 2 == 0:
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 2.5, 0])), "size": [min(s_["length"], 34.0), 8.0, 18.0], "density": 0.22, "color": [0.25, 0.8, 0.45]})
+        elif s_["biome"] == CRYSTAL and k_ % 3 == 0:
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 1.0, 0])), "size": [min(s_["length"], 30.0), 4.0, 16.0], "density": 0.12, "color": [0.5, 0.7, 1.0]})
+    for st_ in L["stations"]:
+        if st_["kind"] == "foothold" and st_["biome"] == DROWNED:
+            L["mist"].append({"pos": v3(np.array(st_["pos"]) + np.array([0, 1.5, 0])), "size": [20.0, 7.0, 20.0], "density": 0.3, "color": [0.55, 0.7, 0.8]})
+
     L["lanterns"] = []
+    hard_routes(B)
     megastructures(B)
+    L["lanterns"] += L.pop("lanterns_extra", [])
     yy = -90.0
     k = 0
     while yy > LAKE_Y + 50:
@@ -872,6 +1278,8 @@ def build(seed):
             aa = k * 2.399963 + j * 2.0944
             q = B.spot(aa, yy + rng.uniform(-12, 12), 9.0)
             q = B.spot(aa, q[1], 17.0)
+            if B.in_terrace(q, 6.0):
+                continue
             L["lights"].append({"pos": v3(q), "color": GLOW[bi], "energy": 0.62, "range": 85.0})
             L["lanterns"].append({"pos": v3(B.spot(aa, q[1], 2.0)), "color": GLOW[bi], "s": round(rng.uniform(3.0, 4.6), 2)})
         yy -= 46.0

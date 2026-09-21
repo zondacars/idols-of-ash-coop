@@ -9,6 +9,8 @@ var _coop_invuln_until_ms := 0
 var _coop_respawning := false
 var _coop_has_ground := false
 var _coop_last_ground_pos: Vector3
+var _coop_saved_layer := -1
+var _coop_saved_mask := -1
 
 
 func heal(amt: float) -> void:
@@ -78,9 +80,14 @@ func coop_enter_spectator() -> void:
 	PlayerCamera.rotation = Vector3.ZERO
 	PlayerCamera.DutchAngleOffset = 0.0
 	grapple_claw_is_enabled = false
+	if _coop_saved_layer < 0:
+		_coop_saved_layer = collision_layer
+		_coop_saved_mask = collision_mask
 	collision_layer = 0
 	collision_mask = 0
 	_coop_spec_index = 0
+	# leave a soul where you last stood: a living teammate who reaches it pulls you back
+	CoopSync.soul_drop(_coop_last_ground_pos if _coop_has_ground else global_position)
 	Game.audio.play_player_damaged_sfx_lethal()
 	hud.set_to_black()
 	CoopSync.show_banner("Out of respawns. You are now spectating.  JUMP = switch player", 6.0)
@@ -90,18 +97,28 @@ func coop_enter_spectator() -> void:
 
 
 func coop_revive_at_checkpoint() -> void:
+	_coop_revive("Checkpoint reached! Rejoining the run...", null, false)
+
+
+func coop_revive_by_rescue(by: String, soul_pos) -> void:
+	_coop_revive("%s pulled you back." % by, soul_pos, true)
+
+
+func _coop_revive(banner: String, soul_pos, rescued: bool) -> void:
 	if not coop_spectating:
 		return
 	hud.set_to_black()
-	CoopSync.show_banner("Checkpoint reached! Rejoining the run...", 3.0)
+	CoopSync.show_banner(banner, 3.0)
 	await get_tree().create_timer(1.0).timeout
-	if not is_inside_tree():
+	if not is_inside_tree() or not coop_spectating:
 		return
 	coop_spectating = false
 	grapple_claw_is_enabled = true
-	collision_layer = 2
-	collision_mask = 1
-	var spot: Vector3 = CoopSync.respawn_point_for(self)
+	# back onto the layers the game gave us (the old code put the player on the claw's layer,
+	# which made map triggers and checkpoints blind to anyone who had been revived)
+	collision_layer = _coop_saved_layer if _coop_saved_layer >= 0 else 4
+	collision_mask = _coop_saved_mask if _coop_saved_mask >= 0 else 1
+	var spot: Vector3 = CoopSync.rescue_point_for(self, soul_pos) if rescued else CoopSync.respawn_point_for(self)
 	set_climber_state(defaultClimberState)
 	velocity = Vector3.ZERO
 	AirVelocity = Vector3.ZERO

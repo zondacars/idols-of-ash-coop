@@ -341,6 +341,8 @@ def resolve(R, F, report):
                 if fy is None:
                     report["warnings"].append("prop without floor %s" % a["scene"])
                     continue
+                if fy > p[1] + 5.0 or not headroom(p[0], p[2], fy, 1.0):
+                    continue                      # the spot is inside rock (a column, a stalactite): no floating props
                 y = fy - 0.05
             box = None
             if a["box"] is not None:
@@ -717,6 +719,11 @@ def validate(R, F, report, lo, hi):
         validate_rift(R, F, report)
         bars = sorted(R.L["bars"], key=lambda b: b["idx"])
         report["bar_count"] = len(bars)
+        pts_ = [(b["idx"], np.array(b["pos"])) for b in bars]
+        gaps_ = [float(np.linalg.norm(b_[1] - a_[1])) for a_, b_ in zip(pts_, pts_[1:])]
+        report["bar_gaps"] = [round(g, 1) for g in gaps_]
+        if gaps_ and (min(gaps_) < 25.0 or max(gaps_) > 29.0):
+            report["errors"].append("bar spacing %.1f to %.1f m is outside 25 to 29 m" % (min(gaps_), max(gaps_)))
         return
     # 1) the air must be one connected region
     from scipy import ndimage

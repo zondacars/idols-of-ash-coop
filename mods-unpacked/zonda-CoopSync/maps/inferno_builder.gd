@@ -122,6 +122,7 @@ func _ready() -> void:
 	_build_snow()
 	_spawn_centipede(-75.0, PI)
 	print("[Inferno] built: depth %d m, traps %s" % [int(DEPTH), str(_trap_counts)])
+	_thumb_on = FileAccess.file_exists("res://mods-unpacked/zonda-CoopSync/maps/thumb.flag")
 
 
 func _process(delta: float) -> void:
@@ -129,6 +130,52 @@ func _process(delta: float) -> void:
 	_update_environment(delta)
 	_update_snow()
 	_check_second_centipede()
+	if _thumb_on:
+		_update_thumb(delta)
+
+
+# ------------------------------------------------------------------ thumbnail camera (developer)
+# Only runs when maps/thumb.flag exists: hangs the camera at a few depths and saves
+# user://inferno_thumb_N.png, which the map's menu picture is made from.
+
+var _thumb_on := false
+var _thumb_i := -1
+var _thumb_t := 3.0
+var _thumb_shot := true
+const THUMB_STOPS := [[-40.0, -75.0, 0.0], [-150.0, -80.0, 1.2], [-260.0, -70.0, 2.4], [-400.0, -80.0, 3.6],
+	[-700.0, -75.0, 0.6], [-900.0, -80.0, 2.0], [-1060.0, -55.0, 4.0], [-30.0, -35.0, 5.0]]
+
+
+func _update_thumb(delta: float) -> void:
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	_thumb_t -= delta
+	if _thumb_i >= 0 and _thumb_i < THUMB_STOPS.size():
+		var s: Array = THUMB_STOPS[_thumb_i]
+		c.velocity = Vector3.ZERO
+		c.AirVelocity = Vector3.ZERO
+		c.global_position = _center_at(s[0]) + Vector3(cos(s[2]), 0, sin(s[2])) * 6.0
+	if _thumb_t < 0.9 and not _thumb_shot:
+		_thumb_shot = true
+		var img := get_viewport().get_texture().get_image()
+		if img:
+			img.save_png("user://inferno_thumb_%d.png" % _thumb_i)
+	if _thumb_t > 0.0:
+		return
+	_thumb_i += 1
+	_thumb_shot = false
+	_thumb_t = 3.0
+	if _thumb_i >= THUMB_STOPS.size():
+		_thumb_on = false
+		print("[Inferno] thumbs done")
+		return
+	var st: Array = THUMB_STOPS[_thumb_i]
+	c.prevent_player_death = true
+	c.set_climber_state(c.defaultClimberState)
+	c.teleport_to_location(_center_at(st[0]) + Vector3(cos(st[2]), 0, sin(st[2])) * 6.0)
+	c.PlayerCamera.set_camera_rotation(Vector3(deg_to_rad(st[1]), st[2] + PI * 0.5, 0.0))
+	c.global_rotation = Vector3.ZERO
 
 
 # ------------------------------------------------------------------ shape helpers

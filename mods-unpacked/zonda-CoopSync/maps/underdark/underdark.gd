@@ -40,6 +40,8 @@ var _env: Environment
 var _cur_biome := -1
 var _blend := 0.0
 var _look_now: Array = []
+var _weather: Weather
+var _rope_gold_t := 0.0
 var _dimmed: Dictionary = {}
 var _dress_mat: Array = []
 var _sky: DirectionalLight3D
@@ -61,6 +63,11 @@ var _crumbles: Dictionary = {}
 var _droppers: Dictionary = {}
 var _dying: Dictionary = {}
 var _spawned_cents: Dictionary = {}
+var _follower: Node3D
+var _follow_best := 1e9
+var _follow_stall := 0.0
+var _cent_tick := 0.0
+var _territorial: Array = []          # [node, y_top, y_bottom, home]
 var _hud: CanvasLayer
 var _hud_depth: Label
 var _run_start_ms := 0
@@ -81,7 +88,7 @@ var _bars: Array = []
 var _bells: Dictionary = {}
 var _platforms: Dictionary = {}
 var _fall_speed := 0.0
-var _lethal_fall := 30.0
+var _lethal_fall := 38.0
 var _bruise_from := 19.0
 var _bruise_per := 4.5
 var _bruise_told := false
@@ -91,7 +98,7 @@ var _bruise_told := false
 const AMB_GAIN := 2.3
 # light that falls down the rift from far above, per biome. It is what lets you see a balcony
 # 300 m away. Off inside the side caves.
-const SKYGLOW := [0.34, 0.3, 0.22, 0.24, 0.24, 0.24, 0.28, 0.1, 0.0, 0.0]
+const SKYGLOW := [0.44, 0.4, 0.32, 0.33, 0.33, 0.33, 0.37, 0.14, 0.0, 0.0]
 const VIEW_RANGE := 425.0        # the campaign shows 150-300 m of void; the rift needs the same
 const SOLID_RANGE := 150.0
 var _mat_lava: ShaderMaterial
@@ -111,7 +118,7 @@ func _ready() -> void:
 		push_error("[Underdark] layout.json missing")
 		return
 	L = JSON.parse_string(f.get_as_text())
-	_lethal_fall = float(L.get("rules", {}).get("lethal_fall_speed", 30.0))
+	_lethal_fall = float(L.get("rules", {}).get("lethal_fall_speed", 38.0))
 	_bruise_from = float(L.get("rules", {}).get("bruise_from", 19.0))
 	_bruise_per = float(L.get("rules", {}).get("bruise_per", 4.5))
 	_debug_tour = FileAccess.file_exists(DIR + "tour.flag")
@@ -138,7 +145,12 @@ func _ready() -> void:
 	_place_plates()
 	_place_fragments()
 	_place_bells()
+	_place_relics()
 	_place_lanterns()
+	_place_mist()
+	_weather = Weather.new()
+	_weather.build(_soft_dot())
+	add_child(_weather)
 	_place_platforms()
 	_place_spars()
 	_place_falls()
@@ -340,9 +352,11 @@ func _place_props() -> void:
 			body.rotation = n.rotation
 			body.position = n.position
 			add_child(body)
-		var ruin: bool = path.contains("Village_") or path.contains("Ghost_Tower")
+		var ruin: bool = path.contains("Village_") or path.contains("Ghost_Tower") or path.contains("Building_") or path.contains("Roof_") or path.contains("Door.glb") or path.contains("Tower_0")
 		if path.contains("Plant_"):
 			_dim_materials(n, 0.3)
+		elif path.contains("Woman") or path.contains("Player_Corpse") or path.contains("Rope") or path.contains("WaterWheel") or path.contains("StoneSphere"):
+			_dim_materials(n, 0.4)
 		for mi in n.find_children("*", "GeometryInstance3D", true, false):
 			(mi as GeometryInstance3D).visibility_range_end = float(p.get("vis", 300.0))
 			(mi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
@@ -723,6 +737,74 @@ func _place_fragments() -> void:
 		_fragments[str(f["id"])] = frag
 
 
+# ------------------------------------------------------------------ relics of the short way
+
+func _place_relics() -> void:
+	# One at the bottom of each secret ladder. Taking it is permanent and per player:
+	# 1 = your name burns gold for your team, 2 = your rope turns gold, 3 = a crown.
+	for r in L.get("relics", []):
+		var id := str(r["id"])
+		var pos := _v(r["pos"])
+		var root := Node3D.new()
+		root.position = pos
+		for spec in [[1.5, Color(0.36, 0.26, 0.06, 0.8)], [0.5, Color(0.5, 0.4, 0.14, 0.95)]]:
+			var mi := MeshInstance3D.new()
+			var qm := QuadMesh.new()
+			qm.size = Vector2(spec[0], spec[0])
+			mi.mesh = qm
+			var m := StandardMaterial3D.new()
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.albedo_texture = _soft_dot()
+			m.albedo_color = spec[1]
+			m.disable_fog = true
+			mi.material_override = m
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			root.add_child(mi)
+		var l := _add_light(pos, Color(1.0, 0.78, 0.3), 0.7, 12.0)
+		if CoopSync.relic_has(id):
+			root.scale = Vector3.ONE * 0.45          # you already carry this one
+			l.light_energy = 0.25
+		add_child(root)
+		var a := _area(pos, 2.4, PLAYER_LAYER)
+		a.body_entered.connect(func(body: Node3D): _on_relic(id, body, root, l))
+		add_child(a)
+	_apply_rope_gold()
+
+
+func _on_relic(id: String, body: Node3D, root: Node3D, l: OmniLight3D) -> void:
+	if body != Game.climber or _debug_tour or Game.climber.prevent_player_death:
+		return          # the developer tour teleports through here: it must never hand out relics
+	if not CoopSync.relic_grant(id):
+		return
+	root.scale = Vector3.ONE * 0.45
+	l.light_energy = 0.25
+	var n: int = CoopSync.cosmetics
+	var what := "Your name burns gold for your team."
+	if n == 2:
+		what = "Your rope is gold now."
+	elif n >= 3:
+		what = "All three. Your team will see the crown."
+	CoopSync.show_banner("A relic of the short way  (%d of 3).  %s" % [n, what], 7.0)
+	Game.audio.play_dark_transition()
+	_apply_rope_gold()
+
+
+func _apply_rope_gold() -> void:
+	if CoopSync.cosmetics < 2:
+		return
+	var c = Game.climber
+	if not is_instance_valid(c):
+		return
+	for n in c.find_children("*", "", true, false):
+		var mats = n.get("grapplePointLineMaterial")
+		if mats is Array:
+			for m in mats:
+				if m is StandardMaterial3D:
+					(m as StandardMaterial3D).albedo_color = Color(0.55, 0.4, 0.12)
+
+
 func _place_altar() -> void:
 	for a in L.get("altar", []):
 		var pos := _v(a["pos"])
@@ -832,6 +914,26 @@ func _place_lanterns() -> void:
 		add_child(mi)
 
 
+func _place_mist() -> void:
+	# Clouds that sit in the world: spore banks on the Fungal balconies, mist over the Drowned
+	# footholds, cold haze in the Crystal Veins. They need the game's volumetric fog (on by
+	# default in its video settings); with it off they simply are not there.
+	for m in L.get("mist", []):
+		var fv := FogVolume.new()
+		fv.shape = RenderingServer.FOG_VOLUME_SHAPE_ELLIPSOID
+		var sz: Array = m["size"]
+		fv.size = Vector3(float(sz[0]), float(sz[1]), float(sz[2]))
+		var fm := FogMaterial.new()
+		fm.density = float(m["density"])
+		var col := _c(m["color"])
+		fm.albedo = col
+		fm.emission = Color(col.r * 0.06, col.g * 0.06, col.b * 0.06)
+		fm.edge_fade = 0.6
+		fv.material = fm
+		fv.position = _v(m["pos"])
+		add_child(fv)
+
+
 func _place_platforms() -> void:
 	var wood: StandardMaterial3D = load("res://Art/Textures/Wood_01.tres")
 	for d in L.get("platforms", []):
@@ -881,6 +983,7 @@ func _place_bells() -> void:
 func _place_bars() -> void:
 	for b in L.get("bars", []):
 		var bar := MonkeyBar.new()
+		bar.dot_tex = _soft_dot()
 		bar.setup(b, _mat_bar)
 		add_child(bar)
 		_bars.append(bar)
@@ -974,9 +1077,100 @@ func _release_centipedes(id: String) -> void:
 		for sp in c["spawn"]:
 			var n: Node3D = ps.instantiate()
 			n.position = _v(sp)
+			if c.has("territory"):
+				# it belongs to this biome and stays here after you leave
+				var t: Array = c["territory"]
+				n.set_meta("zonda_territory", [float(t[0]), float(t[1])])
+				_territorial.append([n, float(t[0]), float(t[1]), _v(sp)])
 			add_child(n)
-	CoopSync.show_banner("Something is coming.", 3.0)
+			if bool(c.get("follower", false)):
+				_follower = n
+	if id == "follower":
+		CoopSync.show_banner("Something followed you in. It will not stop.", 4.0)
+	else:
+		CoopSync.show_banner("Something lives here.", 3.0)
 	Game.audio.play_dark_transition()
+
+
+# One centipede follows the team for the whole descent. It cannot squeeze through the Burrows
+# or path around the Lid, so when it falls far behind (or is walled off) the host puts it back
+# on the rift wall above and behind the team, out of sight. It never appears ahead of you.
+func _update_centipedes(delta: float) -> void:
+	if not CoopSync.map_is_authority():
+		return
+	_cent_tick -= delta
+	if _cent_tick > 0.0:
+		return
+	_cent_tick = 2.0
+	var players: Array = CoopSync.alive_player_nodes()
+	if players.is_empty():
+		return
+	if _spawned_cents.has("follower"):
+		var need := false
+		if not is_instance_valid(_follower) or not _follower.is_inside_tree():
+			need = true
+		else:
+			var d := 1e9
+			for p in players:
+				d = minf(d, (p as Node3D).global_position.distance_to(_follower.global_position))
+			if d < _follow_best - 6.0:
+				_follow_best = d
+				_follow_stall = 0.0
+			else:
+				_follow_stall += 2.0
+			if d > 240.0 or (_follow_stall >= 36.0 and d > 55.0):
+				need = true
+		if need:
+			var spot = _follower_spot(players)
+			if spot != null:
+				if is_instance_valid(_follower):
+					Game.centipedes.erase(_follower)
+					_follower.queue_free()
+				var ps: PackedScene = load(CENTIPEDE)
+				var n: Node3D = ps.instantiate()
+				n.position = spot
+				add_child(n)
+				_follower = n
+				_follow_best = 1e9
+				_follow_stall = 0.0
+	# the ones that live in a biome: idle when nobody is in it, and never wander out of it
+	for e in _territorial:
+		var n2 = e[0]
+		if not is_instance_valid(n2) or not n2.is_inside_tree():
+			continue
+		var target = CoopSync.target_player_for(n2)
+		if target == null and (n2._current_state is centipede_state_hunting or n2._current_state is centipede_state_attack):
+			n2.set_state(centipede_state_wander.new())
+		var y: float = n2.global_position.y
+		if target == null and (y > float(e[1]) + 40.0 or y < float(e[2]) - 40.0):
+			var near := 1e9
+			for p in players:
+				near = minf(near, (p as Node3D).global_position.distance_to(n2.global_position))
+			if near > 120.0:
+				n2.global_position = e[3]
+				n2.set_state(centipede_state_wander.new())
+
+
+func _follower_spot(players: Array):
+	var top_y := -1e9
+	for p in players:
+		top_y = maxf(top_y, (p as Node3D).global_position.y)
+	var best = null
+	var best_score := 1e9
+	for st in L.get("stations", []):
+		var pos := _v(st["pos"])
+		if pos.y < top_y + 25.0:
+			continue
+		var dmin := 1e9
+		for p in players:
+			dmin = minf(dmin, (p as Node3D).global_position.distance_to(pos))
+		if dmin < 70.0 or dmin > 150.0:
+			continue
+		var score := absf(dmin - 100.0)
+		if score < best_score:
+			best_score = score
+			best = pos + Vector3(0, 3.0, 0)
+	return best
 
 
 func _place_ambience() -> void:
@@ -1180,8 +1374,8 @@ func _finish(by: String) -> void:
 
 func _physics_process(_delta: float) -> void:
 	# On Normal the game caps fall damage at 62 HP, so jumping down was always the fast way.
-	# Here the rule is the rope's own length: fall further than 25 m (30 m/s) and you die,
-	# and even a one-balcony jump costs a third of your health. The rope is the way down.
+	# Here LANDING a fall of 40 m or more (38 m/s) kills, and even a one-balcony jump costs a
+	# third of your health. The rope itself is untouched: a catch forgives the fall.
 	var c = Game.climber
 	if not is_instance_valid(c) or not c.is_inside_tree() or c.get("coop_spectating"):
 		_fall_speed = 0.0
@@ -1198,6 +1392,7 @@ func _physics_process(_delta: float) -> void:
 				CoopSync.show_banner("That landing cost you. Let the rope out instead of jumping.", 4.0)
 		_fall_speed = 0.0
 	elif c.activeClimberState is ClimberState_Attached:
+		# The rope is left exactly as the game made it: a catch forgives the fall, at any speed.
 		_fall_speed = minf(_fall_speed, maxf(0.0, -c.velocity.y))
 	else:
 		_fall_speed = maxf(_fall_speed * 0.98, -c.velocity.y)
@@ -1214,6 +1409,11 @@ func _process(delta: float) -> void:
 	_update_lod(delta)
 	_update_environment(delta)
 	_update_plates(delta)
+	_update_centipedes(delta)
+	_rope_gold_t -= delta
+	if _rope_gold_t <= 0.0:
+		_rope_gold_t = 3.0
+		_apply_rope_gold()          # the game rebuilds its rope materials now and then
 	_update_hud()
 	_check_lava()
 	if _debug_tour:
@@ -1341,6 +1541,8 @@ func _update_environment(delta: float) -> void:
 	if b < 0:
 		return
 	_update_sky_lights(delta, c.global_position)
+	if _weather:
+		_weather.follow(c, b)
 	if b != _cur_biome:
 		_cur_biome = b
 		_look_from = _current_look()
@@ -1394,7 +1596,10 @@ func _update_hud() -> void:
 	var secs := (Time.get_ticks_msec() - _run_start_ms) / 1000
 	var b := _cur_biome
 	var bname: String = str(L["biomes"][b]) if b >= 0 else ""
-	_hud_depth.text = "%s   %d m   %02d:%02d" % [bname, int(-c.global_position.y), secs / 60, secs % 60]
+	var relics := ""
+	if CoopSync.cosmetics > 0:
+		relics = "   relics %d/3" % CoopSync.cosmetics
+	_hud_depth.text = "%s   %d m   %02d:%02d%s" % [bname, int(-c.global_position.y), secs / 60, secs % 60, relics]
 
 
 # ------------------------------------------------------------------ debug tour (screenshots)
@@ -1418,7 +1623,7 @@ func _update_tour(delta: float) -> void:
 			if img.get_width() > 960:
 				img.resize(640, 360, Image.INTERPOLATE_BILINEAR)
 			img.save_png("user://underdark_tour_%02d.png" % _tour_i)
-		print("[Underdark] tour fps %d at stop %d" % [Engine.get_frames_per_second(), _tour_i])
+		print("[Underdark] tour fps %d at stop %d y=%.1f floor=%s" % [Engine.get_frames_per_second(), _tour_i, c.global_position.y, str(c.is_on_floor())])
 	if _tour_t > 0.0:
 		return
 	_tour_i += 1
@@ -1466,6 +1671,88 @@ func _area(pos: Vector3, radius: float, mask: int) -> Area3D:
 	a.add_child(shape)
 	a.position = pos
 	return a
+
+
+class Weather extends Node3D:
+	# Particles that live in a box around the local camera. One emitter per kind of weather,
+	# switched by biome. Colours are kept dim: the game doubles brightness and clips early.
+	var kinds: Dictionary = {}
+	var dot: Texture2D
+	var cur := -2
+	const BY_BIOME := {
+		0: ["dust"], 1: ["bone_ash"], 2: ["spores", "spores_big"], 3: ["dust", "drips_light"],
+		4: ["drips", "mist_motes"], 5: ["dust_violet"], 6: ["glitter"], 7: ["ash", "sparks"],
+		8: ["red_motes"], 9: [],
+	}
+
+	func build(dot_tex: Texture2D) -> void:
+		dot = dot_tex
+		#      name            n    life  box                   gravity                 v0    v1   size   colour                          streak  y_off spread
+		_add("dust",          210, 8.0, Vector3(26, 14, 26), Vector3(0.05, -0.08, 0.0), 0.05, 0.3, 0.15, Color(0.30, 0.27, 0.21, 0.5), false, 0.0, 180.0)
+		_add("dust_violet",   210, 8.0, Vector3(26, 14, 26), Vector3(-0.04, -0.1, 0.03), 0.05, 0.3, 0.15, Color(0.24, 0.2, 0.32, 0.5), false, 0.0, 180.0)
+		_add("bone_ash",      260, 7.0, Vector3(26, 16, 26), Vector3(0.0, -0.55, 0.0), 0.1, 0.5, 0.14, Color(0.33, 0.32, 0.29, 0.6), false, 4.0, 60.0)
+		_add("spores",        300, 9.0, Vector3(24, 12, 24), Vector3(0.0, 0.22, 0.0), 0.05, 0.35, 0.14, Color(0.1, 0.34, 0.2, 0.8), false, -3.0, 180.0)
+		_add("spores_big",     26, 12.0, Vector3(20, 10, 20), Vector3(0.0, 0.1, 0.0), 0.02, 0.15, 0.55, Color(0.05, 0.2, 0.11, 0.35), false, -2.0, 180.0)
+		_add("drips_light",    70, 1.7, Vector3(22, 0.5, 22), Vector3(0.0, -14.0, 0.0), 2.0, 5.0, 1.0, Color(0.2, 0.24, 0.26, 0.55), true, 12.0, 4.0)
+		_add("drips",         260, 1.7, Vector3(24, 0.5, 24), Vector3(0.0, -14.0, 0.0), 2.0, 6.0, 1.0, Color(0.18, 0.25, 0.3, 0.6), true, 12.0, 5.0)
+		_add("mist_motes",     30, 10.0, Vector3(22, 6, 22), Vector3(0.1, 0.02, 0.0), 0.05, 0.25, 1.6, Color(0.1, 0.14, 0.16, 0.22), false, -2.0, 180.0)
+		_add("glitter",       280, 6.0, Vector3(22, 12, 22), Vector3(0.0, -0.3, 0.0), 0.05, 0.3, 0.08, Color(0.22, 0.32, 0.5, 0.9), false, 3.0, 180.0)
+		_add("ash",           280, 7.0, Vector3(26, 16, 26), Vector3(0.1, -0.5, 0.0), 0.1, 0.5, 0.16, Color(0.15, 0.13, 0.12, 0.8), false, 5.0, 70.0)
+		_add("sparks",        170, 3.5, Vector3(24, 6, 24), Vector3(0.0, 1.7, 0.0), 0.5, 2.2, 0.09, Color(0.5, 0.16, 0.03, 0.9), false, -8.0, 40.0)
+		_add("red_motes",     140, 8.0, Vector3(24, 12, 24), Vector3(0.0, 0.05, 0.0), 0.05, 0.3, 0.09, Color(0.34, 0.04, 0.04, 0.7), false, 0.0, 180.0)
+
+	func _add(kind: String, n: int, life: float, ext: Vector3, grav: Vector3, v0: float, v1: float, size: float, col: Color, streak: bool, y_off: float, spread: float) -> void:
+		var p := CPUParticles3D.new()
+		p.amount = n
+		p.lifetime = life
+		p.randomness = 1.0
+		p.local_coords = false
+		p.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
+		p.emission_box_extents = ext
+		p.direction = Vector3.UP if grav.y > 0.0 else Vector3.DOWN
+		p.spread = spread
+		p.gravity = grav
+		p.initial_velocity_min = v0
+		p.initial_velocity_max = v1
+		p.scale_amount_min = 0.6
+		p.scale_amount_max = 1.4
+		p.color = col
+		var fm := StandardMaterial3D.new()
+		fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fm.vertex_color_use_as_albedo = true
+		fm.disable_receive_shadows = true
+		if streak:
+			var bm := BoxMesh.new()
+			bm.size = Vector3(0.025, 0.55, 0.025)
+			bm.material = fm
+			p.mesh = bm
+			p.particle_flag_align_y = true
+		else:
+			fm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+			fm.albedo_texture = dot
+			var qm := QuadMesh.new()
+			qm.size = Vector2(size, size)
+			qm.material = fm
+			p.mesh = qm
+		p.position = Vector3(0, y_off, 0)
+		p.emitting = false
+		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(p)
+		kinds[kind] = p
+
+	func follow(c: Node3D, biome: int) -> void:
+		var cam = c.get("Camera")
+		global_position = (cam as Node3D).global_position if is_instance_valid(cam) else c.global_position
+		if biome == cur:
+			return
+		cur = biome
+		var on: Array = BY_BIOME.get(biome, [])
+		for k in kinds.keys():
+			var want: bool = on.has(k)
+			var p: CPUParticles3D = kinds[k]
+			if p.emitting != want:
+				p.emitting = want
 
 
 class U:
@@ -2014,9 +2301,11 @@ class Fragment extends Node3D:
 # ================================================================== the crucible
 
 class MonkeyBar extends Node3D:
-	# A hookable iron beam hanging from chains. The top is a StaticBody3D so the claw
-	# attaches to it like any ledge. Wide enough to climb onto and stand.
-	# One of them is rigged: hang from it too long and it rumbles, then sinks 3.5 m.
+	# A thin rod of hot iron hanging from chains. Grapple only: the game's hook test is a ray
+	# on layer 1, which the player also collides with, so the collision is a steep invisible
+	# ridge around the rod (58 degree faces: the hook bites, feet slide off) and anyone who
+	# still manages to perch on it is pushed off.
+	# Some are rigged: hang from one too long and it rumbles, then sinks 3.5 m.
 	var bar: MeshInstance3D
 	var idx := 0
 	var sink := false
@@ -2027,6 +2316,8 @@ class MonkeyBar extends Node3D:
 	var chains: Array = []
 	var light: OmniLight3D
 	var sfx_rumble: AudioStreamPlayer3D
+	var half_len := 6.0
+	var dot_tex: Texture2D
 
 	func _ready() -> void:
 		if sink:
@@ -2075,11 +2366,19 @@ class MonkeyBar extends Node3D:
 			tc.parallel().tween_property(ch, "position:y", ch.position.y - 1.75, 2.2)
 
 	func _physics_process(_delta: float) -> void:
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree():
+			return
+		# nobody stands on a rod
+		if c.is_on_floor():
+			var lp: Vector3 = bar.global_transform.affine_inverse() * c.global_position
+			if absf(lp.x) < 1.3 and absf(lp.z) < half_len + 0.6 and lp.y > -1.4 and lp.y < 1.8:
+				var side: Vector3 = bar.global_basis.x * (1.0 if lp.x >= 0.0 else -1.0)
+				c.additional_velocity_next_frame += side * 6.0 + Vector3.DOWN * 2.0
 		# the hook rides the bar down instead of hanging in mid-air where the bar was
 		if not sinking:
 			return
-		var c = Game.climber
-		if not is_instance_valid(c) or not (c.activeClimberState is ClimberState_Attached) or not is_instance_valid(c.Rope._claw):
+		if not (c.activeClimberState is ClimberState_Attached) or not is_instance_valid(c.Rope._claw):
 			return
 		var claw: RigidBody3D = c.Rope._claw
 		var top := bar.position + Vector3(0, 0.6, 0)
@@ -2096,23 +2395,53 @@ class MonkeyBar extends Node3D:
 		var length := float(b["length"])
 		var width := float(b["width"])
 		var thick := float(b["thick"])
+		half_len = length * 0.5
 		bar = MeshInstance3D.new()
-		var bm := BoxMesh.new()
-		bm.size = Vector3(width, thick, length)
-		bar.mesh = bm
-		bar.material_override = mat
-		bar.position = pos - Vector3(0, thick * 0.5, 0)
+		bar.position = pos
 		bar.rotation.y = float(b["yaw"])
+		var rod := MeshInstance3D.new()
+		var rm := CylinderMesh.new()
+		rm.top_radius = maxf(0.08, width * 0.5)
+		rm.bottom_radius = rm.top_radius
+		rm.height = length
+		rm.radial_segments = 8
+		rm.rings = 1
+		rod.mesh = rm
+		var hot := StandardMaterial3D.new()                   # iron that has hung over a lava lake for a long time
+		hot.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		hot.albedo_color = Color(0.5, 0.15, 0.04)
+		rod.material_override = hot
+		rod.rotation.x = PI * 0.5
+		rod.position = Vector3(0, -0.3, 0)
+		bar.add_child(rod)
 		var body := StaticBody3D.new()
 		body.collision_layer = 1
 		body.physics_material_override = load("res://physics_materials/stone.tres")
 		var cs := CollisionShape3D.new()
-		var bs := BoxShape3D.new()
-		bs.size = bm.size
-		cs.shape = bs
+		var ridge := ConvexPolygonShape3D.new()
+		var hl := length * 0.5
+		ridge.points = PackedVector3Array([
+			Vector3(0, 0, -hl), Vector3(0.55, -0.88, -hl), Vector3(-0.55, -0.88, -hl),
+			Vector3(0, 0, hl), Vector3(0.55, -0.88, hl), Vector3(-0.55, -0.88, hl)])
+		cs.shape = ridge
 		body.add_child(cs)
 		bar.add_child(body)
 		add_child(bar)
+		for e in [-1.0, 1.0]:                                  # a glow at each end so you can find it from a rope away
+			var dot := MeshInstance3D.new()
+			var qm := QuadMesh.new()
+			qm.size = Vector2(1.6, 1.6)
+			dot.mesh = qm
+			var gm := StandardMaterial3D.new()
+			gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			gm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			gm.albedo_texture = dot_tex
+			gm.albedo_color = Color(0.4, 0.13, 0.03, 0.9)
+			gm.disable_fog = true
+			dot.material_override = gm
+			dot.position = Vector3(0, -0.3, e * (hl - 0.8))
+			bar.add_child(dot)
 		# chains up to the ceiling
 		var tops: Array = b["chain_top"]
 		for i in 2:

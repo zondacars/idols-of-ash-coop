@@ -245,3 +245,39 @@ class ConeSolid:
         s = d - r
         ah = abs(self.h)
         return np.maximum(s, np.maximum((t - 1.0) * ah, (-t) * ah - 6.0))
+
+
+class TerraceSolid:
+    """A shelf of rock the size of a field, fallen across most of the rift: everything on the
+    a_mid side of a chord, flat on top. It closes the straight line down, so nobody can fall
+    the whole rift in one go, and it turns a descent into a long walk to its open edge."""
+    kind = "terrace"
+
+    def __init__(self, rift, y_top, a_mid, k=0.2, thick=13.0):
+        self.rift = rift
+        self.y_top = y_top
+        self.a_mid = a_mid
+        self.k = k                       # the chord sits k*R past the axis, on the far side
+        self.thick = thick
+        self.R = float(rift.radius(y_top))
+        self.ca, self.sa = math.cos(a_mid), math.sin(a_mid)
+
+    def aabb(self):
+        lo, hi = self.rift.aabb()
+        return (np.array([lo[0], self.y_top - self.thick * 1.4 - 5, lo[2]]),
+                np.array([hi[0], self.y_top + 2, hi[2]]))
+
+    def side(self, p):
+        """> 0 on the covered side, in metres from the chord."""
+        cx, cz = self.rift.center(p[1])
+        return (p[0] - float(cx)) * self.ca + (p[2] - float(cz)) * self.sa + self.k * self.R
+
+    def covers(self, p, margin=0.0):
+        return (self.y_top - self.thick * 1.4 - margin) < p[1] < (self.y_top + margin) and self.side(p) > -margin
+
+    def sdf(self, P, n0, n1, n2, ctx):
+        e, d, cx, cz = _rift_e(P, n0, n1, n2, ctx)
+        sgn = (P[:, 0] - cx) * self.ca + (P[:, 2] - cz) * self.sa + self.k * self.R
+        edge = -sgn - 4.0 * n0                                   # ragged open edge
+        s_y = np.maximum(P[:, 1] - self.y_top, (self.y_top - self.thick * (1.0 + 0.25 * n1)) - P[:, 1])
+        return np.maximum(np.maximum(s_y, edge), e - 30.0)

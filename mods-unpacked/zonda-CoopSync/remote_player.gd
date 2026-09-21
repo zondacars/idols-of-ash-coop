@@ -39,6 +39,9 @@ var _sfx_hook_thrown: AudioStreamPlayer3D
 var _sfx_hook_attached: AudioStreamPlayer3D
 var _sfx_rope_loop: AudioStreamPlayer3D
 var _had_rope := false
+var _cos := -1
+var _crown: MeshInstance3D = null
+const GOLD := Color(1.0, 0.8, 0.32)
 
 
 func _ready() -> void:
@@ -139,6 +142,10 @@ func update_state(msg: Dictionary) -> void:
 		_label.text = label_text
 	if _label.no_depth_test != CoopSync.nametags_through_walls:
 		_label.no_depth_test = CoopSync.nametags_through_walls
+	var cos := int(msg.get("cos", 0))
+	if cos != _cos:
+		_cos = cos
+		_apply_cosmetics()
 
 	var was_attached := attached
 	attached = bool(msg.get("att", false))
@@ -231,6 +238,31 @@ func _process_inner(delta: float) -> void:
 		_sfx_rope_loop.stop()
 
 
+func _apply_cosmetics() -> void:
+	# relics earned on the hard routes: 1 = gold name, 2 = gold rope, 3 = a crown
+	_label.modulate = GOLD if _cos >= 1 else Color.WHITE
+	for m in _rope_materials:
+		if m is StandardMaterial3D:
+			(m as StandardMaterial3D).albedo_color = Color(0.55, 0.4, 0.12) if _cos >= 2 else Color.WHITE
+	if _cos >= 3 and _crown == null:
+		_crown = MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.13
+		tm.outer_radius = 0.19
+		tm.rings = 12
+		tm.ring_segments = 6
+		_crown.mesh = tm
+		var cm := StandardMaterial3D.new()
+		cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		cm.albedo_color = Color(0.5, 0.36, 0.08)
+		_crown.material_override = cm
+		_crown.position = Vector3(0, 1.98, 0)
+		add_child(_crown)
+	elif _cos < 3 and _crown != null:
+		_crown.queue_free()
+		_crown = null
+
+
 func _ensure_rope_pool(n: int) -> void:
 	while _rope_visuals.size() < n:
 		var scene: PackedScene = load("res://scenes/grapple_point_visual.tscn")
@@ -245,6 +277,8 @@ func _ensure_rope_pool(n: int) -> void:
 		_rope_visuals.append(vis)
 		_rope_lines.append(line)
 		_rope_materials.append(m)
+		if m is StandardMaterial3D and _cos >= 2:
+			(m as StandardMaterial3D).albedo_color = Color(0.55, 0.4, 0.12)
 
 
 func _hide_rope() -> void:

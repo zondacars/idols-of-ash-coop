@@ -49,7 +49,7 @@ Traps to watch for:
 Rest platforms every ~95 m are checkpoints: they heal you and bring
 spectators back into the run.
 
-NEW MAP: THE UNDERDARK (sandbox), v4 "THE GREAT RIFT"
+NEW MAP: THE UNDERDARK (sandbox), v4.2 "THE GREAT RIFT"
 Rebuilt from scratch around one colossal abyss, modelled on the campaign's
 own chasm (measured in game: the campaign is 2,100 m deep and 310-400 m
 wide, with 150-300 m sightlines).
@@ -67,12 +67,37 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v4.2:
+  - SIX GREAT SHELVES: fallen slabs that floor most of the rift, on alternating
+    sides, so there is no straight line down any more. You land on one, follow
+    the lamps 160 to 340 m across it (standing stones, a camp, the dead, and on
+    every second one something that lives there), and leave by its far corner.
+  - THE SHORT WAY: three secret ladders (Ossuary, Fungal Hollow, Crystal
+    Veins). Look for a violet light a running jump behind the quiet end of a
+    balcony. 33 tiny footholds in all, no ember, no checkpoint, and you skip
+    whatever was on the normal road (kilns, idol pieces). At the bottom of
+    each is a RELIC, kept forever, per player: 1 = your name burns gold for
+    your team, 2 = a gold rope, 3 = a crown. Top right shows "relics n/3".
+  - CO-OP RESCUE (every map, campaign too): a player who runs out of respawns
+    leaves a pale blue SOUL where they last stood. Any living teammate who
+    stays within arm's reach of it for 1.5 s pulls them back into the run,
+    right there. Checkpoints still revive everyone as before.
+  - WEATHER: drifting dust in the Mouth, falling bone ash in the Ossuary,
+    rising spores and spore banks in the Fungal Hollow, drips in the
+    Rootworks, rain and mist over the footholds in the Drowned Galleries,
+    ice glitter and cold haze in the Crystal Veins, ash and sparks in the
+    Foundry. (Spore banks and mist need the game's Volumetric Fog setting.)
+  - Fixed: a player revived from spectating could stop triggering
+    checkpoints and map events for the rest of the run.
+
 THE FALL RULE (this map only):
-  - Fall further than your rope is long (25 m) and you die. No exceptions.
+  - Land a fall of 40 m or more and you die. No exceptions.
   - Shorter falls still hurt a lot: jumping one balcony costs about a third
     of your health. Let the rope out instead of jumping.
+  - The rope itself is untouched: it behaves exactly as in the base game, and
+    a catch forgives the fall. Only LANDINGS are judged.
 How it plays:
-  - You descend along wall balconies, about a full rope apart. 38 of the 101
+  - You descend along wall balconies, about a full rope apart. 57 of the 141
     drops are LADDERS: small footholds with nothing else below. Deeper down
     the footholds get smaller and shift sideways, so you swing to them.
   - THE PLUNGE (Drowned Galleries): 9 footholds in a row, about 200 m, no
@@ -80,6 +105,9 @@ How it plays:
   - On the ladders: sand ledges off to the side RUMBLE AND SHAKE for a
     second, then drop. Rocks lodged in the wall let go when you land under
     them. Below 900 m, centipedes come down the wall after you.
+  - Every balcony is dressed: stalactites underneath, carved columns, ropes
+    left hanging where the way down is, the dead, camps, broken water wheels,
+    fallen roofs, crystal clusters, slag and crucible pots.
   - THE BURROWS: the rift is plugged by the Lid, the only way on is three
     holes barely taller than you. One goes through (110 m of crawl-tight
     tunnel); the other two are dead ends.
@@ -89,12 +117,17 @@ How it plays:
     Plate Hall every living climber stands on a plate (alone, the door opens
     for 16 s, so run). Three idol fragments are hidden in side caves and on a
     village rooftop; the Foundry door needs all three.
-  - THE CRUCIBLE: 27 iron bars across the whole rift over the lava lake,
-    3 places to rest. Hook a bar, swing, throw again. 4 of the bars sink.
+  - THE CRUCIBLE: 11 thin rods of hot iron across the rift over the lava
+    lake, 26 m apart (more than a full rope). Grapple only: you cannot stand
+    on a rod, you slide off. Swing, let go at the top, throw again. 2 small
+    cages hang 9 m under a rod if you need to breathe. 3 of the rods sink.
   - The Stalker (Ossuary and Drowned Galleries): it only moves while nobody
     is looking at it. Someone always has to watch it. It is very fast.
   - Leave the "Additional Centipedes" slider at 0. The map places its own:
-    10 ambushes on the way down, and the Nest wakes when you take the idol.
+    THE FOLLOWER comes in behind you at the top of the rift and hunts the
+    team the whole way down (it never appears ahead of you). 9 more are
+    woken in their biomes, 1 or 2 each, (and on the shelves) and STAY in that biome after you
+    leave it. The Nest wakes when you take the idol.
   - 20 checkpoints. Dying solo reloads you at the team's furthest checkpoint;
     in co-op you respawn next to a teammate as usual.
   - Name tags show through walls on this map. Top right shows biome, depth
