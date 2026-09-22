@@ -41,6 +41,109 @@ var _sfx_rope_loop: AudioStreamPlayer3D
 var _had_rope := false
 var _cos := -1
 var _crown: MeshInstance3D = null
+var _lantern: Node3D = null
+var _lantern_light: OmniLight3D = null
+
+
+static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, shadows: bool) -> Array:
+	# returns [root, light]. Colours are kept dim: the game doubles brightness in post.
+	var root := Node3D.new()
+	root.name = "ZondaLantern"
+	var iron := StandardMaterial3D.new()
+	iron.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	iron.albedo_color = Color(0.05, 0.04, 0.035)
+	for k in 4:
+		var bar := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.008
+		cm.bottom_radius = 0.008
+		cm.height = 0.2
+		cm.radial_segments = 6
+		bar.mesh = cm
+		bar.material_override = iron
+		bar.position = Vector3(0.045 * (1 if k % 2 == 0 else -1), 0.0, 0.045 * (1 if k < 2 else -1))
+		bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(bar)
+	for y in [0.1, -0.1]:
+		var ring := MeshInstance3D.new()
+		var tm := TorusMesh.new()
+		tm.inner_radius = 0.055
+		tm.outer_radius = 0.07
+		tm.rings = 10
+		tm.ring_segments = 6
+		ring.mesh = tm
+		ring.material_override = iron
+		ring.position = Vector3(0, y, 0)
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(ring)
+	var handle := MeshInstance3D.new()
+	var hm := TorusMesh.new()
+	hm.inner_radius = 0.03
+	hm.outer_radius = 0.042
+	hm.rings = 10
+	hm.ring_segments = 6
+	handle.mesh = hm
+	handle.material_override = iron
+	handle.position = Vector3(0, 0.145, 0)
+	handle.rotation.x = PI * 0.5
+	handle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(handle)
+	var flame := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.032
+	sm.height = 0.064
+	sm.radial_segments = 8
+	sm.rings = 4
+	flame.mesh = sm
+	var fm := StandardMaterial3D.new()
+	fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fm.albedo_color = Color(0.5, 0.3, 0.1)
+	flame.material_override = fm
+	flame.position = Vector3(0, -0.02, 0)
+	flame.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(flame)
+	if dot_tex != null:
+		var fire := CPUParticles3D.new()
+		fire.amount = 7
+		fire.lifetime = 0.45
+		fire.randomness = 0.6
+		fire.local_coords = true
+		fire.direction = Vector3.UP
+		fire.spread = 12.0
+		fire.gravity = Vector3(0, 0.6, 0)
+		fire.initial_velocity_min = 0.08
+		fire.initial_velocity_max = 0.16
+		fire.scale_amount_min = 0.5
+		fire.scale_amount_max = 1.0
+		var grad := Gradient.new()
+		grad.set_color(0, Color(0.55, 0.3, 0.08, 0.6))
+		grad.set_color(1, Color(0.25, 0.04, 0.0, 0.0))
+		fire.color_ramp = grad
+		var fq := QuadMesh.new()
+		fq.size = Vector2(0.05, 0.065)
+		var fqm := StandardMaterial3D.new()
+		fqm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		fqm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		fqm.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		fqm.albedo_texture = dot_tex
+		fqm.vertex_color_use_as_albedo = true
+		fq.material = fqm
+		fire.mesh = fq
+		fire.position = Vector3(0, -0.01, 0)
+		fire.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(fire)
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.72, 0.42)
+	light.light_energy = energy
+	light.omni_range = rng
+	light.omni_attenuation = 1.0
+	light.shadow_enabled = shadows
+	light.shadow_bias = 0.08
+	light.light_volumetric_fog_energy = 1.0
+	light.set_meta("zonda_keep", true)
+	light.position = Vector3(0, -0.02, 0)
+	root.add_child(light)
+	return [root, light]
 const GOLD := Color(1.0, 0.8, 0.32)
 
 
@@ -146,6 +249,16 @@ func update_state(msg: Dictionary) -> void:
 	if cos != _cos:
 		_cos = cos
 		_apply_cosmetics()
+	var lan: bool = bool(msg.get("lan", false))
+	if lan and _lantern == null:
+		# the knight holds it in its right hand, a little forward, swinging as it walks
+		var pair := build_cage_lantern(null, 3.5, 16.0, false)
+		_lantern = pair[0]
+		_lantern_light = pair[1]
+		_lantern.position = Vector3(0.36, 0.92, -0.22)
+		add_child(_lantern)
+	if _lantern != null and _lantern.visible != lan:
+		_lantern.visible = lan
 
 	var was_attached := attached
 	attached = bool(msg.get("att", false))

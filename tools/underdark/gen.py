@@ -335,7 +335,8 @@ def resolve(R, F, report):
             L["spikes"].append({"pos": v3([a["x"], fy + 1.2, a["z"]]), "r": 3.2, "push": a["push"]})
         elif kind == "prop":
             p = a["pos"]
-            y = p[1]
+            ylift = float(a.get("ylift", 0.0))
+            y = p[1] + ylift
             if a["snap"]:
                 fy = floor_at(p[0], p[2], p[1] + 6.0)
                 if fy is None:
@@ -343,12 +344,17 @@ def resolve(R, F, report):
                     continue
                 if fy > p[1] + 5.0 or not headroom(p[0], p[2], fy, 1.0):
                     continue                      # the spot is inside rock (a column, a stalactite): no floating props
-                y = fy - 0.05
+                y = fy - 0.05 + ylift
             box = None
             if a["box"] is not None:
                 box = [b * a["scale"] for b in a["box"]]
-            L["props"].append({"scene": a["scene"], "pos": v3([p[0], y, p[2]]), "rot": [round(a["rot_x"], 3), round(a["yaw"], 3), 0.0],
-                               "scale": round(a["scale"], 3), "box": box, "vis": a["vis"]})
+            ent = {"scene": a["scene"], "pos": v3([p[0], y, p[2]]), "rot": [round(a["rot_x"], 3), round(a["yaw"], 3), 0.0],
+                   "scale": round(a["scale"], 3), "box": box, "vis": a["vis"]}
+            if a.get("col") == "hull":
+                ent["col"] = "hull"
+            if "dim" in a:
+                ent["dim"] = a["dim"]
+            L["props"].append(ent)
         elif kind == "light":
             p = a["pos"]
             y = p[1]
@@ -568,6 +574,10 @@ def resolve(R, F, report):
             if fy is None or not headroom(p[0], p[2], fy, 2.0):
                 continue
             L["ghosts"].append({"pos": v3([p[0], fy, p[2]]), "yaw": round(godot_yaw_facing(np.array(a["face"])) + math.pi, 4)})
+            if len(L["ghosts"]) in (2, 9, 20, 33):
+                fc = np.array(a["face"], dtype=float)
+                eye = np.array([p[0], fy + 1.8, p[2]]) - fc * 3.0
+                L["tour"].append({"pos": v3(eye), "look": v3([p[0], fy + 1.5, p[2]]), "label": "ghost close %d" % len(L["ghosts"])})
         elif kind == "altar":
             fy = floor_at(a["x"], a["z"], a["y"])
             if fy is None:
@@ -679,6 +689,41 @@ def BURROWS_MAT(R):
 
 # ------------------------------------------------------------------ validation
 
+def _station_floor(F, p):
+    fy = None
+    for up in (4.5, 3.0, 2.0):                            # an overhang may hang low over a ledge: start under it
+        fy = F.floor_below(p[0], p[2], p[1] + up, up + 4.5)   # a root or span arriving may sit a little higher
+        if fy is not None and fy - p[1] <= 3.6 and (p[1] + up) - fy > 1.9:
+            break
+    ok = not (fy is None or fy - p[1] > 3.6 or p[1] - fy > 1.6)
+    return ok, fy
+
+
+def repair_stations(R, F, report):
+    """No place the route says you stand may be missing its rock. Where the field left a
+    station floorless (wall noise eating a small foothold), lay a slab under it."""
+    if getattr(R, "rift", None) is None:
+        return
+    n = 0
+    for s_ in R.L.get("stations", []):
+        if s_["kind"] in ("platform", "gantry"):
+            continue
+        p = s_["pos"]
+        ok, fy = _station_floor(F, p)
+        if ok:
+            continue
+        top = p[1] - 0.05
+        rad = 2.6
+        poly = np.array([[p[0] + rad * math.cos(2 * math.pi * k / 10), p[2] + rad * math.sin(2 * math.pi * k / 10)] for k in range(10)])
+        R.slabs.append(dict(biome=int(s_["biome"]), poly=poly, top=top, bottom=top - 2.0))
+        R.L["slabs_meta"].append({"tag": "repair", "top": round(top, 2), "center": v3([p[0], top, p[2]])})
+        s_["repaired"] = True
+        n += 1
+        report["warnings"].append("repair slab under %s station at %s" % (s_["kind"], v3(p)))
+    report["stations_repaired"] = n
+    print("stations repaired with a slab: %d" % n)
+
+
 def validate_rift(R, F, report):
     """Every place the player must stand exists, and every step between them is within a rope."""
     L = R.L
@@ -686,14 +731,10 @@ def validate_rift(R, F, report):
     bad_floor = 0
     for s_ in st:
         p = s_["pos"]
-        if s_["kind"] in ("platform", "gantry"):
+        if s_["kind"] in ("platform", "gantry") or s_.get("repaired"):
             continue
-        fy = None
-        for up in (4.5, 3.0, 2.0):                            # an overhang may hang low over a ledge: start under it
-            fy = F.floor_below(p[0], p[2], p[1] + up, up + 4.5)   # a root or span arriving may sit a little higher
-            if fy is not None and fy - p[1] <= 3.6 and (p[1] + up) - fy > 1.9:
-                break
-        if fy is None or fy - p[1] > 3.6 or p[1] - fy > 1.6:
+        ok, fy = _station_floor(F, p)
+        if not ok:
             bad_floor += 1
             if bad_floor <= 8:
                 report["errors"].append("no floor where expected at %s (%s)" % (p, s_["kind"]))
@@ -831,6 +872,7 @@ def main():
 
     resolve(R, F, report)
     print("intents resolved (%.1fs)" % (time.time() - t0))
+    repair_stations(R, F, report)
 
     dims = np.ceil((hi - lo) / VOX).astype(int)
     jobs = []

@@ -49,7 +49,7 @@ Traps to watch for:
 Rest platforms every ~95 m are checkpoints: they heal you and bring
 spectators back into the run.
 
-NEW MAP: THE UNDERDARK (sandbox), v4.2 "THE GREAT RIFT"
+NEW MAP: THE UNDERDARK (sandbox), v4.5 "THE GREAT RIFT"
 Rebuilt from scratch around one colossal abyss, modelled on the campaign's
 own chasm (measured in game: the campaign is 2,100 m deep and 310-400 m
 wide, with 150-300 m sightlines).
@@ -67,6 +67,87 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v4.6:
+  - REAL OBJECTS IN THE WORLD. 560 CC0 models (Kenney Graveyard, Nature and
+    Mini Dungeon kits, Poly Haven photoscans, Quaternius Modular Ruins) ship
+    inside the mod and are placed per biome: a broken gate, crates and lamp
+    posts at the Mouth; gravestones, coffins, urns, candles, skull piles, a
+    gothic statue and a marble bust in the Ossuary; giant mushrooms and logs
+    in Fungal Hollow; dead trees and log stacks in the Rootworks; barrels, a
+    canoe and broken rails in the Drowned Galleries; a ruined temple (arches,
+    columns, walls, stairs, statues) with carts, chests, pots, bookcases and
+    wall torches in the Village; photoscanned boulders you can stand on and
+    hook in the Crystal Veins; timber mine supports over the walkway, mine
+    carts, picks, bear traps, crates, tables and chairs in the Foundry;
+    boulder fields and each biome's furniture across all eight great shelves.
+    Small photoscanned stones everywhere catch the lantern.
+  - BAT COLONIES roost under overhangs in the wetter strata. Walk under one
+    and it bursts out, wheels round the balcony and is gone up the rift.
+    Harmless. Each player sees their own.
+  - PALE CRAWLERS: the centipedes that belong to the deep strata (Ossuary,
+    Crystal, Foundry, Burrows, Nest) and every other territorial one are
+    bone white and never glow. Same creature, same rules, different look.
+    Guests see the same skins as the host.
+  - The kits are loaded straight from the .glb files at runtime (they were
+    never through the editor), each one becomes a template and is copied
+    per placement, so 1,500 extra objects cost one load each.
+
+NEW IN v4.5:
+  - 30% BIGGER: 4144 m deep (was 3,380), the rift 10% wider, EIGHT great
+    shelves now (was six), and a third secret ladder pinned to the deep
+    biomes. Everything the player is measured in (rope reach, gap widths,
+    foothold size) is unchanged; the hole got bigger, you did not.
+  - +1 DIFFICULTY, traversal only (creatures, HP and the landing rule are
+    untouched): shorter balconies, longer drops, more and wider gaps, a
+    ladder after nearly every balcony (96 of the 183 drops are ladders now,
+    was 51 of 138), smaller footholds that stagger further sideways, more
+    sand decoys and more rocks lodged above them, The Plunge is 12 footholds
+    (was 9), more rigged village floors, waterfalls shove harder, and the
+    Crucible has one rest fewer and another rod that sinks.
+  - THE LANTERN. F5 now cycles LANTERN (overly dark) / DARK / NORMAL /
+    BRIGHT, per player, remembered. LANTERN is the default: the rift is
+    nearly black and you carry a caged flame in your right hand that lights
+    about 20 m around you, casts shadows and flickers. Your teammates see it
+    swinging in your knight's hand. The other three modes are the old map
+    with the lights turned down or up.
+  - A foothold can never ship without rock under it any more: the generator
+    now lays a slab under any station the field leaves floorless (0 needed
+    this build, and the wall table that caused it is sampled finer).
+
+NEW IN v4.4 (all of it from playing v4.3 for real):
+  - Toned the lighting back down. v4.3 was far too bright: I had pushed ambient
+    and the rock brightness way up chasing a number off screenshots instead of
+    trusting how it looks in play.
+  - FPS: the rift is one open hole with 400 m sightlines, so hundreds of the
+    map's ~560 lamps were lit at once and each one cost again inside the fog.
+    Only the nearest 64 within 175 m are lit now, and none of them feed the
+    volumetric fog pass. The lantern glows are unshaded, so the far look is
+    unchanged. Half the haze banks were also dropped.
+  - THE STALKER is fixed. It had no ground under it, sank into the rock, and
+    then the "is anyone looking at it" ray hit that rock first, so it read as
+    unseen and kept coming while you stared straight at it. It now walks the
+    floor, steps over ledges instead of through them, and is checked at three
+    heights so looking at any part of it freezes it.
+  - Smoother co-op: every centipede woken in a biome used to stay awake and
+    pathfinding for the rest of the run. They now sleep when nobody is within
+    190 m, and the host streams centipedes at half the old rate.
+  - TIP: F4 cycles graphics OFF / LOW / HIGH / HIGH+HD, per player. HIGH+HD
+    renders at your monitor's full resolution instead of the game's 640x360
+    and costs the most FPS by far. If it runs rough, press F4.
+
+NEW IN v4.3:
+  - The THING THAT FOLLOWED YOU comes for you in the finale: when you take the
+    idol, the Follower comes out of the dark of the Nest, about 65 m behind the
+    altar, and chases you toward The Ascent.
+  - Balconies you can actually see: floors and walls were rendering nearly
+    black in most biomes (measured: 76 to 95% of floor pixels under 4% bright).
+    They are now readable in every biome without blowing out.
+  - Crystal spars are faceted, banded and grown over (spikes on the sides and
+    hanging from the underside), with a faint glow of their own.
+  - DEAD CENTIPEDES: 29 husks now (there were 2): a full body length of husk on
+    most long balconies, and a colossal one across every great shelf.
+  - Pale props (standing dead, kit stones, rocks) no longer clip to white.
+
 NEW IN v4.2:
   - SIX GREAT SHELVES: fallen slabs that floor most of the rift, on alternating
     sides, so there is no straight line down any more. You land on one, follow
@@ -82,11 +163,11 @@ NEW IN v4.2:
     leaves a pale blue SOUL where they last stood. Any living teammate who
     stays within arm's reach of it for 1.5 s pulls them back into the run,
     right there. Checkpoints still revive everyone as before.
-  - WEATHER: drifting dust in the Mouth, falling bone ash in the Ossuary,
-    rising spores and spore banks in the Fungal Hollow, drips in the
-    Rootworks, rain and mist over the footholds in the Drowned Galleries,
-    ice glitter and cold haze in the Crystal Veins, ash and sparks in the
-    Foundry. (Spore banks and mist need the game's Volumetric Fog setting.)
+  - HAZE, NOT SPECKS: soft coloured haze banks per biome (spore banks in the
+    Fungal Hollow, pale bone dust in the Ossuary, mist over the Drowned
+    footholds, cold haze in the Crystal Veins, smoke in the Foundry). They
+    need the game's Volumetric Fog setting. There are no floating particles
+    any more (v4.2 had small sparkling ones; they are gone).
   - Fixed: a player revived from spectating could stop triggering
     checkpoints and map events for the rest of the run.
 
@@ -135,7 +216,7 @@ How it plays:
   - Ending: take the idol from the altar in the Nest. That wakes the nest and
     opens the sealed tunnel behind the altar. Run for the light.
   - Music and ambience change per biome.
-Difficulty: about 8 out of 10. The campaign is about a 5.
+Difficulty: about 9 out of 10. The campaign is about a 5.
 
 ENHANCED GRAPHICS (F4, per player, remembered between sessions)
 F4 cycles:  OFF  >  LOW  >  HIGH  >  HIGH + HD

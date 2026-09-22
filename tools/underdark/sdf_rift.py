@@ -109,7 +109,7 @@ class ShelfSolid:
         # the real wall face along this balcony, so its width is true metres everywhere
         # (the field value near the wall is not a distance where the noise is steep)
         span = half_arc + 0.06
-        n = max(8, int(2 * span * float(rift.radius(y_top)) / 1.6))
+        n = max(12, int(2 * span * float(rift.radius(y_top)) / 0.7))
         self.tab_a = np.linspace(-span, span, n)
         self.tab_r = np.array([rift.wall_r(a_mid + da, y_top - 0.5) for da in self.tab_a])
 

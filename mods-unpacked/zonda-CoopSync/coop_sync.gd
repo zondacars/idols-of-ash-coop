@@ -416,6 +416,7 @@ func target_player_for(c: Node3D) -> Node3D:
 
 
 var _cent_assign_time := 0
+var _cent_accum := 0
 
 
 func _territory_target(c: Node3D) -> Node3D:
@@ -572,8 +573,32 @@ func _track_scene_changes() -> void:
 		map_state = {"scene": "", "checkpoint": -1, "events": {}}
 	_await_spawn_sync = is_guest() and _is_gameplay_scene(_last_scene_path)
 	print("[CoopSync] scene -> ", _last_scene_path)
+	if _last_scene_path.contains("MainMenu") and not _autostarted and FileAccess.file_exists(MOD_DIR + "autostart.flag"):
+		_autostart()
 	if is_host and _lobby_id != 0:
 		_broadcast_level()
+
+
+var _autostarted := false
+
+
+func _autostart() -> void:
+	# developer only: start a sandbox map straight from the menu, no clicks. The flag is
+	# removed as soon as it is read so it can never follow a player into a real session.
+	_autostarted = true
+	var want := FileAccess.get_file_as_string(MOD_DIR + "autostart.flag").strip_edges().to_upper()
+	var disk := OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/autostart.flag"
+	var err := DirAccess.remove_absolute(disk)
+	print("[CoopSync] autostart flag '%s' (removed: %s)" % [want, str(err == OK)])
+	for m in MOD_MAPS:
+		if str(m[0]).to_upper() == want:
+			Game.active_balance_settings = Game.get_balance_settings_for_sandbox_difficulty_level(SandboxData.EDifficultyLevel.Normal)
+			Game.active_sandbox_map_data = SandboxMapData.new().setup(str(m[0]), str(m[1]), 0)
+			await get_tree().create_timer(1.0).timeout
+			print("[CoopSync] autostart -> ", m[1])
+			SceneLoader.load_scene(func(): Game.load_level_based_on_difficulty(false))
+			return
+	print("[CoopSync] autostart: no map called ", want)
 
 
 func _broadcast_level() -> void:
@@ -911,6 +936,7 @@ func _broadcast_state() -> void:
 		"hp": p.health,
 		"alive": not p.get("coop_spectating"),
 		"cos": cosmetics,
+		"lan": lantern_on,
 		"gnd": p.is_on_floor() and p.get_floor_normal().y > 0.8 and not (p.activeClimberState is ClimberState_Attached),
 	}
 	if p.Rope and p.Rope.is_setup and p.activeClimberState and p.activeClimberState.is_rope_active() and is_instance_valid(p.Rope._claw) and p.Rope._claw.visible:
@@ -922,14 +948,17 @@ func _broadcast_state() -> void:
 		msg["att"] = p.activeClimberState is ClimberState_Attached
 	_send_all(msg, false)
 	if is_host:
-		_broadcast_centipedes()
+		_cent_accum += 1
+		if _cent_accum >= 2:          # centipedes at half the player rate: the buffer smooths them
+			_cent_accum = 0
+			_broadcast_centipedes()
 
 
 func _broadcast_centipedes() -> void:
 	var list: Array = []
 	for c in Game.centipedes:
 		if is_instance_valid(c) and c.is_inside_tree():
-			list.append([c.global_position, c.global_basis.get_rotation_quaternion(), c._current_state is centipede_state_attack, c.stamina])
+			list.append([c.global_position, c.global_basis.get_rotation_quaternion(), c._current_state is centipede_state_attack, c.stamina, int(c.get_meta("zonda_skin", 0))])
 	if list.is_empty():
 		return
 	_send_all({"t": "c", "ts": Time.get_ticks_msec(), "from": _my_steam_id, "s": _last_scene_path, "l": list}, false)
@@ -1342,6 +1371,7 @@ func _on_rescue(who_id: int, by: String, mine: bool) -> void:
 
 const RELIC_FILE := "user://zonda_cosmetics.cfg"
 var cosmetics := 0
+var lantern_on := false          # the Underdark's hand lantern, so teammates see it on your knight
 var _relics: Dictionary = {}
 
 

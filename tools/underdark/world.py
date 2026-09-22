@@ -15,6 +15,29 @@ GLOW = [[1.0, 0.8, 0.55], [0.85, 0.8, 0.65], [0.4, 1.0, 0.6], [1.0, 0.6, 0.25], 
 MOUTH, OSSUARY, FUNGAL, ROOTS, DROWNED, VILLAGE, CRYSTAL, FOUNDRY, NEST, BURROWS = range(10)
 
 A = "res://Art/"
+X = "ext/"                     # external CC0 models shipped in maps/underdark/ext/, loaded at runtime
+import json as _json, os as _os
+XM = _json.load(open(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "ext_manifest.json")))
+
+
+def xsize(rel):
+    return XM[rel[len(X):]]["size"]
+
+
+# how much of a model's own colour survives the game's doubled post brightness, per kind.
+# Read from tour shots: Kenney's grey palette and Quaternius' pale bark went white at 0.4-0.5.
+XDIM = [("graveyard/candle", 0.3), ("graveyard/lightpost", 0.25), ("graveyard/", 0.22),
+        ("dungeon/", 0.28), ("nature/mushroom", 0.32), ("nature/", 0.28),
+        ("quat/DeadTree", 0.12), ("quat/Skull", 0.35), ("quat/Column", 0.35), ("quat/Arch", 0.35), ("quat/Wall", 0.35),
+        ("quat/Support", 0.35), ("quat/Stairs", 0.35), ("quat/Rail", 0.35), ("quat/Statue", 0.4), ("quat/Bricks", 0.35)]
+
+
+def xdim(rel, default):
+    r = rel[len(X):]
+    for pre, k in XDIM:
+        if r.startswith(pre):
+            return k
+    return default
 CORPSES = [A + "Corpse_0%d.glb" % i for i in range(1, 7)]
 PLANTS_L = [A + "Plant_L_0%d.glb" % i for i in range(1, 7)]
 PLANTS_S = [A + "Plant_S_0%d.glb" % i for i in range(1, 5)]
@@ -559,6 +582,21 @@ class Route:
     def prop(self, scene, pos, yaw=0.0, scale=1.0, rot_x=0.0, box=None, snap=True, vis=320.0):
         self.intents.append(("prop", dict(scene=scene, pos=np.array(pos, dtype=float), yaw=yaw,
                                           scale=scale, rot_x=rot_x, box=box, snap=snap, vis=vis)))
+
+    def xprop(self, rel, pos, yaw=0.0, scale=1.0, rot_x=0.0, col=None, dim=0.45, snap=True, vis=220.0, sink=0.0, up=0.0):
+        """An external piece (ext/<pack>/<file>.glb). Its base is set on the floor from the manifest
+        bounds. col = None | "box" | "hull". sink = fraction of its height buried. dim = how much of
+        its own colour survives the game's doubled post-brightness."""
+        info = XM.get(rel[len(X):])
+        if info is None:
+            raise KeyError(rel)
+        lo, size = info["lo"], info["size"]
+        ylift = -lo[1] * scale - sink * size[1] * scale + up
+        box = None
+        if col == "box":
+            box = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5]
+        self.intents.append(("prop", dict(scene=rel, pos=np.array(pos, dtype=float), yaw=yaw, scale=scale, rot_x=rot_x,
+                                          box=box, snap=snap, vis=vis, ylift=ylift, col=col, dim=xdim(rel, dim))))
 
     def light(self, pos, color, energy=1.0, rng=22.0, snap=False, lift=2.0):
         self.intents.append(("light", dict(pos=np.array(pos, dtype=float), color=color, energy=energy,

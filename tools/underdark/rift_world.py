@@ -20,10 +20,13 @@ STANDING = [A + "Corpse_0%d.glb" % i for i in (1, 2, 3, 4)]       # the wrapped 
 KIT = [(A + "Stone_01.glb", (1.0, 2.2)), (A + "Stone_04.glb", (0.9, 1.7)), (A + "Stone_05.glb", (0.9, 1.7)),
        (A + "Stone_02.glb", (0.9, 1.6)), (A + "Rock_01.glb", (1.4, 2.8))]
 
-STRATA = [(-30, -330, MOUTH), (-330, -765, OSSUARY), (-765, -1185, FUNGAL), (-1185, -1575, ROOTS),
-          (-1575, -1965, DROWNED), (-1965, -2365, VILLAGE), (-2365, -2765, CRYSTAL), (-2765, -3230, FOUNDRY)]
-LID = (-772.0, -792.0)
-LAKE_Y = -3205.0
+Z = 1.3           # depth scale (v4.5: "make the map 30% bigger")
+RW = 1.1          # width scale
+STRATA = [(t * Z, b * Z, bi) for (t, b, bi) in
+          [(-30, -330, MOUTH), (-330, -765, OSSUARY), (-765, -1185, FUNGAL), (-1185, -1575, ROOTS),
+           (-1575, -1965, DROWNED), (-1965, -2365, VILLAGE), (-2365, -2765, CRYSTAL), (-2765, -3230, FOUNDRY)]]
+LID = (-772.0 * Z, -792.0 * Z)
+LAKE_Y = -3205.0 * Z
 
 
 class Builder:
@@ -44,10 +47,11 @@ class Builder:
         self.y = 0.0
         self.dirn = 1
         self.shelf_i = 0
-        self.rift = Rift((430.0, 20.0), -30.0, LAKE_Y - 4.0,
-                         [(-30, 85), (-200, 112), (-330, 135), (-700, 145), (-790, 150), (-1000, 175), (-1185, 185),
-                          (-1400, 190), (-1575, 165), (-1800, 160), (-1965, 195), (-2200, 210), (-2365, 185),
-                          (-2600, 180), (-2765, 195), (-3000, 185), (LAKE_Y - 4.0, 150)], STRATA)
+        self.rift = Rift((430.0, 20.0), -30.0 * Z, LAKE_Y - 4.0,
+                         [(y * Z, r * RW) for (y, r) in
+                          [(-30, 85), (-200, 112), (-330, 135), (-700, 145), (-790, 150), (-1000, 175), (-1185, 185),
+                           (-1400, 190), (-1575, 165), (-1800, 160), (-1965, 195), (-2200, 210), (-2365, 185),
+                           (-2600, 180), (-2765, 195), (-3000, 185)]] + [(LAKE_Y - 4.0, 150 * RW)], STRATA)
         self.R.group += 1
         self.R.prims.append(self.rift)
         self.R.groups.append(self.R.group)
@@ -89,7 +93,7 @@ class Builder:
         a0, a1 = self.a, self.a + self.dirn * arc
         p = p or rng.uniform(9.0, 12.5)
         if gap and length > 34:
-            g = rng.uniform(8.5, 10.5) / r
+            g = rng.uniform(9.5, 11.5) / r
             am = 0.5 * (a0 + a1)
             for (s0, s1) in ((a0, am - self.dirn * g * 0.5), (am + self.dirn * g * 0.5, a1)):
                 self.solids.append(ShelfSolid(self.rift, y, 0.5 * (s0 + s1), abs(s1 - s0) * 0.5 + 1.5 / r, p))
@@ -111,6 +115,7 @@ class Builder:
         if decor:
             self.decorate(info)
             self.detail(info)
+            self.xdetail(info)
         self.a = a1
         # the ones who came before stand where you go down
         if info["i"] % 2 == 0:
@@ -138,36 +143,36 @@ class Builder:
         Deeper down the footholds shrink and stagger sideways, so you swing to them, not just lower."""
         rng = self.rng
         first = None
-        k = float(np.clip((-self.y - 250.0) / 2700.0, 0.0, 1.0))        # 0 near the top, 1 at the lake
+        k = float(np.clip((-self.y - 250.0 * Z) / (2700.0 * Z), 0.0, 1.0))        # 0 near the top, 1 at the lake
         self.chain_i = getattr(self, "chain_i", 0) + 1
         side = rng.choice([-1, 1])
         prev_q = above
         for i in range(n):
-            off = rng.uniform(2.5, 3.5 + 4.5 * k)
+            off = rng.uniform(3.5, 5.0 + 5.0 * k)
             dy = rng.uniform(19.5, 23.0) if off < 5.0 else rng.uniform(18.5, 21.0)
             self.y -= dy
             r = self.rw()
-            p = (7.5 - 2.0 * k) if i % 2 == 0 else (12.0 - 3.5 * k)
+            p = (6.5 - 2.0 * k) if i % 2 == 0 else (10.5 - 3.5 * k)
             side = -side
             am = self.a + side * (0.5 * off / r)
             self.a += self.dirn * (1.2 / r)
-            self.solids.append(ShelfSolid(self.rift, self.y, am, (5.0 - 1.8 * k) / r, p, thick=3.6))
+            self.solids.append(ShelfSolid(self.rift, self.y, am, (4.3 - 1.6 * k) / r, p, thick=3.4))
             q = self.spot(am, self.y, p * 0.5)
             self.station(q, "foothold", biome)
             self.moves.append({"type": "drop", "dy": round(dy, 1), "y": self.y, "hard": True, "side": round(off, 1)})
             if first is None:
                 first = q
             # a rock lodged in the wall above this foothold. It lets go when you land.
-            if self.y < -700 and i >= 1 and rng.random() < 0.22 + 0.2 * k:
+            if self.y < -700 * Z and i >= 1 and rng.random() < 0.3 + 0.25 * k:
                 hang = self.spot(am, self.y + dy - 5.0, 1.6)
                 self.L["droppers"].append({"id": self.R.next_id("dr"), "kind": "boulder", "hang": v3(hang),
                                            "floor": round(float(self.y), 2), "trip": [v3(q + np.array([0, 1.0, 0])), 3.6]})
             # something comes down the wall after you
-            if i == 1 and prev_q is not None and self.y < -900 and self.chain_i % 2 == 0:
+            if i == 1 and prev_q is not None and self.y < -900 * Z and self.chain_i % 2 == 0:
                 self.L["centipedes"].append({"id": self.R.next_id("cen"), "trigger": [v3(q + np.array([0, 1.5, 0])), 7.0],
                                              "spawn": [v3(np.array(above) + np.array([0, 3.0, 0]))]})
                 self.R.text(q, 6.0, "Legs on stone, above you. Many. Keep going down.")
-            if rng.random() < 0.5:        # a tempting sand ledge off to the side that will not hold
+            if rng.random() < 0.7:        # a tempting sand ledge off to the side that will not hold
                 side = rng.choice([-1, 1]) * rng.uniform(11.0, 15.0) / r
                 self.R.intents.append(("wall_crumble", dict(a=am + side, y=self.y + rng.uniform(4, 9))))
             if i % 2 == 1:
@@ -175,7 +180,7 @@ class Builder:
         self.a += self.dirn * (2.0 / self.rw())
         return first
 
-    def run(self, biome, y_end, chain_every=2, chain_n=(4, 6), len_rng=(32, 70), dy_rng=(17.5, 22.5), gap_chance=0.45, terraces=()):
+    def run(self, biome, y_end, chain_every=1, chain_n=(5, 7), len_rng=(26, 56), dy_rng=(19.0, 23.0), gap_chance=0.6, terraces=()):
         since = 0
         lobe = None
         pending = sorted(terraces, reverse=True)
@@ -257,7 +262,7 @@ class Builder:
             if i % 2 == 1:
                 q, a = pts[len(pts) // 2], angs[len(pts) // 2]
                 top = q + self.out_dir(a) * 3.0 + np.array([0, 26.0, 0])
-                self.L["falls"].append({"pos": v3(top), "height": 30.0, "push": v3(-self.out_dir(a) * 5.0), "floor": round(float(q[1]), 2)})
+                self.L["falls"].append({"pos": v3(top), "height": 30.0, "push": v3(-self.out_dir(a) * 6.5), "floor": round(float(q[1]), 2)})
             for q, a in list(zip(pts, angs))[::3]:
                 R.prop(rng.choice(CORPSES), q, yaw=rng.uniform(0, 6.28))
         elif b == VILLAGE:
@@ -349,6 +354,29 @@ class Builder:
                 self.solids.append(RodSolid(q - np.array([0, 2.0, 0]), q + np.array([rng.uniform(-2, 2), h, rng.uniform(-2, 2)]), rng.uniform(1.9, 2.8), 1.4, rough=0.14))
             else:
                 self.solids.append(ConeSolid(q - np.array([0, 2.0, 0]), rng.uniform(8.0, 17.0), rng.uniform(3.0, 4.6), rough=0.3))
+        # a dead centipede across the plateau, twice the length of the ones on balconies
+        hs = rng.uniform(2.2, 2.9)
+        hdir = pdir * rng.choice([-1, 1]) + pside * rng.uniform(-0.45, 0.45)
+        hdir = hdir / float(np.linalg.norm(hdir))
+        cxz = np.array([float(c_) for c_ in self.rift.center(y_top)])
+        h0 = land + path * rng.uniform(0.22, 0.4) + pside * rng.choice([-1, 1]) * rng.uniform(13.0, 19.0)
+        placed_h = 0
+        n_sec = 17
+        for j in range(n_sec):
+            q = h0 + hdir * (j * 1.5 * hs)
+            if T.side(q) < 12.0 or self.rift.wall_r(self.rift.bearing(q), y_top) - float(np.hypot(*(q[[0, 2]] - cxz))) < 9.0:
+                continue
+            R.prop(A + ("Monster_Head.glb" if j == n_sec - 1 else "Monster_BodySection.glb"), [q[0], y_top + 0.5 * hs, q[2]],
+                   yaw=godot_yaw_facing(hdir) + rng.uniform(-0.12, 0.12), scale=hs, rot_x=rng.uniform(-0.08, 0.08), snap=False)
+            if j % 2 == 0 and j < n_sec - 1:
+                for sgn in (-1, 1):
+                    R.prop(A + "Monster_UpperLeg.glb", [q[0], y_top + 0.35 * hs, q[2]], yaw=godot_yaw_facing(hdir) + sgn * 1.45,
+                           scale=hs * 1.3, rot_x=0.5, snap=False)
+            placed_h += 1
+        if placed_h >= 6:
+            if not hasattr(self, "husk_marks"):
+                self.husk_marks = []
+            self.husk_marks.append((h0 + hdir * (n_sec // 2 * 1.5 * hs), None, biome))
         # a camp halfway, ruins, the dead
         mid = land + path * 0.5 + pside * 6.0
         R.prop(A + "Tent.glb", mid + pside * 3.0, yaw=rng.uniform(0, 6.28))
@@ -365,6 +393,7 @@ class Builder:
             if T.side(q) < 6.0:
                 continue
             R.prop(rng.choice([A + "Stone_04.glb", A + "Stone_05.glb", A + "Rock_01.glb"]), q, yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.5, 1.4))
+        self.xterrace(T, land, path, pside, plen, biome, y_top, r, cxz)
         # on some of them, something lives
         if idx % 2 == 1:
             cx, cz = self.rift.center(y_top)
@@ -388,6 +417,11 @@ class Builder:
         rng, R = self.rng, self.R
         a = s["angs"][1]
         step = 1.5 * scale
+        if n < 4:
+            return
+        if not hasattr(self, "husk_marks"):
+            self.husk_marks = []
+        self.husk_marks.append((self.spot(a + s["dirn"] * step * (n // 2) / s["r"], s["y"], s["p"] * 0.5), a, s["biome"]))
         for j in range(n):
             a += s["dirn"] * step / s["r"]
             q = self.spot(a, s["y"], s["p"] * 0.5 + 1.6 * math.sin(j * 0.75) + 0.8)
@@ -400,6 +434,198 @@ class Builder:
                 for sgn in (-1, 1):
                     R.prop(A + "Monster_UpperLeg.glb", [q[0], s["y"] + 0.35 * scale, q[2]],
                            yaw=godot_yaw_facing(tang) + sgn * 1.45, scale=scale * 1.3, rot_x=0.5, snap=False)
+
+    # ------------------------------------------------------------ the external kits, per biome
+    # Kenney (stylised, single palette), Poly Haven (photoscanned), Quaternius (low-poly ruins).
+    # Scales: Kenney pieces are ~1 unit tall so they get x2.2..3; Quaternius walls are 2 m so x1.6;
+    # Poly Haven is real metres. Everything sits on the floor from the manifest bounds.
+
+    def xdetail(self, s):
+        rng, R, L = self.rng, self.R, self.L
+        b, y, p, i = s["biome"], s["y"], s["p"], s["i"]
+        pts, angs = s["pts"], s["angs"]
+        n = len(pts)
+        if n < 3:
+            return
+        inner = lambda q, a, d=2.5: q + self.out_dir(a) * d          # toward the wall
+        jit = lambda r=1.0: np.array([rng.uniform(-r, r), 0, rng.uniform(-r, r)])
+        back = max(1.5, p * 0.5 - 2.2)                                # against the back wall
+        lip = -(p * 0.5 - 2.0)                                        # along the edge
+        face_void = lambda a: godot_yaw_facing(-self.out_dir(a))     # -Z toward the rift
+        mid = n // 2
+        SK = X + "quat/Skull.glb"
+        if b == MOUTH:
+            # the last camp before the dark: a broken gate, crates, a lamp post at the lip
+            if i % 2 == 0:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + "quat/Wall_ArchRound_Broken.glb", inner(q, a, back), yaw=face_void(a), scale=1.6, col="box", dim=0.5)
+                for sgn in (-1, 1):
+                    R.xprop(X + "quat/Column_Round.glb", inner(q, a, back - 0.6) + np.array([-math.sin(a), 0, math.cos(a)]) * sgn * 4.2,
+                            yaw=face_void(a), scale=1.6, col="box", dim=0.5)
+            q, a = pts[1], angs[1]
+            for k in range(rng.randint(2, 4)):
+                R.xprop(X + rng.choice(["quat/Barrel.glb", "dungeon/barrel.glb", "ph/old_military_crate.glb", "quat/Crate.glb"]),
+                        inner(q, a, rng.uniform(1.0, 3.5)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.3), col="box", dim=0.42)
+            for q, a in list(zip(pts, angs))[1::3]:
+                R.xprop(X + "graveyard/lightpost-single.glb", inner(q, a, lip + 1.2), yaw=face_void(a) + math.pi, scale=2.6, dim=0.4)
+            if i % 3 == 1:
+                R.xprop(X + "ph/lantern_01.glb", inner(pts[-2], angs[-2], 1.0) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=2.2, dim=0.5)
+        elif b == OSSUARY:
+            # the dead were buried here once, before they were stood in rows
+            for q, a in list(zip(pts, angs))[::2]:
+                R.xprop(X + rng.choice(["graveyard/gravestone-round.glb", "graveyard/gravestone-cross.glb", "graveyard/gravestone-bevel.glb",
+                                        "graveyard/gravestone-broken.glb", "graveyard/gravestone-wide.glb", "graveyard/gravestone-decorative.glb"]),
+                        inner(q, a, rng.uniform(back - 3.0, back)) + jit(1.5), yaw=face_void(a) + rng.uniform(-0.4, 0.4), scale=2.4, dim=0.4)
+                if rng.random() < 0.5:
+                    R.xprop(X + rng.choice(["graveyard/coffin-old.glb", "graveyard/coffin.glb"]), inner(q, a, rng.uniform(0.5, back - 2.5)) + jit(2.0),
+                            yaw=rng.uniform(0, 6.28), scale=2.4, col="box", dim=0.4)
+            for q, a in list(zip(pts, angs))[1::2]:
+                R.xprop(X + rng.choice(["graveyard/urn-round.glb", "graveyard/urn-square.glb", "graveyard/candle-multiple.glb", "quat/Candles_1.glb", "quat/Candles_2.glb"]),
+                        inner(q, a, rng.uniform(1.0, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.6, 2.4), dim=0.42)
+            # a pile of skulls where the balcony narrows
+            q, a = pts[-2], angs[-2]
+            for k in range(rng.randint(4, 8)):
+                R.xprop(SK, inner(q, a, rng.uniform(0.5, back)) + jit(1.4), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4),
+                        rot_x=rng.uniform(-0.5, 0.5), dim=0.5)
+            if i % 4 == 2:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + "ph/gothic_statue.glb", inner(q, a, back), yaw=face_void(a), scale=1.7, col="box", dim=0.55, sink=0.02)
+            elif i % 4 == 0:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + "graveyard/pillar-square.glb", inner(q, a, back), yaw=face_void(a), scale=2.2, col="box", dim=0.4)
+                R.xprop(X + "ph/marble_bust_01.glb", inner(q, a, back), yaw=face_void(a), scale=1.6, up=1.15 * 2.2, dim=0.6)
+        elif b == FUNGAL:
+            # giant mushrooms, waist high to twice your height, in the wet ground near the wall
+            for q, a in list(zip(pts, angs))[1:-1]:
+                for k in range(rng.randint(1, 3)):
+                    R.xprop(X + rng.choice(["nature/mushroom_red.glb", "nature/mushroom_tan.glb", "nature/mushroom_redGroup.glb",
+                                            "nature/mushroom_tanGroup.glb", "nature/mushroom_redTall.glb", "nature/mushroom_tanTall.glb"]),
+                            inner(q, a, rng.uniform(0.5, back)) + jit(2.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(5.0, 13.0), dim=0.32)
+            if i % 2 == 0:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + rng.choice(["nature/log.glb", "nature/log_large.glb", "nature/stump_old.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
+                        yaw=rng.uniform(0, 6.28), scale=3.0, col="box", dim=0.35)
+        elif b == ROOTS:
+            # dead trees still stand where roots come through the roof
+            for q, a in list(zip(pts, angs))[1::2]:
+                R.xprop(X + "quat/DeadTree_%d.glb" % rng.randint(1, 3), inner(q, a, rng.uniform(back - 2.0, back)) + jit(1.5),
+                        yaw=rng.uniform(0, 6.28), scale=rng.uniform(2.0, 2.8), dim=0.5)
+            if i % 2 == 1:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + rng.choice(["nature/log_stack.glb", "nature/log_stackLarge.glb", "nature/stump_round.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
+                        yaw=rng.uniform(0, 6.28), scale=2.6, col="box", dim=0.35)
+        elif b == DROWNED:
+            # what the water left: barrels, a boat, a broken rail along the lip
+            for q, a in list(zip(pts, angs))[::2]:
+                for k in range(rng.randint(1, 3)):
+                    R.xprop(X + rng.choice(["quat/Barrel.glb", "dungeon/barrel.glb", "quat/Barrel.glb", "quat/Pot1_Broken.glb", "quat/Pot2_Broken.glb"]),
+                            inner(q, a, rng.uniform(0.5, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4), col="box", dim=0.42)
+            if i % 3 == 0:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + "nature/canoe.glb", inner(q, a, rng.uniform(0.0, back - 1.0)), yaw=rng.uniform(0, 6.28), scale=3.0, rot_x=rng.uniform(-0.15, 0.15), dim=0.35)
+            for q, a in list(zip(pts, angs))[1::3]:
+                R.xprop(X + "quat/Rail_Straight.glb", inner(q, a, lip + 0.6), yaw=face_void(a) + math.pi * 0.5, scale=1.5, dim=0.5)
+        elif b == VILLAGE:
+            # the temple the village was built around: arches, columns, the things people kept
+            q, a = pts[mid], angs[mid]
+            R.xprop(X + rng.choice(["quat/Wall_ArchRound.glb", "quat/Wall_ArchRound_Overgrown.glb", "quat/Wall_ArchRound_Broken.glb", "quat/Wall_Overgrown.glb", "quat/Wall_Double_Hole.glb"]),
+                    inner(q, a, back), yaw=face_void(a), scale=1.6, col="box", dim=0.5)
+            for j, (q, a) in enumerate(list(zip(pts, angs))[::2]):
+                R.xprop(X + ("quat/Column_Round.glb" if j % 2 == 0 else "quat/Column_Round_Short.glb"), inner(q, a, back - 1.0) + jit(0.6),
+                        yaw=face_void(a), scale=1.6, col="box", dim=0.5)
+            if i % 2 == 0 and n >= 5:
+                q, a = pts[1], angs[1]
+                R.xprop(X + "quat/Arch_Round.glb", inner(q, a, back - 3.0), yaw=face_void(a) + math.pi * 0.5, scale=1.5, dim=0.5)
+            for j, (q, a) in enumerate(list(zip(pts, angs))[1::2]):
+                if j % 3 == 0:
+                    R.xprop(X + rng.choice(["quat/Cart.glb", "quat/Bookcase_Full.glb", "quat/Bookcase_Empty.glb"]), inner(q, a, back - 0.5) + jit(0.5),
+                            yaw=face_void(a) + rng.uniform(-0.3, 0.3), scale=1.2, col="box", dim=0.5)
+                else:
+                    R.xprop(X + rng.choice(["quat/Chest.glb", "quat/Pot1.glb", "quat/Pot2.glb", "quat/Pot3.glb", "quat/Crate.glb"]),
+                            inner(q, a, rng.uniform(1.0, back - 1.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4), col="box", dim=0.5)
+            if i % 3 == 1:
+                q, a = pts[-2], angs[-2]
+                R.xprop(X + "quat/Torch.glb", inner(q, a, back + 0.2), yaw=face_void(a), scale=1.5, up=1.6, dim=0.6)
+                L["lights"].append({"pos": v3(inner(q, a, back - 0.8) + np.array([0, 2.6, 0])), "color": [1.0, 0.55, 0.2], "energy": 0.7, "range": 14.0})
+            if i % 4 == 3:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + rng.choice(["quat/Statue_Stag.glb", "quat/Statue_Fox.glb"]), inner(q, a, back), yaw=face_void(a), scale=1.3, col="box", dim=0.5)
+        elif b == CRYSTAL:
+            # boulders shed from the walls, half sunk in the floor
+            for q, a in list(zip(pts, angs))[1::2]:
+                R.xprop(X + "ph/namaqualand_boulder_0%d.glb" % rng.randint(2, 6), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
+                        yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.3, 2.2), col="hull", dim=0.5, sink=0.3, vis=150.0)
+        elif b == FOUNDRY:
+            # a mine: timber supports every few metres, carts, picks, the crates they never opened
+            for q, a in zip(pts, angs):
+                R.xprop(X + "dungeon/wood-support.glb", q, yaw=face_void(a) + math.pi * 0.5, scale=3.4, dim=0.42)
+            if i % 2 == 0:
+                q, a = pts[mid], angs[mid]
+                R.xprop(X + "quat/Cart.glb", inner(q, a, back - 1.5) + jit(0.5), yaw=face_void(a) + rng.uniform(-0.4, 0.4), scale=1.2, col="box", dim=0.5)
+            for q, a in list(zip(pts, angs))[1::2]:
+                R.xprop(X + rng.choice(["ph/old_military_crate.glb", "quat/Crate.glb", "dungeon/barrel.glb", "quat/Bricks.glb", "quat/Chest.glb"]),
+                        inner(q, a, rng.uniform(1.0, back - 1.5)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 2.4) if rng.random() < 0.3 else 1.2, col="box", dim=0.45)
+            if i % 3 == 0:
+                q, a = pts[-2], angs[-2]
+                R.xprop(X + "ph/picke_dirty_01.glb", inner(q, a, back) + jit(0.5), yaw=face_void(a), scale=1.6, rot_x=-0.35, dim=0.55)
+                R.xprop(X + "quat/BearTrap_Open.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=1.4, dim=0.5)
+            if i % 4 == 1:
+                q, a = pts[1], angs[1]
+                R.xprop(X + rng.choice(["quat/Arch_Gothic.glb", "quat/Support_Tall.glb", "quat/Column_Square.glb"]), inner(q, a, back - 1.5), yaw=face_void(a), scale=1.6, col="box", dim=0.5)
+                R.xprop(X + "dungeon/table.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=2.4, col="box", dim=0.42)
+                R.xprop(X + "dungeon/chair.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=2.4, dim=0.42)
+        elif b in (NEST, BURROWS):
+            q, a = pts[mid], angs[mid]
+            for k in range(rng.randint(3, 6)):
+                R.xprop(SK, inner(q, a, rng.uniform(0.5, back)) + jit(1.6), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4), rot_x=rng.uniform(-0.5, 0.5), dim=0.5)
+        # small photoscanned stones everywhere but the Mouth: they catch the lantern
+        if b != MOUTH:
+            for q, a in list(zip(pts, angs))[::3]:
+                R.xprop(X + rng.choice(["ph/namaqualand_stones_01.glb", "ph/namaqualand_rocks_01.glb", "ph/namaqualand_boulders_01.glb"]),
+                        inner(q, a, rng.uniform(-1.0, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.5, 3.0), dim=0.5, sink=0.15, vis=120.0)
+        # a colony of bats roosts under every fourth overhang in the wetter strata
+        if b in (OSSUARY, ROOTS, DROWNED, FUNGAL) and i % 4 == 2:
+            q, a = pts[mid], angs[mid]
+            L.setdefault("bats", []).append({"pos": v3(inner(q, a, back - 1.0) + np.array([0, 6.5, 0])), "n": rng.randint(12, 20), "r": 15.0})
+
+    def xterrace(self, T, land, path, pside, plen, biome, y_top, r, cxz):
+        """The kits on a plateau: boulder fields off the lamp line, and the biome's own furniture."""
+        rng, R = self.rng, self.R
+
+        def ok(q, m=8.0):
+            return T.side(q) >= m and self.rift.wall_r(self.rift.bearing(q), y_top) - float(np.hypot(*(q[[0, 2]] - cxz))) >= m
+
+        for j in range(int(plen / 9.0)):
+            q = land + path * rng.uniform(0.05, 0.95) + pside * rng.choice([-1, 1]) * rng.uniform(7.0, 32.0)
+            if not ok(q):
+                continue
+            R.xprop(X + rng.choice(["ph/boulder_01.glb", "ph/namaqualand_boulder_02.glb", "ph/namaqualand_boulder_03.glb", "ph/namaqualand_boulder_04.glb",
+                                    "ph/namaqualand_boulder_05.glb", "ph/namaqualand_boulder_06.glb"]),
+                    q, yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.6, 2.8), col="hull", dim=0.5, sink=0.28, vis=160.0)
+        for j in range(int(plen / 14.0)):
+            q = land + path * rng.uniform(0.05, 0.95) + pside * rng.uniform(-30.0, 30.0)
+            if not ok(q, 6.0):
+                continue
+            R.xprop(X + rng.choice(["ph/namaqualand_stones_01.glb", "ph/namaqualand_rocks_01.glb", "ph/namaqualand_boulders_01.glb"]),
+                    q, yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.5, 3.0), dim=0.5, sink=0.15, vis=120.0)
+        extra = {
+            OSSUARY: (["graveyard/gravestone-round.glb", "graveyard/gravestone-cross-large.glb", "graveyard/cross.glb", "graveyard/coffin-old.glb", "quat/Skull.glb"], 2.3, 10),
+            FUNGAL: (["nature/mushroom_redGroup.glb", "nature/mushroom_tanGroup.glb", "nature/mushroom_redTall.glb", "nature/mushroom_tan.glb"], 9.0, 14),
+            ROOTS: (["quat/DeadTree_1.glb", "quat/DeadTree_2.glb", "quat/DeadTree_3.glb", "nature/log_large.glb"], 2.4, 8),
+            DROWNED: (["quat/Barrel.glb", "quat/Crate.glb", "quat/Column_BridgeSupport.glb", "nature/canoe.glb"], 1.5, 8),
+            VILLAGE: (["quat/Column_Round.glb", "quat/Wall_Broken.glb", "quat/Wall_ArchRound_Broken.glb", "quat/Statue_Stag.glb", "quat/Cart.glb", "quat/Stairs.glb"], 1.6, 9),
+            CRYSTAL: (["ph/namaqualand_boulder_02.glb", "ph/namaqualand_boulder_05.glb"], 2.0, 5),
+            FOUNDRY: (["dungeon/wood-support.glb", "quat/Cart.glb", "quat/Support_Tall.glb", "quat/Bricks.glb", "ph/old_military_crate.glb", "quat/Column_Square.glb"], 1.6, 10),
+        }.get(biome)
+        if extra:
+            names, sc, cnt = extra
+            for j in range(cnt):
+                q = land + path * rng.uniform(0.08, 0.92) + pside * rng.choice([-1, 1]) * rng.uniform(5.0, 26.0)
+                if not ok(q, 6.0):
+                    continue
+                nm = rng.choice(names)
+                s_ = sc * (3.4 / 1.6 if nm.startswith("dungeon/") else 1.0) * rng.uniform(0.85, 1.15)
+                R.xprop(X + nm, q, yaw=rng.uniform(0, 6.28), scale=s_, col="box" if not nm.endswith("Skull.glb") else None, dim=0.45)
 
     def detail(self, s):
         rng, R, L = self.rng, self.R, self.L
@@ -448,13 +674,8 @@ class Builder:
                 R.prop(A + "Woman_Crouching.glb", on(inner(pts[j], angs[j], 0.5) + np.array([rng.uniform(-1, 1), 0, rng.uniform(-1, 1)])),
                        yaw=godot_yaw_facing(self.out_dir(angs[j])), scale=1.0)
         elif b == FUNGAL:
-            if i % 2 == 0 and s["length"] > 26:
-                sc_ = rng.uniform(1.5, 2.1)
-                self.husk(s, sc_, min(rng.randint(9, 13), int((s["length"] - 12) / (1.5 * sc_))))
+            pass
         elif b == ROOTS:
-            if i % 2 == 1 and s["length"] > 22:
-                sc_ = rng.uniform(1.4, 1.8)
-                self.husk(s, sc_, min(rng.randint(8, 11), int((s["length"] - 10) / (1.5 * sc_))))
             R.prop(A + "Tent.glb", on(inner(pts[mid], angs[mid], 2.5)), yaw=rng.uniform(0, 6.28))
             R.prop(A + "Fallen_Rope.glb", on(pts[mid]), yaw=rng.uniform(0, 6.28), scale=1.6)
         elif b == DROWNED:
@@ -480,6 +701,11 @@ class Builder:
             for q, a in list(zip(pts, angs))[::3]:
                 R.prop(A + "Tower_02.glb", [inner(q, a, 2.0)[0], y + 0.4, inner(q, a, 2.0)[2]], yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.9, 1.3), snap=False)
                 R.prop(A + "StoneSphere.glb", [q[0] + rng.uniform(-2, 2), y + 0.2, q[2] + rng.uniform(-2, 2)], yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.25, 0.45), snap=False)
+        # the dead centipedes: a full body length of husk on most long balconies below the Mouth
+        period = {OSSUARY: 3, FUNGAL: 2, ROOTS: 2, DROWNED: 3, VILLAGE: 3, CRYSTAL: 3, FOUNDRY: 3}.get(b)
+        if period and s["length"] >= 24 and i % period == 0:
+            sc_ = rng.uniform(1.3, 2.1)
+            self.husk(s, sc_, min(rng.randint(8, 13), int((s["length"] - 10) / (1.5 * sc_))))
 
     # ------------------------------------------------------------ leaving and re-entering the rift
 
@@ -599,7 +825,7 @@ def hard_routes(B):
             return False
         return True
 
-    wanted = [("underdark_relic_1", (OSSUARY, MOUTH)), ("underdark_relic_2", (DROWNED, ROOTS, FUNGAL, VILLAGE)), ("underdark_relic_3", (FOUNDRY, CRYSTAL, VILLAGE, DROWNED))]
+    wanted = [("underdark_relic_1", (OSSUARY, MOUTH)), ("underdark_relic_2", (DROWNED, ROOTS, FUNGAL, VILLAGE)), ("underdark_relic_3", (FOUNDRY, CRYSTAL))]
     used_S = []
     for (rid, biomes) in wanted:
         best = None
@@ -712,7 +938,7 @@ def megastructures(B):
     # ---- THE RIBS: something died here before the rift was dug around it
     found = None
     for n in (9, 7, 5):
-        for y0 in np.arange(-350.0, -600.0, -15.0):
+        for y0 in np.arange(-350.0 * Z, -600.0 * Z, -15.0):
             Hm = 125.0 if n == 9 else 105.0
             rr = float(rift.radius(y0 - Hm * 0.5))
             half = 0.5 * n * 11.5 / rr
@@ -839,7 +1065,7 @@ def build(seed):
     L["centipedes"].append({"id": "follower", "follower": True, "trigger": [v3(rift_info["pts"][len(rift_info["pts"]) // 2]), 12.0],
                             "spawn": [v3(m1.arrival + np.array([0, 3.0, 0]))]})
     lobe = B.under(17.0, switchback=False)
-    B.run(MOUTH, -330, chain_every=3, chain_n=(3, 4), len_rng=(38, 72), dy_rng=(14.0, 18.5), gap_chance=0.15, terraces=(-185,))
+    B.run(MOUTH, -330 * Z, chain_every=2, chain_n=(3, 5), len_rng=(34, 64), dy_rng=(15.0, 19.5), gap_chance=0.25, terraces=(-185 * Z,))
 
     # ---------------------------------------------------------------- 1 OSSUARY
     info = B.shelf(OSSUARY, 44, lobe_p=17.0, label="OSSUARY")
@@ -847,7 +1073,7 @@ def build(seed):
     R.text(info["pts"][1], 9.0, "Someone laid them here. Rows of them, standing, facing the dark. You do not look at the faces.")
     B.tour(info["pts"][1], info["pts"][-1], "Ossuary terraces")
     B.under(18.0)
-    B.run(OSSUARY, -540, chain_every=2, terraces=(-430,))
+    B.run(OSSUARY, -540 * Z, terraces=(-430 * Z,))
     # the Span: a broken rock bridge to the far wall, and the bell on its gallows
     info = B.shelf(OSSUARY, 30, lobe_p=17.0, p=14.0)
     R.text(info["pts"][-1], 8.0, "A bridge of fallen stone, broken in the middle. The far side is a hook's throw away.")
@@ -866,12 +1092,12 @@ def build(seed):
     bell_pos = g1 + np.array([0, -8.0, 0]) - B.out_dir(gal_a) * 1.0
     R.intents.append(("bell", dict(x=float(bell_pos[0]), z=float(bell_pos[2]), y=B.y, scale=2.6, hang=float(bell_pos[1]), ceiling=float(g1[1] - 3.5))))
     R.text(info["pts"][len(info["pts"]) // 2], 8.0, "A bell on a stone gallows, hung by the miners. Throw your hook at it. Anything hunting will come to the sound instead of to you.")
-    cz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-380, -480, -580, -680, -750)]
+    cz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-380 * Z, -480 * Z, -580 * Z, -680 * Z, -750 * Z)]
     L["stalkers"].append({"id": "stalker1", "home": v3(stalk_home), "zone": cz, "speed": 33.0})
     R.text(info["pts"][0], 8.0, "Something pale is coiled out there in the dark. It does not move while you watch it.")
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(info["pts"][-1]), 9.0], "spawn": [v3(B.spot(B.a + 0.5, B.y + 10, 3.0))]})
     B.under(17.0)
-    B.run(OSSUARY, -748.0, chain_every=2, terraces=(-640,))
+    B.run(OSSUARY, -748.0 * Z, terraces=(-640 * Z,))
     # the Lid seals the rift; the only way on is through the rock
     info = B.shelf(OSSUARY, 40, lobe_p=17.0, p=13.0, label="THE LID")
     R.text(info["pts"][1], 9.0, "Below you the rift is plugged, wall to wall, by one fallen slab the size of a town. There is no way through it. There are holes in the wall.")
@@ -908,11 +1134,11 @@ def build(seed):
     gate_k = "gate_kilns"
     kiln_i = 0
     lobe = B.under(10.0, switchback=False)
-    y_f_end = -1150.0
+    y_f_end = -1150.0 * Z
     step = 0
     fungal_shelf = False
     while B.y > y_f_end + 20:
-        if not fungal_shelf and B.y < -1000.0:
+        if not fungal_shelf and B.y < -1000.0 * Z:
             fungal_shelf = True
             info = B.shelf(FUNGAL, 22, p=12.0)
             lobe_t = B.terrace(FUNGAL)
@@ -990,7 +1216,7 @@ def build(seed):
     R.text(info["pts"][1], 9.0, "The water left. The mist stayed, and the falls still pour out of the walls into nothing. They will push you off if you let them.")
     B.tour(info["pts"][1], info["pts"][-1], "Drowned Galleries")
     B.under(17.0)
-    B.run(DROWNED, -1760, chain_every=2, terraces=(-1660,))
+    B.run(DROWNED, -1760 * Z, terraces=(-1660 * Z,))
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(B.spot(B.a, B.y, 5.0)), 10.0], "spawn": [v3(B.spot(B.a + B.dirn * 0.5, B.y + 8, 3.0))]})
     info = B.shelf(DROWNED, 36, lobe_p=17.0, p=13.0, label="PLATE HALL")
     B.enter_wall(0.5 * (info["a0"] + info["a1"]))
@@ -1010,7 +1236,7 @@ def build(seed):
     R.intents.append(("gate", dict(id=gate_p, kind="plates", need=0, tunnel=t, dist=10.0)))
     B.tunnel_to_rift(DROWNED, r=5.5, slope=0.1)
     B.landing(DROWNED, "BELOW THE PLATES", None)
-    sz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-1620, -1720, -1820, -1920)]
+    sz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-1620 * Z, -1720 * Z, -1820 * Z, -1920 * Z)]
     L["stalkers"].append({"id": "stalker2", "home": v3(B.spot(B.a + 2.0, B.y - 30, 12.0)), "zone": sz, "speed": 36.0})
     B.under(17.0)
     # THE PLUNGE: the longest stretch with no balcony at all
@@ -1018,9 +1244,9 @@ def build(seed):
     B.checkpoint(info["pts"][1], "THE PLUNGE", DROWNED)
     R.text(info["pts"][-1], 8.0, "The galleries end. For the next two hundred metres there is only wet wall and what your hook can find on it. Do not rush it.")
     B.tour(info["pts"][-1], info["pts"][-1] + np.array([0, -60, 0]) - B.out_dir(B.a) * 12, "The Plunge")
-    B.chain(DROWNED, 9, above=info["pts"][-1])
+    B.chain(DROWNED, 12, above=info["pts"][-1])
     B.under(18.0, switchback=False)
-    B.run(DROWNED, -1965, chain_every=2)
+    B.run(DROWNED, -1965 * Z, terraces=(-1890 * Z,))
 
     # ---------------------------------------------------------------- 5 SUNKEN VILLAGE
     info = B.shelf(VILLAGE, 50, lobe_p=18.0, p=14.0, label=BIOMES[VILLAGE])
@@ -1044,7 +1270,7 @@ def build(seed):
             pos = base + side * rng.uniform(-5, 5) + np.array([0, rng.uniform(-2.0, 2.0), 0])
             big = k % 5 == 0
             size = [16.0, 1.4, 16.0] if big else [rng.uniform(7.5, 10.5), 1.2, rng.uniform(7.5, 10.5)]
-            rigged = (k % 7 == 3)
+            rigged = (k % 5 == 3)
             L["platforms"].append({"id": R.next_id("pf"), "pos": v3(pos), "size": [round(v, 2) for v in size], "yaw": 0.0,
                                    "kind": "wood", "chain": 60.0, "drop": rigged})
             B.station(pos, "platform", VILLAGE)
@@ -1067,7 +1293,7 @@ def build(seed):
             L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(B.spot(B.a, B.y, 8.0)), 12.0], "spawn": [v3(B.spot(B.a + 0.4, B.y + 12, 3.0))]})
         info = B.landing(VILLAGE, "VILLAGE, FAR SIDE" if cross == 0 else "VILLAGE, LAST HOUSES", None, length=40.0)
         B.under(16.0)
-        B.run(VILLAGE, -2160 if cross == 0 else -2365, chain_every=2)
+        B.run(VILLAGE, (-2160 if cross == 0 else -2365) * Z, terraces=((-2080 * Z,) if cross == 0 else (-2290 * Z,)))
 
     # ---------------------------------------------------------------- 6 CRYSTAL VEINS
     info = B.shelf(CRYSTAL, 46, lobe_p=18.0, p=13.0, label=BIOMES[CRYSTAL])
@@ -1097,7 +1323,7 @@ def build(seed):
             L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(info["pts"][-1]), 10.0], "spawn": [v3(B.spot(B.a + 0.5, B.y + 10, 3.0))]})
         B.under(17.0)
         B.run(CRYSTAL, B.y - rng.uniform(40, 60), chain_every=2, chain_n=(3, 4))
-    B.run(CRYSTAL, -2765, chain_every=1)
+    B.run(CRYSTAL, -2765 * Z, chain_every=1, terraces=(-2620 * Z,))
 
     # ---------------------------------------------------------------- 7 THE FOUNDRY
     info = B.shelf(FOUNDRY, 50, lobe_p=18.0, p=14.0, label=BIOMES[FOUNDRY])
@@ -1108,7 +1334,7 @@ def build(seed):
     # iron gantries bolted to the wall: long, narrow, and the vents do not care that you are there
     foundry_shelf = False
     while B.y > LAKE_Y + 120:
-        if not foundry_shelf and B.y < -2890.0:
+        if not foundry_shelf and B.y < -2890.0 * Z:
             foundry_shelf = True
             info = B.shelf(FOUNDRY, 30)
             lobe_t = B.terrace(FOUNDRY)
@@ -1130,8 +1356,8 @@ def build(seed):
         B.a += B.dirn * (Lg / r)
         info = B.shelf(FOUNDRY, rng.uniform(26, 40), lobe_p=None)
         lobe = B.under(rng.uniform(16, 21))
-        if rng.random() < 0.75:
-            B.chain(FOUNDRY, rng.randint(3, 4), above=info["pts"][-1])
+        if rng.random() < 0.9:
+            B.chain(FOUNDRY, rng.randint(3, 5), above=info["pts"][-1])
             B.under(17.0, switchback=False)
     # THE CRUCIBLE: monkey bars clean across the rift, over the lake
     B.run(FOUNDRY, LAKE_Y + 22.0, chain_every=1)
@@ -1154,7 +1380,7 @@ def build(seed):
     B.tour(info["pts"][1], p0 + (p1 - p0) * 0.5, "The Crucible")
     for i in range(n_gap + 1):
         pos = p0 + d_bar * (lead + pitch * i) + np.array([0, rng.uniform(-1.0, 1.0), 0])
-        if i > 0 and i < n_gap and i % 4 == 0:
+        if i > 0 and i < n_gap and i % 5 == 0:
             # a small cage hung 9 m under this rod: lower yourself onto it, breathe, hook the same rod again
             L["platforms"].append({"id": R.next_id("pf"), "pos": v3(pos + np.array([0, -9.0, 0])), "size": [5.0, 0.9, 5.0], "yaw": 0.0,
                                    "kind": "iron", "chain": 40.0, "drop": False, "rest": True})
@@ -1163,7 +1389,7 @@ def build(seed):
             L["tour"].append({"pos": v3(pos + np.array([0, 0.3, 0])), "look": v3(pos + d_bar * 26.0), "label": "standing on rod 2 (should slide off)"})
             L["tour"].append({"pos": v3(pos + np.array([0, 2.0, 0]) - d_bar * 7.0), "look": v3(pos), "label": "rod 2 close", "air": True})
         R.intents.append(("bar", dict(idx=i + 1, pos=pos, yaw=yaw_bar, length=12.0, width=0.22, thick=0.22, lava_y=LAKE_Y,
-                                      sink=(i % 4 == 2))))
+                                      sink=(i % 3 == 2))))
     cx, cz = rift.center(LAKE_Y)
     L["lava"].append({"center": v3([float(cx), LAKE_Y, float(cz)]), "yaw": 0.0, "half_w": 215.0, "half_l": 215.0, "kill_top": 5.0})
     for k in range(10):
@@ -1186,6 +1412,10 @@ def build(seed):
     R.text(n0.arrival, 8.0, "This is where they come from.")
     t = R.tunnel(NEST, [(50, 10, -10)], r=6.5)
     n1 = R.chamber(NEST, 100, 52, 92, amp=(7.0, 3.2, 0.8), name="The Nest")
+    # the Follower comes out of the dark at the far side of the Nest, about 80 m behind the altar,
+    # so it reaches you while you run for the exit (from the tunnel mouth it was 250 m away and
+    # would have arrived after the level was over)
+    L["follower_finale"] = {"spawn": v3(n1.world_point(0.72 * n1.r[0] - 80.0, -0.25 * n1.r[2], n1.floor_y + 4.0))}
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(n1.arrival + n1.d * 14), 10.0], "spawn": [v3(t["points"][0] + np.array([0, 2.5, 0]))]})
     L["centipedes"].append({"id": R.next_id("cen"), "on": "idol",
                             "spawn": [v3(n1.world_point(0.2 * n1.r[0], 0.86 * n1.r[2], n1.floor_y + 5)),
@@ -1238,12 +1468,17 @@ def build(seed):
         p = np.array(st[k]["pos"])
         a_ = rift.bearing(p)
         L["tour"].append({"pos": v3(p + np.array([0, 1.8, 0])), "look": v3(p + np.array([0, 16.0, 0]) - B.out_dir(a_) * 9.0), "label": "up %s %d m" % (BIOMES[st[k]["biome"]], -p[1])})
-    for k in range(2, len(st), 23):
-        p = np.array(st[k]["pos"])
-        a_ = rift.bearing(p)
-        t_ = np.array([-math.sin(a_), 0, math.cos(a_)])
-        nxt = np.array(st[k + 1]["pos"]) if k + 1 < len(st) else p + t_ * 10
-        L["tour"].append({"pos": v3(p + np.array([0, 1.8, 0])), "look": v3(nxt + np.array([0, 1.2, 0])), "label": "along %s %d m" % (BIOMES[st[k]["biome"]], -p[1])})
+    seen_ = {}
+    for k in range(1, len(B.shelves), 2):
+        S_ = B.shelves[k]
+        if len(S_["pts"]) < 3 or S_["length"] < 12:
+            continue
+        seen_[S_["biome"]] = seen_.get(S_["biome"], 0) + 1
+        if seen_[S_["biome"]] > 6:
+            continue
+        p0_ = np.array(S_["pts"][0])
+        p1_ = np.array(S_["pts"][-1])
+        L["tour"].append({"pos": v3(p0_ + np.array([0, 1.8, 0])), "look": v3(p1_ + np.array([0, 0.3, 0])), "label": "along %s %d m" % (BIOMES[S_["biome"]], -p0_[1])})
 
     # every other centipede belongs to the stratum it was woken in, and stays there
     for c_ in L["centipedes"]:
@@ -1253,18 +1488,39 @@ def build(seed):
         for (t_, b_, bi_) in STRATA:
             if t_ >= yy_ > b_:
                 c_["territory"] = [t_, b_]
+                if bi_ in (OSSUARY, CRYSTAL, FOUNDRY, BURROWS, NEST) or int(c_["id"][-1]) % 2 == 1:
+                    c_["skin"] = "pale"
 
     # weather that sits in the world (the falling and rising kind follows the camera in game)
+    for k_, sp_ in enumerate(L["spars"]):
+        pa_, pb_ = np.array(sp_["a"]), np.array(sp_["b"])
+        mid_ = 0.5 * (pa_ + pb_)
+        tdir = (pb_ - pa_) / np.linalg.norm(pb_ - pa_)
+        side_ = np.cross(np.array([0, 1.0, 0]), tdir)
+        side_ = side_ / np.linalg.norm(side_)
+        L["tour"].append({"pos": v3(mid_ + side_ * 15.0 - np.array([0, 4.0, 0])), "look": v3(mid_ + tdir * 6.0), "label": "spar %d side" % (k_ + 1), "air": True})
+        L["tour"].append({"pos": v3(pa_ + tdir * 45.0 + side_ * 2.0 - np.array([0, 9.0, 0])), "look": v3(pa_ + tdir * 60.0 + np.array([0, 3.0, 0])), "label": "spar %d under" % (k_ + 1), "air": True})
+        L["tour"].append({"pos": v3(pa_ + tdir * 40.0 + np.array([0, 1.8, 0])), "look": v3(pa_ + tdir * 90.0 + np.array([0, 1.0, 0])), "label": "spar %d deck" % (k_ + 1)})
+    for k_, (hp_, ha_, hb_) in enumerate(getattr(B, "husk_marks", [])[:14]):
+        if ha_ is None:
+            eye_ = np.array(hp_) + np.array([0, 9.0, 0]) + np.array([14.0, 0, 6.0])
+        else:
+            eye_ = np.array(hp_) - B.out_dir(ha_) * 7.0 + np.array([0, 3.0, 0])
+        L["tour"].append({"pos": v3(eye_), "look": v3(np.array(hp_) + np.array([0, 1.2, 0])), "label": "husk %d %s" % (k_ + 1, BIOMES[hb_]), "air": True})
     L["mist"] = []
     for k_, s_ in enumerate(getattr(B, "shelves", [])):
         mid_ = s_["pts"][len(s_["pts"]) // 2]
         if s_["biome"] == FUNGAL and k_ % 2 == 0:
-            L["mist"].append({"pos": v3(mid_ + np.array([0, 2.5, 0])), "size": [min(s_["length"], 34.0), 8.0, 18.0], "density": 0.22, "color": [0.25, 0.8, 0.45]})
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 2.5, 0])), "size": [min(s_["length"], 34.0), 8.0, 18.0], "density": 0.05, "color": [0.25, 0.8, 0.45]})
         elif s_["biome"] == CRYSTAL and k_ % 3 == 0:
-            L["mist"].append({"pos": v3(mid_ + np.array([0, 1.0, 0])), "size": [min(s_["length"], 30.0), 4.0, 16.0], "density": 0.12, "color": [0.5, 0.7, 1.0]})
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 1.0, 0])), "size": [min(s_["length"], 30.0), 4.0, 16.0], "density": 0.03, "color": [0.5, 0.7, 1.0]})
+        elif s_["biome"] == OSSUARY and k_ % 4 == 0:
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 2.0, 0])), "size": [min(s_["length"], 30.0), 6.0, 16.0], "density": 0.035, "color": [0.75, 0.7, 0.55]})
+        elif s_["biome"] == FOUNDRY and k_ % 3 == 0:
+            L["mist"].append({"pos": v3(mid_ + np.array([0, 2.5, 0])), "size": [min(s_["length"], 30.0), 7.0, 16.0], "density": 0.04, "color": [0.55, 0.22, 0.08]})
     for st_ in L["stations"]:
         if st_["kind"] == "foothold" and st_["biome"] == DROWNED:
-            L["mist"].append({"pos": v3(np.array(st_["pos"]) + np.array([0, 1.5, 0])), "size": [20.0, 7.0, 20.0], "density": 0.3, "color": [0.55, 0.7, 0.8]})
+            L["mist"].append({"pos": v3(np.array(st_["pos"]) + np.array([0, 1.5, 0])), "size": [20.0, 7.0, 20.0], "density": 0.06, "color": [0.55, 0.7, 0.8]})
 
     L["lanterns"] = []
     hard_routes(B)

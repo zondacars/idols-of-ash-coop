@@ -1,0 +1,7 @@
+External models used by the Underdark map. All CC0 (public domain), no attribution required.
+
+graveyard/  Kenney Graveyard Kit 5.0   https://kenney.nl/assets/graveyard-kit   CC0
+dungeon/    Kenney Mini Dungeon        https://kenney.nl/assets/mini-dungeon    CC0
+nature/     Kenney Nature Kit          https://kenney.nl/assets/nature-kit      CC0
+ph/         Poly Haven models (1k)     https://polyhaven.com/models             CC0
+quat/       Quaternius Ultimate Modular Ruins  https://quaternius.com/packs/ultimatemodularruins.html  CC0

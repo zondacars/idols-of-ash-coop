@@ -43,6 +43,8 @@ var _look_now: Array = []
 var _weather: Weather
 var _rope_gold_t := 0.0
 var _dimmed: Dictionary = {}
+var _ext_tmpl: Dictionary = {}         # ext/<pack>/<file>.glb -> template Node3D (never in the tree)
+var _ext_placed := 0
 var _dress_mat: Array = []
 var _sky: DirectionalLight3D
 var _glow: DirectionalLight3D
@@ -72,6 +74,13 @@ var _hud: CanvasLayer
 var _hud_depth: Label
 var _run_start_ms := 0
 var _debug_tour := false
+var _debug_finale := false
+var _debug_bright := false
+var _bt_t := 0.0
+var _bt_i := -1
+var _dbg_fin_t := -4.0
+var _dbg_fin_started := false
+var _dbg_fin_shots := 0
 var _tour_i := -1
 var _tour_t := 0.0
 var _tour_shots: Array = []
@@ -95,14 +104,34 @@ var _bruise_told := false
 # The game pins ambient energy to 0.18 every frame (world_environment.gd), so the only way to
 # lift the dark is through the ambient COLOUR. And its colour-correction ramp clips to white at
 # about 0.28 raw and crushes below 0.06, so everything here lives between those two numbers.
-const AMB_GAIN := 2.3
+const AMB_GAIN := 1.9
 # light that falls down the rift from far above, per biome. It is what lets you see a balcony
 # 300 m away. Off inside the side caves.
-const SKYGLOW := [0.44, 0.4, 0.32, 0.33, 0.33, 0.33, 0.37, 0.14, 0.0, 0.0]
+const SKYGLOW := [0.25, 0.25, 0.25, 0.28, 0.3, 0.2, 0.25, 0.15, 0.0, 0.0]
+# The game's colour ramp crushes anything darker than about 0.12 after its 2x brightness, and its
+# sand and rock textures are dark to begin with, so floors in the ambient-only biomes rendered
+# black (measured: 76 to 95% of floor pixels under 4% brightness). Lift the albedo, not the lights.
+const WALL_LIFT := [1.15, 1.18, 1.27, 1.3, 1.42, 1.0, 1.15, 1.3, 1.0, 1.0, 1.0, 1.0]
+const FLOOR_LIFT := [1.36, 1.42, 1.57, 1.66, 1.78, 1.0, 1.39, 1.6, 1.0, 1.0, 1.0, 1.0]
 const VIEW_RANGE := 425.0        # the campaign shows 150-300 m of void; the rift needs the same
 const SOLID_RANGE := 150.0
+const BRIGHT := [0.08, 0.55, 1.0, 1.4]             # ambient and the glow down the rift (LANTERN: near black)
+const BRIGHT_ALB := [0.55, 0.85, 1.0, 1.2]          # how much of the rock brightness lift stays
+const BRIGHT_LANTERN := [true, false, false, false]
+const BRIGHT_NAMES := ["LANTERN (overly dark)", "DARK", "NORMAL", "BRIGHT"]
+const BRIGHT_FILE := "user://zonda_underdark.cfg"
+var _bright_i := 0
+var _lantern: Node3D
+var _lantern_light: OmniLight3D
+var _lantern_t := 0.0
+var _lantern_flash := 0.0          # a gust in the flame: bright for a moment, then settles
+var _lantern_next := 2.0
+const LIGHT_BUDGET := 64         # how many of our own omni lights may be on at once
+const LIGHT_FAR := 175.0         # and none of them past this, however few are on
 var _mat_lava: ShaderMaterial
 var _lights: Array = []
+var _managed_lights: Array = []
+var _light_tick := 0.0
 var _nest_lights: Array = []
 var _music: MusicDirector
 var _idol_taken := false
@@ -121,7 +150,25 @@ func _ready() -> void:
 	_lethal_fall = float(L.get("rules", {}).get("lethal_fall_speed", 38.0))
 	_bruise_from = float(L.get("rules", {}).get("bruise_from", 19.0))
 	_bruise_per = float(L.get("rules", {}).get("bruise_per", 4.5))
+	_load_brightness()
 	_debug_tour = FileAccess.file_exists(DIR + "tour.flag")
+	_debug_finale = FileAccess.file_exists(DIR + "finale.flag")
+	_debug_bright = FileAccess.file_exists(DIR + "bright.flag")
+	if _debug_tour:
+		# tour.flag may hold label prefixes ("along,husk") to shoot only those stops
+		var flt := FileAccess.get_file_as_string(DIR + "tour.flag").strip_edges()
+		if flt != "" and flt != "1":
+			var keep: Array = []
+			var pref := flt.split(",")
+			var idx := 0
+			for s0 in L.get("tour", []):
+				for pf in pref:
+					if str(s0.get("label", "")).begins_with(pf.strip_edges()):
+						s0["orig"] = idx
+						keep.append(s0)
+						break
+				idx += 1
+			L["tour"] = keep
 	_build_materials()
 	_setup_environment()
 	_load_cave()
@@ -155,21 +202,24 @@ func _ready() -> void:
 	_place_spars()
 	_place_falls()
 	_place_ghosts()
+	_place_bats()
 	_place_bars()
 	_place_lava()
 	_place_ambience()
 	_place_dying_lights()
 	_place_altar()
 	_build_hud()
+	call_deferred("_ensure_lantern")
 	_music = MusicDirector.new()
 	add_child(_music)
 	_run_start_ms = Time.get_ticks_msec()
 	# creatures after a frame so Game.centipedes is clean for this scene
 	call_deferred("_place_creatures")
+	_collect_lights()
 	CoopSync.nametags_through_walls = true
 	CoopSync.map_request_sync()
 	call_deferred("_reapply_events")
-	print("[Underdark] built in %d ms: %d chunks, %d props" % [Time.get_ticks_msec() - t0, _chunks.size(), L.get("props", []).size()])
+	print("[Underdark] built in %d ms: %d chunks, %d props, %d external models" % [Time.get_ticks_msec() - t0, _chunks.size(), L.get("props", []).size(), _ext_placed])
 
 
 # ------------------------------------------------------------------ world
@@ -179,13 +229,11 @@ func _build_materials() -> void:
 	var wall4: StandardMaterial3D = load("res://Art/Textures/Wall_04.tres")
 	for i in LOOKS.size():
 		var w: StandardMaterial3D = rock.duplicate()
-		w.albedo_color = LOOKS[i][0]
 		w.vertex_color_use_as_albedo = true
 		w.cull_mode = BaseMaterial3D.CULL_DISABLED
 		w.uv1_scale = Vector3(0.11, 0.11, 0.11)
 		_wall_mat.append(w)
 		var fl: StandardMaterial3D = wall4.duplicate()
-		fl.albedo_color = LOOKS[i][1]
 		fl.vertex_color_use_as_albedo = true
 		fl.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fl.metallic = 0.0                       # the game's sand is half metal, which reads as black with no sky to reflect
@@ -193,9 +241,9 @@ func _build_materials() -> void:
 		_floor_mat.append(fl)
 		var dm: StandardMaterial3D = w.duplicate()
 		dm.vertex_color_use_as_albedo = false
-		dm.albedo_color = Color(LOOKS[i][0].r * 0.62, LOOKS[i][0].g * 0.62, LOOKS[i][0].b * 0.62)
 		dm.cull_mode = BaseMaterial3D.CULL_BACK
 		_dress_mat.append(dm)
+	_apply_material_brightness()
 	_mat_bar = StandardMaterial3D.new()
 	_mat_bar.albedo_color = Color(0.32, 0.12, 0.08)
 	_mat_bar.metallic = 0.2
@@ -328,12 +376,19 @@ func _place_props() -> void:
 	var cache: Dictionary = {}
 	for p in L.get("props", []):
 		var path: String = p["scene"]
-		if not cache.has(path):
-			cache[path] = load(path)
-		var ps: PackedScene = cache[path]
-		if ps == null:
-			continue
-		var n: Node3D = ps.instantiate()
+		var n: Node3D
+		if path.begins_with("ext/"):
+			n = _ext_instance(path, float(p.get("dim", 0.45)))
+			if n == null:
+				continue
+			_ext_placed += 1
+		else:
+			if not cache.has(path):
+				cache[path] = load(path)
+			var ps: PackedScene = cache[path]
+			if ps == null:
+				continue
+			n = ps.instantiate()
 		n.position = _v(p["pos"])
 		var r: Array = p["rot"]
 		n.rotation = Vector3(r[0], r[1], r[2])
@@ -352,9 +407,17 @@ func _place_props() -> void:
 			body.rotation = n.rotation
 			body.position = n.position
 			add_child(body)
+		if str(p.get("col", "")) == "hull":
+			_ext_hull(n, path, float(p["scale"]))
 		var ruin: bool = path.contains("Village_") or path.contains("Ghost_Tower") or path.contains("Building_") or path.contains("Roof_") or path.contains("Door.glb") or path.contains("Tower_0")
-		if path.contains("Plant_"):
+		if path.begins_with("ext/"):
+			pass                          # already dimmed to its own factor
+		elif path.contains("Plant_"):
 			_dim_materials(n, 0.3)
+		elif path.contains("Corpse_0"):
+			_dim_materials(n, 0.5)
+		elif path.contains("Stone_0") or path.contains("Rock_0"):
+			_dim_materials(n, 0.55)         # pale kit stones clip to white in the game's post
 		elif path.contains("Woman") or path.contains("Player_Corpse") or path.contains("Rope") or path.contains("WaterWheel") or path.contains("StoneSphere"):
 			_dim_materials(n, 0.4)
 		for mi in n.find_children("*", "GeometryInstance3D", true, false):
@@ -362,6 +425,124 @@ func _place_props() -> void:
 			(mi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			if ruin:
 				(mi as GeometryInstance3D).material_override = _mat_ruin
+
+
+# ------------------------------------------------------------------ external models
+# The kits under maps/underdark/ext/ were never imported by the editor, so load() cannot see
+# them. GLTFDocument reads the .glb at runtime; each file becomes one template whose mesh
+# instances are copied (with their transforms) per placement.
+
+func _ext_template(rel: String) -> Node3D:
+	if _ext_tmpl.has(rel):
+		return _ext_tmpl[rel]
+	_ext_tmpl[rel] = null
+	var bytes := FileAccess.get_file_as_bytes(DIR + rel)
+	if bytes.is_empty():
+		push_warning("[Underdark] ext model missing: " + rel)
+		return null
+	var doc := GLTFDocument.new()
+	var state := GLTFState.new()
+	if doc.append_from_buffer(bytes, "", state) != OK:
+		push_warning("[Underdark] ext model unreadable: " + rel)
+		return null
+	var root: Node = doc.generate_scene(state)
+	if root == null:
+		return null
+	var tmpl := Node3D.new()
+	var found: Array = []
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		found.append([mi, (mi as MeshInstance3D).mesh])
+	for imi in root.find_children("*", "ImporterMeshInstance3D", true, false):
+		var im: ImporterMesh = imi.mesh
+		if im != null:
+			found.append([imi, im.get_mesh()])
+	for pair in found:
+		var src: Node3D = pair[0]
+		var mesh: Mesh = pair[1]
+		if mesh == null:
+			continue
+		var xf := Transform3D.IDENTITY
+		var node: Node = src
+		while node != null and node != root:
+			if node is Node3D:
+				xf = (node as Node3D).transform * xf
+			node = node.get_parent()
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.transform = xf
+		# every surface gets its own material copy so the dim never touches the shared resource
+		for si in mesh.get_surface_count():
+			var m: Material = mesh.surface_get_material(si)
+			if m is StandardMaterial3D:
+				mi.set_surface_override_material(si, (m as StandardMaterial3D).duplicate())
+		tmpl.add_child(mi)
+	root.free()
+	_ext_tmpl[rel] = tmpl
+	return tmpl
+
+
+func _ext_instance(rel: String, dim: float) -> Node3D:
+	var key := "%s|%.2f" % [rel, dim]
+	if _ext_tmpl.has(key):
+		return null if _ext_tmpl[key] == null else (_ext_tmpl[key] as Node3D).duplicate()
+	var t := _ext_template(rel)
+	if t == null:
+		_ext_tmpl[key] = null
+		return null
+	var n: Node3D = t.duplicate()
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		for si in m.mesh.get_surface_count():
+			var src: Material = m.get_active_material(si)
+			if src is StandardMaterial3D:
+				var d: StandardMaterial3D = src.duplicate()
+				d.albedo_color = Color(d.albedo_color.r * dim, d.albedo_color.g * dim, d.albedo_color.b * dim, d.albedo_color.a)
+				d.emission_enabled = false
+				m.set_surface_override_material(si, d)
+	_ext_tmpl[key] = n
+	return n.duplicate()
+
+
+func _ext_hull(n: Node3D, rel: String, sc: float) -> void:
+	# a convex hull per mesh, so boulders can be stood on and hooked like rock
+	var t := _ext_template(rel)
+	if t == null:
+		return
+	if not t.has_meta("hulls"):
+		var hulls: Array = []
+		for c in t.get_children():
+			if c is MeshInstance3D and (c as MeshInstance3D).mesh != null:
+				var shp: ConvexPolygonShape3D = (c as MeshInstance3D).mesh.create_convex_shape(true, true)
+				if shp != null and shp.points.size() >= 4:
+					hulls.append([shp.points, (c as Node3D).transform])
+		t.set_meta("hulls", hulls)
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.physics_material_override = load("res://physics_materials/stone.tres")
+	for h in t.get_meta("hulls"):
+		var pts: PackedVector3Array = h[0]
+		var xf: Transform3D = h[1]
+		var out := PackedVector3Array()
+		out.resize(pts.size())
+		for i in pts.size():
+			out[i] = (xf * pts[i]) * sc
+		var shape := ConvexPolygonShape3D.new()
+		shape.points = out
+		var cs := CollisionShape3D.new()
+		cs.shape = shape
+		body.add_child(cs)
+	body.position = n.position
+	body.rotation = n.rotation
+	add_child(body)
+
+
+func _place_bats() -> void:
+	for b in L.get("bats", []):
+		var s := BatSwarm.new()
+		s.setup(b)
+		add_child(s)
 
 
 func _dim_materials(n: Node, k: float) -> void:
@@ -459,6 +640,7 @@ func _add_light(pos: Vector3, color: Color, energy: float, rng: float) -> OmniLi
 	o.distance_fade_enabled = true
 	o.distance_fade_begin = 380.0 if rng >= 60.0 else 140.0      # landmark lights carry across the rift
 	o.distance_fade_length = 40.0
+	o.light_volumetric_fog_energy = 0.0     # the fog pass costs per light; the haze reads without them
 	add_child(o)
 	_lights.append(o)
 	return o
@@ -883,6 +1065,10 @@ func _finale(by: String) -> void:
 	if _gates.has("gate_exit"):
 		_gates["gate_exit"].latched = true
 		_gates["gate_exit"].open()
+	# a few seconds later the thing that followed you all the way down comes through the tunnel
+	await get_tree().create_timer(3.5).timeout
+	if is_inside_tree():
+		_follower_join_finale()
 
 
 # ------------------------------------------------------------------ the crucible
@@ -901,7 +1087,7 @@ func _place_lanterns() -> void:
 			m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			m.albedo_texture = _soft_dot()
-			m.albedo_color = Color(col.r * 0.3, col.g * 0.3, col.b * 0.3, 0.9)
+			m.albedo_color = Color(col.r * 0.14, col.g * 0.14, col.b * 0.14, 0.85)
 			m.disable_fog = true
 			mats[key] = m
 		var mi := MeshInstance3D.new()
@@ -910,15 +1096,75 @@ func _place_lanterns() -> void:
 		mi.position = _v(ln["pos"])
 		mi.scale = Vector3.ONE * float(ln["s"])
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visibility_range_end = 520.0
+		mi.visibility_range_end = 330.0
 		add_child(mi)
+
+
+func _collect_lights() -> void:
+	# after the game has gathered the level's lights (it does that a frame or two in), take
+	# ours back off its list so its very permissive rule stops switching them on behind us
+	await get_tree().create_timer(1.5).timeout
+	if not is_inside_tree():
+		return
+	_managed_lights.clear()
+	for n in find_children("*", "OmniLight3D", true, false):
+		var l: OmniLight3D = n
+		if l.has_meta("zonda_keep"):
+			continue
+		l.set_meta("zonda_managed", true)
+		l.light_volumetric_fog_energy = 0.0
+		_managed_lights.append(l)
+	var we = IOAWorldEnvironment.current
+	if we != null:
+		var keep: Array[OmniLight3D] = []
+		for l2 in we._all_omnilights_in_level:
+			if is_instance_valid(l2) and not l2.has_meta("zonda_managed"):
+				keep.append(l2)
+		we._all_omnilights_in_level = keep
+	print("[Underdark] light budget: %d of ours managed, %d left to the game" % [_managed_lights.size(), we._all_omnilights_in_level.size() if we else -1])
+
+
+func _update_light_budget(delta: float) -> void:
+	if _managed_lights.is_empty():
+		return
+	_light_tick -= delta
+	if _light_tick > 0.0:
+		return
+	_light_tick = 0.3
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var eye := cam.global_position
+	var alive: Array = []
+	var ranked: Array = []
+	for l in _managed_lights:
+		if not is_instance_valid(l):
+			continue
+		alive.append(l)
+		var d: float = eye.distance_to(l.global_position)
+		if d > LIGHT_FAR:
+			if l.visible:
+				l.visible = false
+			continue
+		ranked.append([d, l])
+	_managed_lights = alive
+	ranked.sort_custom(func(a, b): return a[0] < b[0])
+	for i in ranked.size():
+		var want: bool = i < LIGHT_BUDGET
+		var lt: OmniLight3D = ranked[i][1]
+		if lt.visible != want:
+			lt.visible = want
 
 
 func _place_mist() -> void:
 	# Clouds that sit in the world: spore banks on the Fungal balconies, mist over the Drowned
 	# footholds, cold haze in the Crystal Veins. They need the game's volumetric fog (on by
 	# default in its video settings); with it off they simply are not there.
+	var mist_i := -1
 	for m in L.get("mist", []):
+		mist_i += 1
+		if mist_i % 2 == 1:
+			continue
 		var fv := FogVolume.new()
 		fv.shape = RenderingServer.FOG_VOLUME_SHAPE_ELLIPSOID
 		var sz: Array = m["size"]
@@ -946,6 +1192,7 @@ func _place_platforms() -> void:
 func _place_spars() -> void:
 	for d in L.get("spars", []):
 		var sp := CrystalSpar.new()
+		sp.dot_tex = _soft_dot()
 		sp.setup(_v(d["a"]), _v(d["b"]), float(d["r"]))
 		add_child(sp)
 
@@ -964,7 +1211,7 @@ func _place_ghosts() -> void:
 	var gm := StandardMaterial3D.new()
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	gm.albedo_color = Color(0.1, 0.14, 0.16, 0.3)
+	gm.albedo_color = Color(0.06, 0.085, 0.1, 0.3)
 	gm.cull_mode = BaseMaterial3D.CULL_BACK
 	for g in L.get("ghosts", []):
 		var gh := Ghost.new()
@@ -1083,6 +1330,8 @@ func _release_centipedes(id: String) -> void:
 				n.set_meta("zonda_territory", [float(t[0]), float(t[1])])
 				_territorial.append([n, float(t[0]), float(t[1]), _v(sp)])
 			add_child(n)
+			if c.has("skin") and n.has_method("coop_apply_skin"):
+				n.coop_apply_skin(1 if str(c["skin"]) == "pale" else 0)
 			if bool(c.get("follower", false)):
 				_follower = n
 	if id == "follower":
@@ -1105,7 +1354,7 @@ func _update_centipedes(delta: float) -> void:
 	var players: Array = CoopSync.alive_player_nodes()
 	if players.is_empty():
 		return
-	if _spawned_cents.has("follower"):
+	if _spawned_cents.has("follower") and not _idol_taken:
 		var need := false
 		if not is_instance_valid(_follower) or not _follower.is_inside_tree():
 			need = true
@@ -1138,6 +1387,18 @@ func _update_centipedes(delta: float) -> void:
 		var n2 = e[0]
 		if not is_instance_valid(n2) or not n2.is_inside_tree():
 			continue
+		var near_any := 1e9
+		for p in players:
+			near_any = minf(near_any, (p as Node3D).global_position.distance_to(n2.global_position))
+		var awake: bool = near_any < 190.0
+		if awake == (n2.process_mode == Node.PROCESS_MODE_DISABLED):
+			n2.process_mode = Node.PROCESS_MODE_INHERIT if awake else Node.PROCESS_MODE_DISABLED
+			n2.visible = awake
+		if not awake:
+			var isf = n2.get("idle_sfx")
+			if is_instance_valid(isf) and isf.playing:
+				isf.stop()
+			continue
 		var target = CoopSync.target_player_for(n2)
 		if target == null and (n2._current_state is centipede_state_hunting or n2._current_state is centipede_state_attack):
 			n2.set_state(centipede_state_wander.new())
@@ -1149,6 +1410,64 @@ func _update_centipedes(delta: float) -> void:
 			if near > 120.0:
 				n2.global_position = e[3]
 				n2.set_state(centipede_state_wander.new())
+
+
+func _follower_join_finale() -> void:
+	CoopSync.show_banner("It was behind you the whole way.", 5.0)
+	if not CoopSync.map_is_authority():
+		return
+	var fin = L.get("follower_finale", null)
+	if fin == null:
+		return
+	if is_instance_valid(_follower):
+		Game.centipedes.erase(_follower)
+		_follower.queue_free()
+	var ps: PackedScene = load(CENTIPEDE)
+	var n: Node3D = ps.instantiate()
+	n.position = _v(fin["spawn"])
+	add_child(n)
+	_follower = n
+	_spawned_cents["follower"] = true
+	_follow_best = 1e9
+	_follow_stall = 0.0
+	print("[Underdark] the follower joined the finale at %s" % str(n.position))
+
+
+func _update_debug_finale(delta: float) -> void:
+	# developer test (maps/underdark/finale.flag): stands at the altar, takes the idol, and
+	# reports where the Follower comes from and how fast it closes.
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	_dbg_fin_t += delta
+	if not _dbg_fin_started:
+		if _dbg_fin_t > 0.0:
+			_dbg_fin_started = true
+			c.prevent_player_death = true
+			c.health = c.healthMax
+			c.velocity = Vector3.ZERO
+			c.teleport_to_location(_altar_pos + Vector3(-9.0, 1.6, 0.0))
+			c.PlayerCamera.set_camera_rotation(Vector3(0.0, deg_to_rad(-90.0), 0.0))
+			_finale("test")
+		return
+	if int(_dbg_fin_t * 2.0) != int((_dbg_fin_t - delta) * 2.0) and int(_dbg_fin_t) % 2 == 0:
+		var fd := -1.0
+		var st := "none"
+		if is_instance_valid(_follower):
+			fd = _follower.global_position.distance_to(c.global_position)
+			st = str(_follower._current_state.get_script().get_global_name()) if _follower._current_state else "?"
+		print("[Underdark] finale t=%.0f follower_dist=%.0f state=%s player=%s" % [_dbg_fin_t, fd, st, str(c.global_position)])
+	for at in [8.0, 14.0, 22.0, 32.0]:
+		if _dbg_fin_t >= at and _dbg_fin_shots < int(at) and (_dbg_fin_t - delta) < at:
+			_dbg_fin_shots = int(at)
+			var img := get_viewport().get_texture().get_image()
+			if img:
+				if img.get_width() > 960:
+					img.resize(640, 360, Image.INTERPOLATE_BILINEAR)
+				img.save_png("user://underdark_finale_%02d.png" % int(at))
+	if _dbg_fin_t > 40.0:
+		_debug_finale = false
+		print("[Underdark] finale test done")
 
 
 func _follower_spot(players: Array):
@@ -1407,6 +1726,8 @@ func _process(delta: float) -> void:
 			if is_instance_valid(e[0]):
 				e[0].light_energy = e[1] * 0.7 * k
 	_update_lod(delta)
+	_update_light_budget(delta)
+	_update_lantern(delta)
 	_update_environment(delta)
 	_update_plates(delta)
 	_update_centipedes(delta)
@@ -1418,6 +1739,10 @@ func _process(delta: float) -> void:
 	_check_lava()
 	if _debug_tour:
 		_update_tour(delta)
+	if _debug_finale:
+		_update_debug_finale(delta)
+	if _debug_bright:
+		_update_bright_test(delta)
 
 
 func _update_lod(delta: float) -> void:
@@ -1496,7 +1821,7 @@ func _update_sky_lights(delta: float, p: Vector3) -> void:
 	if _sky == null or _glow == null or _look_now.is_empty():
 		return
 	var inside := _in_zone(p)
-	var want: float = 0.0 if inside else float(SKYGLOW[clampi(_cur_biome, 0, SKYGLOW.size() - 1)])
+	var want: float = 0.0 if inside else float(SKYGLOW[clampi(_cur_biome, 0, SKYGLOW.size() - 1)]) * _bright()
 	_sky.light_energy = lerpf(_sky.light_energy, want, minf(1.0, delta * (8.0 if _debug_tour else 0.7)))
 	var a: Color = _look_now[2]
 	var m := maxf(0.001, maxf(a.r, maxf(a.g, a.b)))
@@ -1506,10 +1831,152 @@ func _update_sky_lights(delta: float, p: Vector3) -> void:
 	_glow.light_energy = lerpf(_glow.light_energy, 0.42 * heat * heat, minf(1.0, delta * (8.0 if _debug_tour else 0.7)))
 
 
+func _bright() -> float:
+	return float(BRIGHT[clampi(_bright_i, 0, BRIGHT.size() - 1)])
+
+
+func _load_brightness() -> void:
+	var cf := ConfigFile.new()
+	if cf.load(BRIGHT_FILE) == OK:
+		_bright_i = clampi(int(cf.get_value("look", "bright", 2)), 0, BRIGHT.size() - 1)
+
+
+func _apply_material_brightness() -> void:
+	var f := float(BRIGHT_ALB[clampi(_bright_i, 0, BRIGHT_ALB.size() - 1)])
+	for i in mini(LOOKS.size(), _wall_mat.size()):
+		var wl: float = WALL_LIFT[i] * f
+		(_wall_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][0].r * wl, LOOKS[i][0].g * wl, LOOKS[i][0].b * wl)
+		var fll: float = FLOOR_LIFT[i] * f
+		(_floor_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][1].r * fll, LOOKS[i][1].g * fll, LOOKS[i][1].b * fll)
+	for i in _dress_mat.size():
+		var dl: float = 0.62 * (0.7 + 0.3 * f)
+		(_dress_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][0].r * dl, LOOKS[i][0].g * dl, LOOKS[i][0].b * dl)
+
+
+# ------------------------------------------------------------------ the hand lantern
+
+func _ensure_lantern() -> void:
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	var cam = c.get("Camera")                                  # the Camera3D itself: the view space
+	if not (cam is Node3D):
+		return
+	if is_instance_valid(_lantern):
+		if _lantern.get_parent() == cam:
+			return
+		_lantern.queue_free()
+	var pair: Array = preload("res://mods-unpacked/zonda-CoopSync/remote_player.gd").build_cage_lantern(_soft_dot(), 6.0, 20.0, true)
+	_lantern = pair[0]
+	_lantern_light = pair[1]
+	_lantern.position = Vector3(0.52, -0.33, -0.62)           # lower right of the view, out of the way
+	cam.add_child(_lantern)
+	var on: bool = BRIGHT_LANTERN[clampi(_bright_i, 0, BRIGHT_LANTERN.size() - 1)]
+	_lantern.visible = on
+	CoopSync.lantern_on = on
+	await get_tree().create_timer(2.5).timeout
+	if is_inside_tree():
+		CoopSync.show_banner("Underdark light: %s   (F5 to change)" % BRIGHT_NAMES[_bright_i], 4.0)
+
+
+func _update_lantern(delta: float) -> void:
+	if not is_instance_valid(_lantern) or not _lantern.is_inside_tree():
+		if Engine.get_process_frames() % 60 == 0:
+			_ensure_lantern()
+		return
+	var on: bool = BRIGHT_LANTERN[clampi(_bright_i, 0, BRIGHT_LANTERN.size() - 1)]
+	if _lantern.visible != on:
+		_lantern.visible = on
+	CoopSync.lantern_on = on
+	if not on:
+		return
+	_lantern_t += delta
+	_lantern_next -= delta
+	if _lantern_next <= 0.0:
+		_lantern_flash = randf_range(0.9, 1.8)
+		_lantern_next = randf_range(1.2, 4.0)
+	_lantern_flash = maxf(0.0, _lantern_flash - delta * 3.0)
+	var base := 6.0 * (0.8 + 0.12 * sin(_lantern_t * 8.3) + 0.06 * sin(_lantern_t * 21.0))
+	_lantern_light.light_energy = base * (1.0 + _lantern_flash)
+	_lantern_light.omni_range = 20.0 + 7.0 * _lantern_flash
+	var c = Game.climber
+	var moving: float = 0.0
+	if is_instance_valid(c):
+		moving = clampf(Vector2(c.velocity.x, c.velocity.z).length() / 5.0, 0.0, 1.0)
+	_lantern.position = Vector3(0.52, -0.33 + sin(_lantern_t * 6.0) * 0.006 * (0.3 + moving), -0.62)
+	_lantern.rotation.z = sin(_lantern_t * 2.4) * 0.05 * (0.4 + moving)
+
+
+func _set_bright(i: int, save: bool = true) -> void:
+	_bright_i = clampi(i, 0, BRIGHT.size() - 1)
+	if save:
+		var cf := ConfigFile.new()
+		cf.load(BRIGHT_FILE)
+		cf.set_value("look", "bright", _bright_i)
+		cf.save(BRIGHT_FILE)
+	_apply_material_brightness()
+	if not _look_now.is_empty():
+		_apply_look(_look_now)
+	_ensure_lantern()
+	CoopSync.show_banner("Underdark light: %s   (F5 to change, F4 for graphics)" % BRIGHT_NAMES[_bright_i], 3.0)
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F5:
+		_set_bright((_bright_i + 1) % BRIGHT.size())
+		get_viewport().set_input_as_handled()
+
+
+func _update_bright_test(delta: float) -> void:
+	# developer only (maps/underdark/bright.flag): stand on a balcony, step through every F5
+	# mode three seconds apart, and save user://underdark_bright_N.png for each
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	_bt_t += delta
+	if _bt_i < 0:
+		if _bt_t < 2.5:
+			return
+		var st: Array = L.get("stations", [])
+		if st.is_empty():
+			_debug_bright = false
+			return
+		var k := mini(30, st.size() - 2)
+		var p := _v(st[k]["pos"]) + Vector3(0, 1.0, 0)
+		var q := _v(st[k + 1]["pos"])
+		c.prevent_player_death = true
+		c.set_climber_state(c.defaultClimberState)
+		c.velocity = Vector3.ZERO
+		c.teleport_to_location(p)
+		var dir := (q - p).normalized()
+		c.PlayerCamera.set_camera_rotation(Vector3(asin(clampf(dir.y, -1.0, 1.0)), atan2(-dir.x, -dir.z), 0.0))
+		c.global_rotation = Vector3.ZERO
+		_bt_i = 0
+		_bt_t = 0.0
+		_set_bright(0, false)
+		return
+	if _bt_t < 3.0:
+		return
+	var img := get_viewport().get_texture().get_image()
+	if img:
+		if img.get_width() > 960:
+			img.resize(640, 360, Image.INTERPOLATE_BILINEAR)
+		img.save_png("user://underdark_bright_%d.png" % _bt_i)
+	print("[Underdark] bright test shot %d %s lantern=%s" % [_bt_i, BRIGHT_NAMES[_bt_i], str(is_instance_valid(_lantern) and _lantern.visible)])
+	_bt_i += 1
+	_bt_t = 0.0
+	if _bt_i >= BRIGHT.size():
+		_debug_bright = false
+		print("[Underdark] bright test done")
+		return
+	_set_bright(_bt_i, false)
+
+
 func _apply_look(k: Array) -> void:
 	_look_now = k.duplicate()
 	var amb: Color = k[2]
-	_env.ambient_light_color = Color(amb.r * AMB_GAIN, amb.g * AMB_GAIN, amb.b * AMB_GAIN)
+	var g := AMB_GAIN * _bright()
+	_env.ambient_light_color = Color(amb.r * g, amb.g * g, amb.b * g)
 	_env.fog_light_color = k[3]
 	_env.fog_density = k[4]
 	_env.background_color = k[3]
@@ -1622,8 +2089,8 @@ func _update_tour(delta: float) -> void:
 		if img:
 			if img.get_width() > 960:
 				img.resize(640, 360, Image.INTERPOLATE_BILINEAR)
-			img.save_png("user://underdark_tour_%02d.png" % _tour_i)
-		print("[Underdark] tour fps %d at stop %d y=%.1f floor=%s" % [Engine.get_frames_per_second(), _tour_i, c.global_position.y, str(c.is_on_floor())])
+			img.save_png("user://underdark_tour_%02d.png" % int(stops[_tour_i].get("orig", _tour_i)))
+		print("[Underdark] tour fps %d at stop %d y=%.1f floor=%s" % [Engine.get_frames_per_second(), int(stops[_tour_i].get("orig", _tour_i)), c.global_position.y, str(c.is_on_floor())])
 	if _tour_t > 0.0:
 		return
 	_tour_i += 1
@@ -1685,8 +2152,12 @@ class Weather extends Node3D:
 		8: ["red_motes"], 9: [],
 	}
 
+	const PARTICLES_ON := false      # tiny bright particles read as sparkles on screen: off by default
+
 	func build(dot_tex: Texture2D) -> void:
 		dot = dot_tex
+		if not PARTICLES_ON:
+			return
 		#      name            n    life  box                   gravity                 v0    v1   size   colour                          streak  y_off spread
 		_add("dust",          210, 8.0, Vector3(26, 14, 26), Vector3(0.05, -0.08, 0.0), 0.05, 0.3, 0.15, Color(0.30, 0.27, 0.21, 0.5), false, 0.0, 180.0)
 		_add("dust_violet",   210, 8.0, Vector3(26, 14, 26), Vector3(-0.04, -0.1, 0.03), 0.05, 0.3, 0.15, Color(0.24, 0.2, 0.32, 0.5), false, 0.0, 180.0)
@@ -2536,18 +3007,30 @@ class Stalker extends Node3D:
 		return false
 
 	func _seen_by(p: Vector3, cam: Camera3D) -> bool:
+		# test its knees, its back and its head: any one of them in the clear counts as seen
 		if cam == null:
 			return false
-		var to := p - cam.global_position
-		var d := to.length()
-		if d > 90.0:
-			return false
-		var fwd := -cam.global_basis.z
-		if fwd.dot(to / maxf(d, 0.01)) < 0.55:
-			return false
 		var space := get_world_3d().direct_space_state
-		var ray := PhysicsRayQueryParameters3D.create(cam.global_position, p, 1)
-		return space.intersect_ray(ray).is_empty()
+		var fwd := -cam.global_basis.z
+		for off in [0.7, 1.7, 2.6]:
+			var q: Vector3 = p + Vector3.UP * off
+			var to := q - cam.global_position
+			var d := to.length()
+			if d > 120.0:
+				continue
+			if fwd.dot(to / maxf(d, 0.01)) < 0.45:
+				continue
+			if space.intersect_ray(PhysicsRayQueryParameters3D.create(cam.global_position, q, 1)).is_empty():
+				return true
+		return false
+
+
+	func _floor_under(p: Vector3) -> float:
+		var space := get_world_3d().direct_space_state
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 8.0, p + Vector3.DOWN * 45.0, 1))
+		if hit.is_empty():
+			return -1e9
+		return float(hit["position"].y)
 
 	func _process(delta: float) -> void:
 		bite_cd = maxf(0.0, bite_cd - delta)
@@ -2577,10 +3060,10 @@ class Stalker extends Node3D:
 		if not seen:
 			for rp in CoopSync.remote_players():
 				var fwd: Vector3 = -rp.global_basis.z
-				var to: Vector3 = body.position - rp.global_position
+				var to: Vector3 = (body.position + Vector3.UP * 1.7) - rp.global_position
 				var d: float = to.length()
-				if d < 70.0 and fwd.dot(to / maxf(d, 0.01)) > 0.6:
-					var ray := PhysicsRayQueryParameters3D.create(rp.global_position + Vector3.UP * 1.5, body.position, 1)
+				if d < 100.0 and fwd.dot(to / maxf(d, 0.01)) > 0.5:
+					var ray := PhysicsRayQueryParameters3D.create(rp.global_position + Vector3.UP * 1.5, body.position + Vector3.UP * 1.7, 1)
 					if get_world_3d().direct_space_state.intersect_ray(ray).is_empty():
 						seen = true
 						break
@@ -2598,11 +3081,28 @@ class Stalker extends Node3D:
 			hidden_t += delta
 			var step := speed * delta
 			var to := target_pos - body.position
-			if to.length() > step:
-				body.position += to.normalized() * step
+			to.y = 0.0                                   # it walks the rock, it does not fly
+			var flat := to.length()
+			var want := body.position
+			if flat > step:
+				want += to / flat * step
+			elif flat > 0.01:
+				want += to
+			var space := get_world_3d().direct_space_state
+			if flat > 0.01:
+				var chest := Vector3.UP * 1.4
+				if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, want + chest, 1)).is_empty():
+					body.position = want
+				else:
+					var up_over := want + Vector3.UP * 2.2   # a ledge in the way: try stepping onto it
+					if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, up_over + chest, 1)).is_empty():
+						body.position = up_over
+			var fy := _floor_under(body.position)
+			if fy < -1e8:
+				body.position = home                     # over the void: back to its den
 			else:
-				body.position = target_pos
-			if to.length() > 0.5:
+				body.position.y = lerpf(body.position.y, fy + 0.5, clampf(delta * 6.0, 0.0, 1.0))
+			if flat > 0.5:
 				body.rotation.y = atan2(-to.x, -to.z)
 		if nearest and nd < 2.6 and bite_cd <= 0.0 and retreat <= 0.0:
 			bite_cd = 3.0
@@ -2962,6 +3462,79 @@ class Bell extends Node3D:
 		CoopSync.show_banner("The bell rings. Everything hunting turns toward it.", 5.0)
 
 
+class BatSwarm extends Node3D:
+	# A colony roosting under an overhang. When the local player comes near it bursts out,
+	# wheels once around the balcony and is gone up the rift. Each player sees their own.
+	var bats: Array = []
+	var vel: Array = []
+	var live := false
+	var t := 0.0
+	var trig := 15.0
+	var n_bats := 14
+	var mesh: ArrayMesh
+	var mat: StandardMaterial3D
+
+	func setup(d: Dictionary) -> void:
+		position = Vector3(d["pos"][0], d["pos"][1], d["pos"][2])
+		trig = float(d.get("r", 15.0))
+		n_bats = int(d.get("n", 14))
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(0.012, 0.01, 0.012)
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		var st := SurfaceTool.new()
+		st.begin(Mesh.PRIMITIVE_TRIANGLES)
+		st.add_vertex(Vector3(0, 0, 0.08))
+		st.add_vertex(Vector3(-0.3, 0.05, -0.1))
+		st.add_vertex(Vector3(-0.1, 0, -0.08))
+		st.add_vertex(Vector3(0, 0, 0.08))
+		st.add_vertex(Vector3(0.1, 0, -0.08))
+		st.add_vertex(Vector3(0.3, 0.05, -0.1))
+		mesh = st.commit()
+
+	func _process(delta: float) -> void:
+		var c = Game.climber
+		if not is_instance_valid(c) or not c.is_inside_tree():
+			return
+		if not live:
+			if Engine.get_process_frames() % 10 != 0:
+				return
+			if (c.global_position - global_position).length() < trig:
+				_burst()
+			return
+		t += delta
+		for i in bats.size():
+			var b: MeshInstance3D = bats[i]
+			var v: Vector3 = vel[i]
+			var to_home: Vector3 = global_position - b.global_position
+			to_home.y = 0.0
+			var wheel := Vector3(-to_home.z, 0.0, to_home.x).normalized() * 6.5
+			var up := Vector3(0, clampf(t - 2.2, 0.0, 1.0) * 8.0, 0)
+			var want: Vector3 = wheel + to_home.normalized() * 1.5 + up + Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 5.0
+			v = v.lerp(want, delta * 3.0)
+			vel[i] = v
+			b.global_position += v * delta
+			var flat := Vector3(v.x, 0.0, v.z)
+			if flat.length() > 0.2:
+				b.look_at(b.global_position + flat.normalized() * 2.0, Vector3.UP)
+			b.scale = Vector3(1.0 + 0.55 * sin(t * 27.0 + i * 1.7), 1.0, 1.0)
+		if t > 7.5:
+			queue_free()
+
+	func _burst() -> void:
+		live = true
+		for i in n_bats:
+			var b := MeshInstance3D.new()
+			b.mesh = mesh
+			b.material_override = mat
+			b.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			b.position = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 2.0
+			add_child(b)
+			bats.append(b)
+			vel.append(Vector3(randf() - 0.5, randf() * 0.4, randf() - 0.5) * 9.0)
+		U.sfx("res://sfx/soundsnap/1022742.audio-HUMAN_VOCAL_Female_4_Breath_Medium_01.wav", -14.0, Vector3.ZERO, self, 26.0)
+
+
 class Ghost extends Node3D:
 	# One of the climbers who came before. Stands where the way continues, watching it.
 	# Fades when the local player comes close; each player sees their own.
@@ -2971,10 +3544,12 @@ class Ghost extends Node3D:
 	var mat: StandardMaterial3D
 	var fading := false
 	var t := 0.0
+	var base_a := 0.3
 
 	func setup(ps: PackedScene, base: StandardMaterial3D, pos: Vector3, yaw: float) -> void:
 		body = ps.instantiate()
 		mat = base.duplicate()
+		base_a = base.albedo_color.a
 		for mi in body.find_children("*", "GeometryInstance3D", true, false):
 			(mi as GeometryInstance3D).material_override = mat
 			(mi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -2994,6 +3569,10 @@ class Ghost extends Node3D:
 			return
 		body.position.y = sin(t * 0.8) * 0.04
 		var c = Game.climber
+		if is_instance_valid(c) and c.is_inside_tree():
+			# thinner the closer you get: seen from afar it is a figure, from close up almost nothing
+			var dd: float = (c.global_position - global_position).length()
+			mat.albedo_color.a = base_a * clampf((dd - 2.5) / 12.0, 0.1, 1.0)
 		if is_instance_valid(c) and c.is_inside_tree() and (c.global_position - global_position).length() < 10.0:
 			fading = true
 			var p := U.sfx(WHISPERS[randi() % WHISPERS.size()], -8.0, Vector3(0, 1.5, 0), self, 22.0)
@@ -3104,6 +3683,20 @@ class CrystalSpar extends Node3D:
 	var down: Vector3
 	var t_axis: Vector3
 	var length := 0.0
+	var dot_tex: Texture2D
+
+	static func _h(i: int, k: int) -> float:
+		# deterministic 0..1 noise: every player must grow the same crystal
+		return fposmod(sin(float(i) * 12.9898 + float(k) * 78.233) * 43758.5453, 1.0)
+
+	func _tri(st: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, outward: Vector3, col: Color) -> void:
+		var nrm := (p1 - p0).cross(p2 - p0).normalized()
+		if nrm.dot(outward) < 0.0:
+			nrm = -nrm
+		for q in [p0, p1, p2]:
+			st.set_color(col)
+			st.set_normal(nrm)
+			st.add_vertex(q)
 
 	func setup(pa: Vector3, pb: Vector3, radius: float) -> void:
 		a = pa
@@ -3115,29 +3708,114 @@ class CrystalSpar extends Node3D:
 		var v := t_axis.cross(u).normalized()       # the deck normal, mostly up
 		down = t_axis if t_axis.y < 0.0 else -t_axis
 		var half_h := r * 0.866
+		var n := maxi(10, int(length / 7.0))
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		var ring: Array = []
-		for k in 6:
-			var ang := deg_to_rad(60.0 * k)          # vertices at 0,60,..: a flat face sits on top
-			ring.append(u * cos(ang) * r + v * sin(ang) * r - v * half_h)
-		for k in 6:
-			var p0: Vector3 = ring[k]
-			var p1: Vector3 = ring[(k + 1) % 6]
-			var nrm := ((p0 + p1) * 0.5 + v * half_h).normalized()
-			for tri in [[a + p0, a + p1, b + p1], [a + p0, b + p1, b + p0]]:
-				for q in tri:
-					st.set_normal(nrm)
-					st.add_vertex(q)
+		# rings along the crystal. The two vertices of the flat top face stay exactly where they were
+		# (the collision box is that face); every other vertex wanders, so the sides are irregular,
+		# faceted and pinched toward the tips.
+		var rings: Array = []
+		for i in n + 1:
+			var f := float(i) / float(n)
+			var centre := a + t_axis * length * f
+			var e := minf(f, 1.0 - f) * length
+			var taper := clampf(0.42 + e / 9.0, 0.42, 1.0)
+			var ring: Array = []
+			for k in 6:
+				var ang := deg_to_rad(60.0 * k)
+				var off := u * cos(ang) * r + v * sin(ang) * r
+				if k != 1 and k != 2:
+					off *= (1.0 + 0.2 * (_h(i, k) - 0.5) * 2.0) * taper
+				ring.append(centre + off - v * half_h)
+			rings.append(ring)
+		for i in n:
+			var band := 0.7 + 0.6 * _h(i / 2, 7)
+			for k in 6:
+				var k1 := (k + 1) % 6
+				var mid := deg_to_rad(60.0 * k + 30.0)
+				var outward := u * cos(mid) + v * sin(mid)
+				var col := Color(0.12, 0.24, 0.42) * (band * (0.8 + 0.4 * _h(i, k + 20)))
+				if k == 1:
+					col = Color(0.2, 0.3, 0.42) * (0.85 + 0.3 * _h(i, 30))      # the worn deck
+				col.a = 1.0
+				var p00: Vector3 = rings[i][k]
+				var p01: Vector3 = rings[i][k1]
+				var p10: Vector3 = rings[i + 1][k]
+				var p11: Vector3 = rings[i + 1][k1]
+				_tri(st, p00, p01, p11, outward, col)
+				_tri(st, p00, p11, p10, outward, col)
+		for end_i in [0, n]:                          # close the ends
+			var c0: Vector3 = a if end_i == 0 else b
+			c0 -= v * half_h
+			for k in 6:
+				_tri(st, c0, rings[end_i][k], rings[end_i][(k + 1) % 6], (-t_axis if end_i == 0 else t_axis), Color(0.1, 0.2, 0.36))
+		var m := StandardMaterial3D.new()
+		m.vertex_color_use_as_albedo = true
+		m.albedo_color = Color(1.5, 1.5, 1.5)
+		m.roughness = 0.35
+		m.emission_enabled = true
+		m.emission = Color(0.1, 0.21, 0.42)
+		m.emission_energy_multiplier = 0.9
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		var mi := MeshInstance3D.new()
 		mi.mesh = st.commit()
-		var m := StandardMaterial3D.new()
-		m.albedo_color = Color(0.12, 0.24, 0.42)
-		m.roughness = 0.25
-		m.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mi.material_override = m
 		mi.visibility_range_end = 420.0
 		add_child(mi)
+		# crystals grown out of the sides and hanging from the underside. Never on the deck.
+		var sp := SurfaceTool.new()
+		sp.begin(Mesh.PRIMITIVE_TRIANGLES)
+		var tips: Array = []
+		var count := int(length / 5.0)
+		for s in count:
+			var f2 := (float(s) + 0.5) / float(count) + (_h(s, 91) - 0.5) * 0.06
+			var base_t := a + t_axis * length * clampf(f2, 0.03, 0.97)
+			for c in 2 + int(_h(s, 92) * 2.0):
+				var th := deg_to_rad(150.0 + _h(s * 7 + c, 93) * 240.0)
+				var outdir := u * cos(th) + v * sin(th)
+				var under := clampf(-sin(th), 0.0, 1.0)
+				var ln := lerpf(2.2, 5.5, _h(s, c + 94)) + under * lerpf(2.0, 8.5, _h(s + 3, c + 95))
+				var rb := ln * lerpf(0.13, 0.22, _h(s, c + 96))
+				var dir := (outdir + t_axis * (_h(s, c + 97) - 0.5) * 0.9 + Vector3.DOWN * 0.35 * under).normalized()
+				var base := base_t - v * half_h + outdir * r * 0.9
+				var q1 := dir.cross(t_axis).normalized()
+				if q1.length_squared() < 0.01:
+					q1 = dir.cross(u).normalized()
+				var q2 := dir.cross(q1).normalized()
+				var apex := base + dir * ln
+				var col2 := Color(0.16, 0.3, 0.5) * (0.8 + 0.4 * _h(s, c + 98))
+				col2.a = 1.0
+				for k in 6:
+					var pa0 := base + (q1 * cos(TAU * k / 6.0) + q2 * sin(TAU * k / 6.0)) * rb
+					var pa1 := base + (q1 * cos(TAU * (k + 1) / 6.0) + q2 * sin(TAU * (k + 1) / 6.0)) * rb
+					_tri(sp, pa0, pa1, apex, (pa0 + pa1) * 0.5 - base, col2)
+				if (s + c) % 4 == 0:
+					tips.append(apex)
+		var mi2 := MeshInstance3D.new()
+		mi2.mesh = sp.commit()
+		mi2.material_override = m
+		mi2.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi2.visibility_range_end = 300.0
+		add_child(mi2)
+		# a faint glint at some of the tips, so the crystal reads from across the rift
+		if dot_tex != null:
+			var gm := StandardMaterial3D.new()
+			gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			gm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+			gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			gm.albedo_texture = dot_tex
+			gm.albedo_color = Color(0.1, 0.18, 0.34, 0.85)
+			gm.disable_fog = true
+			var qm := QuadMesh.new()
+			qm.size = Vector2(1.6, 1.6)
+			for tp in tips:
+				var g := MeshInstance3D.new()
+				g.mesh = qm
+				g.material_override = gm
+				g.position = tp
+				g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				g.visibility_range_end = 260.0
+				add_child(g)
 		# collision: a box whose top is the prism's top face (the deck line a-b)
 		var body := StaticBody3D.new()
 		body.collision_layer = 1

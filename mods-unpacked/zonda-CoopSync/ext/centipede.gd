@@ -9,6 +9,7 @@ const CoopSnapBuffer := preload("res://mods-unpacked/zonda-CoopSync/snap_buffer.
 const COOP_INTERP_DELAY_MS := 60
 
 var coop_puppet := false
+var coop_skin := 0               # 0 = the game's centipede, 1 = pale blind crawler (Underdark)
 var _coop_buf = CoopSnapBuffer.new()
 var _coop_attacking := false
 var _coop_dummy_attack = null
@@ -68,8 +69,37 @@ func set_state(state) -> void:
 	super(state)
 
 
+func coop_apply_skin(k: int) -> void:
+	coop_skin = k
+	set_meta("zonda_skin", k)
+	call_deferred("_coop_paint_skin")
+
+
+func _coop_paint_skin() -> void:
+	if coop_skin == 0 or not is_inside_tree():
+		return
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.7, 0.66, 0.56)       # bone. Never saw the sun.
+	m.metallic = 0.05
+	m.roughness = 0.85
+	for mi in find_children("*", "MeshInstance3D", true, false):
+		var mesh_i := mi as MeshInstance3D
+		if mesh_i.mesh == null:
+			continue
+		for si in mesh_i.mesh.get_surface_count():
+			mesh_i.set_surface_override_material(si, m)
+
+
+func on_bio_lum_state_updated() -> void:
+	super()
+	if coop_skin != 0:
+		_coop_paint_skin()
+
+
 func coop_apply_state(s: Array, sender_t: int) -> void:
 	visible = true
+	if s.size() > 4 and int(s[4]) != coop_skin:
+		coop_apply_skin(int(s[4]))
 	var p: Vector3 = s[0]
 	var q: Quaternion = s[1]
 	var att: bool = s[2]
