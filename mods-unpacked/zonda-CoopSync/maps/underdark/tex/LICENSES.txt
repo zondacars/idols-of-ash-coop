@@ -1,0 +1,18 @@
+Rock textures for ULTRA HD (Underdark map). All from ambientCG, licence CC0 1.0 (public domain),
+https://docs.ambientcg.com/license/ , no attribution required. Downloaded 2026-09-23 as 1K-JPG and
+reduced to 512x512 JPG: albedo (desaturated a little so the map's own biome colour leads, contrast
+compressed and scaled to the mean linear luminance noted in manifest.json), normal (the pack's NormalGL
+map, OpenGL/+Y convention as Godot expects, renormalised after resize), roughness (Drowned x0.55 for wet
+stone, Crystal x0.9). 'tint' in manifest.json is a gentle colour cast with luminance 1.0, so
+albedo * tint keeps the mean luminance listed.
+
+0 THE MOUTH          mouth/     ambientCG Rock049    https://ambientcg.com/view?id=Rock049  CC0
+1 OSSUARY            ossuary/   ambientCG Rock026    https://ambientcg.com/view?id=Rock026  CC0
+2 FUNGAL HOLLOW      fungal/    ambientCG Rock063    https://ambientcg.com/view?id=Rock063  CC0
+3 ROOTWORKS          roots/     ambientCG Rock053    https://ambientcg.com/view?id=Rock053  CC0
+4 DROWNED GALLERIES  drowned/   ambientCG Rock037    https://ambientcg.com/view?id=Rock037  CC0
+5 SUNKEN VILLAGE     village/   ambientCG Rock064    https://ambientcg.com/view?id=Rock064  CC0
+6 CRYSTAL VEINS      crystal/   ambientCG Rock034    https://ambientcg.com/view?id=Rock034  CC0
+7 THE FOUNDRY        foundry/   ambientCG Rock033    https://ambientcg.com/view?id=Rock033  CC0
+8 THE NEST           nest/      ambientCG Rock029    https://ambientcg.com/view?id=Rock029  CC0
+9 THE BURROWS        burrows/   ambientCG Ground048  https://ambientcg.com/view?id=Ground048  CC0

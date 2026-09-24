@@ -1,6 +1,10 @@
 extends Node3D
 
 const SnapBuffer := preload("res://mods-unpacked/zonda-CoopSync/snap_buffer.gd")
+const VoiceEmitterScript := preload("res://mods-unpacked/zonda-CoopSync/voice_emitter.gd")
+# the voice comes from the knight's head (the camera sits 0.77 m above this node, 1.55 m above
+# the feet); the speaking mark is placed above the name tag by the emitter itself
+const VOICE_POS := Vector3(0.0, 0.77, 0.0)
 
 const MODEL_PATH := "res://Art/Knight.glb"
 const FEET_OFFSET := -0.78
@@ -26,6 +30,15 @@ var last_update_ms := 0
 var alive := true
 var has_ground := false
 var last_ground_pos: Vector3
+# where this teammate's camera looks (radians, interpolated like the body): yaw from "cam",
+# pitch from "cp" (0 from a build that does not send it). View direction:
+# Basis.from_euler(Vector3(cam_pitch, cam_yaw, 0.0)) * Vector3.FORWARD
+var cam_yaw: float = 0.0
+var cam_pitch: float = 0.0
+const EYE_HEIGHT := 0.77                          # camera above this node (feet are 0.78 below it)
+var oil_pct: int = -1                             # this teammate's lamp oil % (-1 = no oil on this map)
+var _voice: Node3D = null                         # voice_emitter.gd (v4.9 voice chat)
+var _voice_on_cam := false
 
 var _buf = SnapBuffer.new()
 var _label: Label3D
@@ -43,6 +56,10 @@ var _cos := -1
 var _crown: MeshInstance3D = null
 var _lantern: Node3D = null
 var _lantern_light: OmniLight3D = null
+var _lantern_spot: SpotLight3D = null
+var _lan_t := 0.0
+var _lan_flash := 0.0
+var _lan_next := 2.0
 
 
 static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, shadows: bool) -> Array:
@@ -139,12 +156,52 @@ static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, sh
 	light.omni_attenuation = 1.0
 	light.shadow_enabled = shadows
 	light.shadow_bias = 0.08
-	light.light_volumetric_fog_energy = 1.0
+	light.light_volumetric_fog_energy = 0.3          # 1.0 turned nearby mist into a white blob
 	light.set_meta("zonda_keep", true)
+	if shadows:
+		# your own lantern: 2 shadow passes instead of the cube's 6, every frame
+		light.omni_shadow_mode = OmniLight3D.SHADOW_DUAL_PARABOLOID
+	else:
+		_make_cheap_light(light)
 	light.position = Vector3(0, -0.02, 0)
 	root.add_child(light)
-	return [root, light]
+	# the beam: what the flame throws ahead of whoever carries it (-Z of the holder)
+	var spot := SpotLight3D.new()
+	spot.light_color = Color(1.0, 0.76, 0.48)
+	spot.light_energy = energy * 1.15
+	spot.spot_range = rng * 1.7
+	spot.spot_angle = 52.0
+	spot.spot_angle_attenuation = 0.7
+	spot.spot_attenuation = 0.9
+	spot.shadow_enabled = shadows
+	spot.shadow_bias = 0.06
+	spot.light_volumetric_fog_energy = 0.3
+	spot.set_meta("zonda_keep", true)
+	if not shadows:
+		_make_cheap_light(spot)
+	spot.name = "Spot"
+	spot.position = Vector3(0, 0.0, -0.05)
+	root.add_child(spot)
+	return [root, light, spot]
+
+
+static func _make_cheap_light(l: Light3D) -> void:
+	# a teammate's light: never shadowed (gfx.gd skips "zonda_no_shadow", so F4 cannot turn
+	# shadows on for it) and faded out far away, where it lights nothing you can see
+	l.shadow_enabled = false
+	l.set_meta("zonda_no_shadow", true)
+	l.distance_fade_enabled = true
+	l.distance_fade_begin = 90.0
+	l.distance_fade_length = 20.0
+
+
 const GOLD := Color(1.0, 0.8, 0.32)
+const IDOL_PATH := "res://Art/Praxthos.glb"
+const IDOL_SCALE := 0.35
+const IDOL_HAND := Vector3(-0.36, 0.95, -0.2)     # the knight's left hand (the lantern is in the right)
+const IDOL_HALF_H := 0.32                         # the model is 1.83 m tall at scale 1
+var _idol: Node3D = null
+var _idol_failed := false                         # the model would not load: never retry per packet
 
 
 func _ready() -> void:
@@ -166,6 +223,7 @@ func _ready() -> void:
 	light.light_energy = 0.8
 	light.omni_range = 7.0
 	light.position = Vector3(0, 0.6, 0)
+	_make_cheap_light(light)
 	add_child(light)
 
 	_rope_material_base = load("res://materials/rope_line_material.tres")
@@ -181,8 +239,8 @@ func _ready() -> void:
 		claw.top_level = true
 		claw.visible = false
 		var claw_light := claw.get_node_or_null("OmniLight3D")
-		if claw_light:
-			claw_light.shadow_enabled = false
+		if claw_light is Light3D:
+			_make_cheap_light(claw_light as Light3D)
 		add_child(claw)
 		claw_node = claw
 
@@ -205,6 +263,46 @@ func _ready() -> void:
 	_sfx_rope_loop.autoplay = false
 	add_child(_sfx_rope_loop)
 
+	_ensure_voice()
+
+
+func _ensure_voice() -> void:
+	if is_instance_valid(_voice):
+		return
+	_voice = VoiceEmitterScript.new()
+	_voice.name = "Voice"
+	_voice.position = VOICE_POS
+	add_child(_voice)
+
+
+func voice_push(pcm: PackedFloat32Array) -> void:
+	# coop_sync hands every decoded voice chunk of this teammate here
+	if not is_inside_tree():
+		return
+	_ensure_voice()
+	_voice.push(pcm)
+
+
+func voice_talking() -> bool:
+	return is_instance_valid(_voice) and bool(_voice.get("talking"))
+
+
+func _update_voice_pos() -> void:
+	# a teammate who is spectating (dead, no respawns) still talks: their voice leaves the
+	# body and is heard close and clear, like a voice in your head, instead of from a corpse
+	# that may be far below. Alive again, it goes back to the knight's head.
+	if not is_instance_valid(_voice):
+		return
+	if alive:
+		if _voice_on_cam:
+			_voice_on_cam = false
+			_voice.position = VOICE_POS
+		return
+	var cam: Camera3D = get_viewport().get_camera_3d() if is_inside_tree() else null
+	if cam != null and cam.is_inside_tree():
+		_voice.global_position = cam.global_position + Vector3.UP * 0.1
+		_voice_on_cam = true
+
 
 func _build_body() -> void:
 	var ps = load(MODEL_PATH)
@@ -221,6 +319,68 @@ func _build_body() -> void:
 	_body.position = Vector3(0, FEET_OFFSET, 0)
 	_body.rotation.y = PI
 	add_child(_body)
+	# a knight lit by a lantern at arm's length clips to white in the game's post pass, so its
+	# armour is dimmed, and its own lamp does not light its own body (render layer 2)
+	for mi in _body.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		m.layers = 1 << 1
+		if m.mesh == null:
+			continue
+		for si in m.mesh.get_surface_count():
+			var src: Material = m.get_active_material(si)
+			if src is StandardMaterial3D:
+				var d: StandardMaterial3D = src.duplicate()
+				d.albedo_color = Color(d.albedo_color.r * 0.5, d.albedo_color.g * 0.5, d.albedo_color.b * 0.5, d.albedo_color.a)
+				m.set_surface_override_material(si, d)
+
+
+func _build_idol() -> void:
+	# the teammate who took the idol carries a small copy of it in the left hand
+	_idol_failed = true                          # cleared below once the model is in place
+	var ps = load(IDOL_PATH)
+	if not (ps is PackedScene):
+		return
+	var inst = ps.instantiate()
+	if not (inst is Node3D):
+		if inst is Node:
+			inst.queue_free()
+		return
+	_idol_failed = false
+	_idol = inst
+	_strip_physics(_idol)
+	_idol.name = "CarriedIdol"
+	_idol.scale = Vector3.ONE * IDOL_SCALE
+	_idol.position = IDOL_HAND - Vector3(0.0, IDOL_HALF_H, 0.0)
+	_idol.rotation.y = PI                        # faces forward, like the knight body
+	add_child(_idol)
+	# dimmed like the knight's armour (the post pass doubles brightness) and on the knight's
+	# render layer, so the carrier's own lantern does not blow it out to white
+	for mi in _idol.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		m.layers = 1 << 1
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		if m.mesh == null:
+			continue
+		for si in m.mesh.get_surface_count():
+			var src: Material = m.get_active_material(si)
+			if src is StandardMaterial3D:
+				var d: StandardMaterial3D = src.duplicate()
+				d.albedo_color = Color(d.albedo_color.r * 0.5, d.albedo_color.g * 0.5, d.albedo_color.b * 0.5, d.albedo_color.a)
+				if d.emission_enabled:
+					d.emission_energy_multiplier *= 0.5
+				# Praxthos uses the game's ghost material: it is invisible closer than 8 m
+				# (distance fade 8-14 m) and a flat card. In a hand it must show up close and
+				# from any side, so no fades and it turns to face whoever looks at it.
+				d.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_DISABLED
+				d.proximity_fade_enabled = false
+				d.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+				d.billboard_keep_scale = true
+				m.set_surface_override_material(si, d)
+
+
+func eye_position() -> Vector3:
+	# this teammate's camera, about 1.55 m above the knight's feet
+	return global_position + Vector3.UP * EYE_HEIGHT
 
 
 func _strip_physics(n: Node) -> void:
@@ -252,13 +412,22 @@ func update_state(msg: Dictionary) -> void:
 	var lan: bool = bool(msg.get("lan", false))
 	if lan and _lantern == null:
 		# the knight holds it in its right hand, a little forward, swinging as it walks
-		var pair := build_cage_lantern(null, 3.5, 16.0, false)
+		var pair := build_cage_lantern(null, 2.6, 16.0, false)
 		_lantern = pair[0]
 		_lantern_light = pair[1]
+		_lantern_spot = pair[2]
+		_lantern_light.light_cull_mask = ~(1 << 1)        # everything but the knight holding it
+		_lantern_spot.light_cull_mask = ~(1 << 1)
 		_lantern.position = Vector3(0.36, 0.92, -0.22)
 		add_child(_lantern)
 	if _lantern != null and _lantern.visible != lan:
 		_lantern.visible = lan
+	oil_pct = int(msg.get("ol", -1))
+	var idl: bool = bool(msg.get("idl", false))
+	if idl and _idol == null and not _idol_failed:
+		_build_idol()
+	if _idol != null and _idol.visible != idl:
+		_idol.visible = idl
 
 	var was_attached := attached
 	attached = bool(msg.get("att", false))
@@ -278,6 +447,7 @@ func update_state(msg: Dictionary) -> void:
 	var snap := {
 		"pos": msg.get("pos", global_position),
 		"yaw": float(msg.get("cam", 0.0)),
+		"pitch": float(msg.get("cp", 0.0)),
 		"rope": msg.get("rope", PackedVector3Array()),
 		"claw": msg.get("claw", Transform3D.IDENTITY),
 		"has_rope": msg.has("rope"),
@@ -285,6 +455,8 @@ func update_state(msg: Dictionary) -> void:
 	var sender_t: int = int(msg.get("ts", now))
 	if _buf.is_empty():
 		global_position = snap["pos"]
+		cam_yaw = snap["yaw"]
+		cam_pitch = snap["pitch"]
 	_buf.push(sender_t, snap)
 
 	alive = bool(msg.get("alive", true))
@@ -297,7 +469,22 @@ func update_state(msg: Dictionary) -> void:
 
 func _process(delta: float) -> void:
 	var t0 := Time.get_ticks_usec()
+	_update_voice_pos()
 	_process_inner(delta)
+	if _lantern != null and _lantern.visible and _lantern_light != null:
+		_lan_t += delta
+		_lan_next -= delta
+		if _lan_next <= 0.0:
+			_lan_flash = randf_range(0.9, 1.8)
+			_lan_next = randf_range(1.2, 4.0)
+		_lan_flash = maxf(0.0, _lan_flash - delta * 3.0)
+		var f := (0.8 + 0.12 * sin(_lan_t * 8.3) + 0.06 * sin(_lan_t * 21.0)) * (1.0 + _lan_flash)
+		_lantern_light.light_energy = 2.6 * f
+		_lantern_light.omni_range = 16.0 + 5.0 * _lan_flash
+		if _lantern_spot != null:
+			_lantern_spot.light_energy = 3.2 * f
+			_lantern_spot.spot_range = 27.0 + 7.0 * _lan_flash
+		_lantern.rotation.z = sin(_lan_t * 2.4) * 0.06
 	CoopSync.perf_add(Time.get_ticks_usec() - t0)
 
 
@@ -322,7 +509,9 @@ func _process_inner(delta: float) -> void:
 		global_position = pb
 	else:
 		global_position = pa.lerp(pb, k)
-	global_rotation.y = lerp_angle(a["yaw"], b["yaw"], k01)
+	cam_yaw = lerp_angle(float(a["yaw"]), float(b["yaw"]), k01)
+	cam_pitch = lerpf(float(a.get("pitch", 0.0)), float(b.get("pitch", 0.0)), k01)
+	global_rotation.y = cam_yaw
 
 	if attached:
 		attached_time += delta

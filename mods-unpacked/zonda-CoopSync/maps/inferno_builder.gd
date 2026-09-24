@@ -78,6 +78,12 @@ var _env: Environment
 var _second_centipede_spawned := false
 var _snow: GPUParticles3D
 var _clock := 0.0
+# Co-op trap sync. Ids come from the build order, which the fixed seed makes identical on every PC.
+var _crumbles: Dictionary = {}     # id -> CrumbleLedge
+var _boulders: Dictionary = {}     # id -> Boulder
+var _vents: Array = []             # every FireVent, all driven by one shared clock
+var _vent_clock := 0.0             # the host's clock in co-op (guests follow it), own clock solo
+var _vent_sync_t := 0.0
 
 
 func _ready() -> void:
@@ -123,10 +129,17 @@ func _ready() -> void:
 	_spawn_centipede(-75.0, PI)
 	print("[Inferno] built: depth %d m, traps %s" % [int(DEPTH), str(_trap_counts)])
 	_thumb_on = FileAccess.file_exists("res://mods-unpacked/zonda-CoopSync/maps/thumb.flag")
+	if _thumb_on:
+		# developer flags are one-shot: read, then deleted, so one can never follow a player into a real run
+		DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/maps/thumb.flag")
+	# pass our own path: this runs a frame before the autoload notices the scene change
+	CoopSync.map_request_sync(scene_file_path)
+	call_deferred("_reapply_events")
 
 
 func _process(delta: float) -> void:
 	_clock += delta
+	_update_vents(delta)
 	_update_environment(delta)
 	_update_snow()
 	_check_second_centipede()
@@ -168,6 +181,7 @@ func _update_thumb(delta: float) -> void:
 	_thumb_t = 3.0
 	if _thumb_i >= THUMB_STOPS.size():
 		_thumb_on = false
+		c.prevent_player_death = false          # a test never leaves the player invincible
 		print("[Inferno] thumbs done")
 		return
 	var st: Array = THUMB_STOPS[_thumb_i]
@@ -455,8 +469,10 @@ func _place_ledge(wall_y: float, angle: float, small: bool = false) -> Vector3:
 	var reach: float = PIECES[path][0] * s + 1.5
 	if crumble:
 		var trap := CrumbleLedge.new()
-		trap.setup(n, top, reach)
+		var cid := str(_crumbles.size())
+		trap.setup(cid, n, top, reach)
 		add_child(trap)
+		_crumbles[cid] = trap
 		_trap_counts["crumble"] += 1
 		if not small and _rng.randf() < 0.5:
 			_place_ember(top + Vector3(0.0, 1.3, 0.0))
@@ -682,6 +698,7 @@ func _place_fire_vent(pos: Vector3) -> void:
 	var vent := FireVent.new()
 	vent.setup(parts[0], parts[1], pos, _rng.randf_range(5.5, 9.0), _rng.randf() * 9.0)
 	add_child(vent)
+	_vents.append(vent)
 	_trap_counts["vent"] += 1
 
 
@@ -712,8 +729,10 @@ func _place_boulder_trap(ledge_y: float, angle: float, ledge_top: Vector3) -> vo
 		_trap_counts["boulder"] += 1
 	add_child(rock)
 	var trap := Boulder.new()
-	trap.setup(rock, ledge_top + Vector3(0.0, 1.5, 0.0), 6.5, 2.6 if frost else 3.6)
+	var bid := str(_boulders.size())
+	trap.setup(bid, rock, ledge_top + Vector3(0.0, 1.5, 0.0), 6.5, 2.6 if frost else 3.6)
 	add_child(trap)
+	_boulders[bid] = trap
 
 
 func _place_updraft(y: float) -> void:
@@ -792,6 +811,8 @@ func _place_spike_bed(wall_y: float, angle: float) -> void:
 
 
 class CrumbleLedge extends Node3D:
+	# Synced: whoever stands on it long enough tells everyone, and it shakes and falls on every PC.
+	var id := ""
 	var piece: Node3D
 	var area: Area3D
 	var reach := 4.0
@@ -800,7 +821,8 @@ class CrumbleLedge extends Node3D:
 	var state := 0  # 0 armed, 1 shaking, 2 falling/gone
 	var shake_t := 0.0
 
-	func setup(p: Node3D, top: Vector3, r: float) -> void:
+	func setup(i: String, p: Node3D, top: Vector3, r: float) -> void:
+		id = i
 		piece = p
 		reach = r
 		origin = p.position
@@ -818,15 +840,18 @@ class CrumbleLedge extends Node3D:
 		add_child(area)
 
 	func _process(delta: float) -> void:
-		if not is_instance_valid(piece) or not is_instance_valid(Game.climber):
+		if not is_instance_valid(piece):
 			return
 		if state == 0:
+			# only the stand check needs this player's knight; a teammate's collapse runs regardless
+			if not is_instance_valid(Game.climber):
+				return
 			if area.overlaps_body(Game.climber):
 				stand_time += delta
 				if stand_time > 1.1:
-					state = 1
-					shake_t = 0.0
-					Game.audio.play_metal_hit(piece.global_position)
+					# reset first: if the event cannot apply this frame (scene change) it is not resent every frame
+					stand_time = 0.0
+					CoopSync.map_event("crumble_" + id, {}, false)
 			else:
 				stand_time = maxf(0.0, stand_time - delta * 2.0)
 		elif state == 1:
@@ -834,6 +859,14 @@ class CrumbleLedge extends Node3D:
 			piece.position = origin + Vector3(sin(shake_t * 55.0) * 0.12, -shake_t * 0.25, cos(shake_t * 47.0) * 0.12)
 			if shake_t > 0.7:
 				_collapse()
+
+	func remote_collapse() -> void:
+		# every PC runs this (the one that triggered it too); the rope cut in _collapse stays local
+		if state != 0 or not is_instance_valid(piece):
+			return
+		state = 1
+		shake_t = 0.0
+		Game.audio.play_metal_hit(piece.global_position)
 
 	func _collapse() -> void:
 		state = 2
@@ -921,7 +954,7 @@ class FireVent extends Node3D:
 		add_child(area)
 
 	func _process(delta: float) -> void:
-		clock += delta
+		# clock is set every frame by the map root (one shared clock, the host's in co-op)
 		var t: float = fmod(clock + phase, period)
 		var active: bool = t < 2.2
 		var k: float = 1.0 if active else 0.0
@@ -948,6 +981,8 @@ class FireVent extends Node3D:
 
 
 class Boulder extends Node3D:
+	# Synced: whoever trips it tells everyone, the rock falls on every PC and can hit anyone below.
+	var id := ""
 	var rock: Node3D
 	var trip: Area3D
 	var hurt: Area3D
@@ -956,7 +991,8 @@ class Boulder extends Node3D:
 	var armed := true
 	var hit_done := false
 
-	func setup(r: Node3D, trip_pos: Vector3, trip_radius: float, hurt_radius: float) -> void:
+	func setup(i: String, r: Node3D, trip_pos: Vector3, trip_radius: float, hurt_radius: float) -> void:
+		id = i
 		rock = r
 		rest = r.position
 		trip = Area3D.new()
@@ -984,6 +1020,12 @@ class Boulder extends Node3D:
 
 	func _on_trip(body: Node3D) -> void:
 		if not armed or body != Game.climber:
+			return
+		CoopSync.map_event("drop_" + id, {}, false)
+
+	func remote_drop() -> void:
+		# every PC runs this (the one that tripped it too); the hit check in _process stays local
+		if not armed or not is_instance_valid(rock):
 			return
 		armed = false
 		falling = true
@@ -1069,11 +1111,24 @@ func _on_checkpoint_entered(id: int, body: Node3D) -> void:
 
 
 func _on_finish_entered(body: Node3D) -> void:
+	# Shared: whoever reaches the bottom first ends the run for the whole team.
+	# Solo, map_event applies locally right away, exactly as before.
 	if body != Game.climber or _finish_done:
+		return
+	CoopSync.map_event("finish", {"by": CoopSync.local_name, "who": CoopSync.my_id()})
+
+
+func _finish(data: Dictionary) -> void:
+	if _finish_done:
 		return
 	_finish_done = true
 	Game.audio.play_player_healed()
-	CoopSync.show_banner("You reached the bottom of the Inferno.", 8.0)
+	var by: String = CoopSync.sanitize_name(str(data.get("by", "")))
+	var mine: bool = not CoopSync.in_session() or int(data.get("who", -1)) == CoopSync.my_id()
+	if mine:
+		CoopSync.show_banner("You reached the bottom of the Inferno.", 8.0)
+	else:
+		CoopSync.show_banner("%s reached the bottom of the Inferno." % by, 8.0)
 	await get_tree().create_timer(8.0).timeout
 	if not is_inside_tree():
 		return
@@ -1082,6 +1137,57 @@ func _on_finish_entered(body: Node3D) -> void:
 	SceneLoader.load_scene(func():
 		Game.on_new_loaded_level()
 		get_tree().change_scene_to_file("res://scenes/MainMenu.tscn"))
+
+
+# ------------------------------------------------------------------ co-op sync
+
+func coop_map_event(key: String, data: Dictionary, replay: bool = false) -> void:
+	# Called by CoopSync on every PC (the sender's too) for each shared event.
+	# Trap events are never stored (persist=false: the traps rebuild), so only "finish" can replay.
+	if key.begins_with("crumble_"):
+		var cid := key.substr(8)
+		if _crumbles.has(cid):
+			_crumbles[cid].remote_collapse()
+	elif key.begins_with("drop_"):
+		var bid := key.substr(5)
+		if _boulders.has(bid):
+			_boulders[bid].remote_drop()
+	elif key == "finish":
+		# a replay (death reload or late join inside the 8 s window) runs the ending again, so the
+		# host still leaves for the menu and nobody is left in a finished run
+		_finish(data)
+
+
+func _reapply_events() -> void:
+	var ev := CoopSync.map_events_for(scene_file_path)
+	for k in ev.keys():
+		var d = ev[k]
+		coop_map_event(str(k), d if typeof(d) == TYPE_DICTIONARY else {}, true)
+
+
+func coop_map_stream(d: Dictionary, _ts: int) -> void:
+	# host -> guests: the fire vent clock, so every vent flares at the same moment on every PC
+	if not d.has("vc") or CoopSync.map_is_authority():
+		return
+	var hc: float = float(d["vc"])
+	var err: float = hc - _vent_clock
+	if absf(err) > 0.3:
+		_vent_clock = hc
+	else:
+		_vent_clock += err * 0.25
+
+
+func _update_vents(delta: float) -> void:
+	_vent_clock += delta
+	for v in _vents:
+		if is_instance_valid(v):
+			v.clock = _vent_clock
+	if not CoopSync.in_session() or not CoopSync.map_is_authority():
+		return
+	_vent_sync_t -= delta
+	if _vent_sync_t <= 0.0:
+		_vent_sync_t = 2.0
+		CoopSync.map_stream({"vc": _vent_clock})
 
 
 # ------------------------------------------------------------------ atmosphere

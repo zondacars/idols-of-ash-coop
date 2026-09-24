@@ -263,8 +263,29 @@ def resolve(R, F, report):
     L["crystals"] = crystals
     L["slabs_meta"] = []
 
-    def floor_at(x, z, y_from, drop=40.0):
-        return F.floor_below(x, z, y_from, drop)
+    snap = report.setdefault("snap", {"inside_rock_retried": {}, "inside_rock_fallback": {}, "props_skipped": {}, "props_placed_low": {}})
+
+    def _count(key, kind):
+        snap[key][kind] = snap[key].get(kind, 0) + 1
+
+    def floor_at(x, z, y_from, drop=40.0, kind="other", own_y=None):
+        """v49 (#95): a probe that STARTS inside rock (a column, an overhang, a boulder) used to
+        return its own start height, so the thing was buried there or silently skipped. Look again
+        from 3.0 and 4.5 m lower (p.y+3 and p.y+1.5 for the usual p.y+6 start), the way the station
+        probe does. If every start is in rock, fall back to the intent's own height (never None, so
+        the rng draws that follow a placement stay the same) and count it."""
+        fy = F.floor_below(x, z, y_from, drop)
+        if fy is None or fy < y_from - 1e-6:
+            return fy
+        _count("inside_rock_retried", kind)
+        for dn in (3.0, 4.5):
+            fy2 = F.floor_below(x, z, y_from - dn, drop - dn)
+            if fy2 is None:
+                break                             # rock above, void below: no floor to find
+            if fy2 < y_from - dn - 1e-6:
+                return fy2
+        _count("inside_rock_fallback", kind)
+        return own_y if own_y is not None else fy
 
     def headroom(x, z, y, h=1.9):
         v = F.eval(np.array([[x, y + 0.5, z], [x, y + h * 0.5, z], [x, y + h, z]]))
@@ -326,7 +347,7 @@ def resolve(R, F, report):
             poly = polar_slab(cxz, -d, -3.0, 3.8, 2.4, rng, jitter=0.3)
             add_slab(ch.biome, poly, a["top"], a["top"] - 1.6, "step")
         elif kind == "spike_bed":
-            fy = floor_at(a["x"], a["z"], a["y_from"])
+            fy = floor_at(a["x"], a["z"], a["y_from"], kind="spike_bed", own_y=a["y_from"] - 3.0)
             if fy is None:
                 continue
             for k in range(3):
@@ -338,35 +359,49 @@ def resolve(R, F, report):
             ylift = float(a.get("ylift", 0.0))
             y = p[1] + ylift
             if a["snap"]:
-                fy = floor_at(p[0], p[2], p[1] + 6.0)
+                fy = floor_at(p[0], p[2], p[1] + 6.0, kind="prop")
                 if fy is None:
-                    report["warnings"].append("prop without floor %s" % a["scene"])
+                    report["warnings"].append("prop without floor %s at %s" % (a["scene"], v3(p)))
+                    _count("props_skipped", "no_floor")
                     continue
-                if fy > p[1] + 5.0 or not headroom(p[0], p[2], fy, 1.0):
-                    continue                      # the spot is inside rock (a column, a stalactite): no floating props
+                if fy > p[1] + 5.0:
+                    _count("props_skipped", "inside_rock")        # every probe started in rock: no buried props
+                    continue
+                if not headroom(p[0], p[2], fy, 1.0):
+                    _count("props_skipped", "no_headroom")        # under a stalactite or a low overhang
+                    continue
+                if fy < p[1] - 4.0:
+                    _count("props_placed_low", "prop")            # counted only: it found a lower ledge
                 y = fy - 0.05 + ylift
             box = None
             if a["box"] is not None:
                 box = [b * a["scale"] for b in a["box"]]
             ent = {"scene": a["scene"], "pos": v3([p[0], y, p[2]]), "rot": [round(a["rot_x"], 3), round(a["yaw"], 3), 0.0],
                    "scale": round(a["scale"], 3), "box": box, "vis": a["vis"]}
+            if box is not None and a.get("boxc") is not None:
+                # v49 J4 (#79): the box centre from the prop origin, unrotated frame, already scaled
+                ent["box_c"] = [round(c * a["scale"], 3) for c in a["boxc"]]
             if a.get("col") == "hull":
                 ent["col"] = "hull"
             if "dim" in a:
                 ent["dim"] = a["dim"]
+            if a.get("pale"):
+                ent["pale"] = True
+            if a.get("husk_key"):
+                ent["husk_key"] = a["husk_key"]            # v49 K12: resolved to "husk_id" (or dropped) by place_k12
             L["props"].append(ent)
         elif kind == "light":
             p = a["pos"]
             y = p[1]
             if a["snap"]:
-                fy = floor_at(p[0], p[2], p[1] + 6.0)
+                fy = floor_at(p[0], p[2], p[1] + 6.0, kind="light", own_y=p[1])
                 if fy is None:
                     continue
                 y = fy
             L["lights"].append({"pos": v3([p[0], y + a["lift"], p[2]]), "color": a["color"], "energy": a["energy"], "range": a["range"]})
         elif kind == "fire":
             p = a["pos"]
-            fy = floor_at(p[0], p[2], p[1] + 6.0)
+            fy = floor_at(p[0], p[2], p[1] + 6.0, kind="fire", own_y=p[1])
             if fy is None:
                 continue
             L["fires"].append({"pos": v3([p[0], fy, p[2]]), "scale": a["scale"], "beacon": bool(a.get("beacon", False))})
@@ -374,12 +409,12 @@ def resolve(R, F, report):
                 L["lights"].append({"pos": v3([p[0], fy + 1.6, p[2]]), "color": [1.0, 0.58, 0.25], "energy": a["energy"], "range": a["range"]})
         elif kind == "ember":
             p = a["pos"]
-            fy = floor_at(p[0], p[2], p[1] + 6.0)
+            fy = floor_at(p[0], p[2], p[1] + 6.0, kind="ember", own_y=p[1])
             if fy is None:
                 continue
             L["embers"].append({"pos": v3([p[0], fy + 1.3, p[2]])})
         elif kind == "checkpoint":
-            fy = floor_at(a["x"], a["z"], a["y"] + 6.0)
+            fy = floor_at(a["x"], a["z"], a["y"] + 6.0, kind="checkpoint", own_y=a["y"])
             if fy is None:
                 report["errors"].append("checkpoint %d has no floor" % a["id"])
                 continue
@@ -416,7 +451,7 @@ def resolve(R, F, report):
                     continue
                 p = plinth_tops[a["plinth"]]
             else:
-                fy = floor_at(a["x"], a["z"], a["y"])
+                fy = floor_at(a["x"], a["z"], a["y"], kind=kind, own_y=a["y"] - 4.0)
                 if fy is None:
                     report["errors"].append("%s %d has no floor" % (kind, a["idx"]))
                     continue
@@ -447,13 +482,16 @@ def resolve(R, F, report):
                                "front": v3(np.array([A_[0], floor + 1.5, A_[2]]) - flat * 4.0)})
         elif kind == "dying_lights":
             lights = []
+            off = float(a.get("off", 1.6))            # tunnel torches sit 1.6 m off the axis; shelf lamps on their line
             for p in a["points"]:
-                fy = floor_at(p[0] + 1.6, p[2] + 1.6, p[1] + 1.0)
+                fy = floor_at(p[0] + off, p[2] + off, p[1] + (3.0 if "trigger" in a else 1.0), kind="dying_light", own_y=p[1])
                 if fy is None:
                     continue
-                lights.append(v3([p[0] + 1.6, fy, p[2] + 1.6]))
+                lights.append(v3([p[0] + off, fy, p[2] + off]))
             if lights:
-                L["dying_lights"].append({"id": a["id"], "trigger": [lights[0], 5.0], "lights": lights})
+                # v49 (#96): the great shelves pass their own trigger (the centipede's), same schema
+                trig = [v3(a["trigger"][0]), float(a["trigger"][1])] if "trigger" in a else [lights[0], 5.0]
+                L["dying_lights"].append({"id": a["id"], "trigger": trig, "lights": lights})
         elif kind == "fragment_on_roof":
             L["fragments"].append({"id": a["id"], "pos": v3([a["x"], a["y"] + 1.0, a["z"]])})
         elif kind == "hanging_tower":
@@ -465,13 +503,13 @@ def resolve(R, F, report):
                                "rot": [round(math.pi, 4), round(a["yaw"], 3), 0.0], "scale": 0.8, "box": None, "vis": 400.0})
         elif kind == "crystal":
             p = a["pos"]
-            fy = floor_at(p[0], p[2], p[1] + 6.0)
+            fy = floor_at(p[0], p[2], p[1] + 6.0, kind="crystal", own_y=p[1])
             if fy is None:
                 continue
             crystals.append({"pos": v3([p[0], fy, p[2]]), "s": round(a["s"], 2), "yaw": round(rng.uniform(0, 6.28), 3),
                              "tilt": round(rng.uniform(-0.3, 0.3), 3)})
         elif kind == "dropper":
-            fy = floor_at(a["x"], a["z"], a["ceiling_from"] + 2.0)
+            fy = floor_at(a["x"], a["z"], a["ceiling_from"] + 2.0, kind="dropper", own_y=a["y_floor"])
             up = F.ray_to_rock([a["x"], a["ceiling_from"], a["z"]], [0, 1, 0], 80.0, 0.3)
             if fy is None or up is None:
                 continue
@@ -510,7 +548,7 @@ def resolve(R, F, report):
                 p = ch.world_point(lx, lz, ch.floor_y + 4.0)
                 if any(math.hypot(p[0] - dd[0], p[2] - dd[2]) < 9.0 for dd in (ch.arrival, ch.exit)):
                     continue
-                fy = floor_at(p[0], p[2], p[1], 12.0)
+                fy = floor_at(p[0], p[2], p[1], 12.0, kind="rubble", own_y=p[1] - 4.0)
                 if fy is None:
                     continue
                 L["dress"].append({"scene": a["scene"], "hit": v3([p[0], fy, p[2]]), "n": [0.0, 1.0, 0.0], "embed": 0.35, "up": True,
@@ -545,7 +583,7 @@ def resolve(R, F, report):
                                "scale": round(a["scale"], 2), "yaw": round(rng.uniform(0, 6.28), 3),
                                "tilt": round(rng.uniform(-0.6, 0.6), 3), "roll": round(rng.uniform(-0.6, 0.6), 3)})
         elif kind == "vent":
-            fy = floor_at(a["x"], a["z"], a["y"])
+            fy = floor_at(a["x"], a["z"], a["y"], kind="vent", own_y=a["y"] - 3.0)
             if fy is None:
                 continue
             L["vents"].append({"pos": v3([a["x"], fy, a["z"]]), "period": round(rng.uniform(5.5, 9.0), 2), "phase": round(rng.uniform(0, 9), 2)})
@@ -558,7 +596,7 @@ def resolve(R, F, report):
             c = rf.point(a["a"], a["y"], 1.9)
             L["crumbles"].append({"id": R.next_id("cr"), "pos": v3(c - np.array([0, 0.5, 0])), "yaw": round(rng.uniform(0, 6.28), 3), "scale": 0.6})
         elif kind == "bell":
-            fy = floor_at(a["x"], a["z"], a["y"] + 6.0, 70.0)
+            fy = floor_at(a["x"], a["z"], a["y"] + 6.0, 70.0, kind="bell", own_y=a["y"])
             up = F.ray_to_rock([a["x"], (fy if fy is not None else a["y"]) + 2.0, a["z"]], [0, 1, 0], 120.0, 0.3)
             if fy is None or up is None:
                 report["errors"].append("bell at %s has no floor or ceiling" % v3([a["x"], a["y"], a["z"]]))
@@ -570,7 +608,7 @@ def resolve(R, F, report):
             L["lights"].append({"pos": v3([a["x"], hang + 1.0, a["z"]]), "color": [1.0, 0.75, 0.4], "energy": 1.1, "range": 22.0})
         elif kind == "ghost":
             p = a["pos"]
-            fy = floor_at(p[0], p[2], p[1] + 5.0, 14.0)
+            fy = floor_at(p[0], p[2], p[1] + 5.0, 14.0, kind="ghost", own_y=p[1])
             if fy is None or not headroom(p[0], p[2], fy, 2.0):
                 continue
             L["ghosts"].append({"pos": v3([p[0], fy, p[2]]), "yaw": round(godot_yaw_facing(np.array(a["face"])) + math.pi, 4)})
@@ -578,8 +616,13 @@ def resolve(R, F, report):
                 fc = np.array(a["face"], dtype=float)
                 eye = np.array([p[0], fy + 1.8, p[2]]) - fc * 3.0
                 L["tour"].append({"pos": v3(eye), "look": v3([p[0], fy + 1.5, p[2]]), "label": "ghost close %d" % len(L["ghosts"])})
+        elif kind == "egg":
+            fy = floor_at(a["x"], a["z"], a["y"] + 4.0, kind="egg", own_y=a["y"])
+            if fy is None or not headroom(a["x"], a["z"], fy, 1.2):
+                continue
+            L.setdefault("eggs", []).append({"pos": v3([a["x"], fy, a["z"]]), "n": a["n"], "s": round(a["s"], 2)})
         elif kind == "altar":
-            fy = floor_at(a["x"], a["z"], a["y"])
+            fy = floor_at(a["x"], a["z"], a["y"], kind="altar", own_y=a["y"] - 4.0)
             if fy is None:
                 report["errors"].append("altar has no floor")
                 continue
@@ -601,6 +644,26 @@ def resolve(R, F, report):
     resolve_tubes(R, F, report, rng)
 
 
+def _mouth_keep_y(F, A, d, room):
+    """v48: the height under which the mouth trim leaves the chamber floor alone. The trim used to
+    cut 2-4 m pits in the floor in front of every tube mouth. `room` is the sign of t (along d) on
+    the chamber side. Measured from the field a little way into the room, capped under the axis so
+    the wall face at the hole is still cut open."""
+    dh = np.array([d[0], 0.0, d[2]])
+    dh = dh / max(np.linalg.norm(dh), 1e-6)
+    lat = np.array([-dh[2], 0.0, dh[0]])
+    ys = []
+    for t in (1.5, 3.0, 4.5):
+        for l in (-1.5, 0.0, 1.5):
+            q = A + d * (room * t) + lat * l
+            fy = F.floor_below(q[0], q[2], A[1] + 0.3, 4.5)
+            if fy is not None and fy < A[1] + 0.1:
+                ys.append(fy)
+    if not ys:
+        return None
+    return float(min(max(ys) + 0.35, A[1] - 0.5))
+
+
 def resolve_tubes(R, F, report, rng):
     """Find each tube's real wall crossings, build its mesh, its collar, its decor."""
     L = R.L
@@ -616,7 +679,7 @@ def resolve_tubes(R, F, report, rng):
             continue
         A = plan["start"] + d0 * rw
         pts[0] = A - d0 * 1.8
-        R.mouth_zones.append((A, d0, rs[0] + 1.4, 9.0))
+        R.mouth_zones.append((A, d0, rs[0] + 1.4, 9.0, _mouth_keep_y(F, A, d0, -1.0), -1.0))
         R.tube_meshes.append(("collar", tubes.collar_mesh(A, d0, rs[0] - 0.15, 6.5, 4.5), BURROWS_MAT(R)))
         cap_end = True
         if plan["true_route"]:
@@ -630,7 +693,7 @@ def resolve_tubes(R, F, report, rng):
             else:
                 Ae = last - dend * back
                 pts[-1] = Ae + dend * 1.8
-                R.mouth_zones.append((Ae, dend, rs[-1] + 1.4, 9.0))
+                R.mouth_zones.append((Ae, dend, rs[-1] + 1.4, 9.0, _mouth_keep_y(F, Ae, dend, 1.0), 1.0))
                 R.tube_meshes.append(("collar", tubes.collar_mesh(Ae, dend, rs[-1] - 0.15, 6.5, 4.5), BURROWS_MAT(R)))
                 cap_end = False
         mesh, spts, srs, T = tubes.tube_mesh(pts, rs, cap_end=cap_end)
@@ -649,6 +712,60 @@ def resolve_tubes(R, F, report, rng):
                 L["lights"].append({"pos": v3(lp), "color": [1.0, 0.72, 0.4], "energy": 0.32, "range": 6.5})
                 L["fires"].append({"pos": v3(lp - np.array([0, 0.3, 0])), "scale": 0.08})
             s += dec["candles"]
+        cum = np.cumsum(np.concatenate([[0], np.linalg.norm(spts[1:] - spts[:-1], axis=1)]))
+        up = np.array([0, 1.0, 0])
+        if dec.get("bones"):
+            s = 4.0
+            while s < total - 3:
+                p, t, _ = tubes.along(spts, s)
+                r_here = float(np.interp(s, cum, srs))
+                side = np.cross(t, up)
+                side = side / max(1e-6, np.linalg.norm(side))
+                fl = p[1] - 0.55 * r_here
+                for k in range(rng.randint(1, 3)):
+                    q = p + side * rng.uniform(-0.45, 0.45) * r_here
+                    L["props"].append({"scene": "ext/quat/Skull.glb", "pos": v3([q[0], fl - 0.02, q[2]]),
+                                       "rot": [round(rng.uniform(-0.6, 0.6), 3), round(rng.uniform(0, 6.28), 3), round(rng.uniform(-0.4, 0.4), 3)],
+                                       "scale": round(rng.uniform(0.9, 1.25), 2), "box": None, "vis": 60.0, "dim": 0.35})
+                s += dec["bones"] * rng.uniform(0.7, 1.3)
+        if dec.get("roots"):
+            s = 5.0
+            while s < total - 3:
+                p, t, _ = tubes.along(spts, s)
+                r_here = float(np.interp(s, cum, srs))
+                side = np.cross(t, up)
+                side = side / max(1e-6, np.linalg.norm(side))
+                th = rng.uniform(0.35, 2.8)                       # upper half of the tube wall
+                dirw = side * math.cos(th) + up * math.sin(th)
+                hit = p + dirw * r_here
+                L["dress"].append({"scene": "ext/ph/single_root.glb", "hit": v3(hit), "n": v3(-dirw), "embed": 0.4,
+                                   "scale": round(rng.uniform(1.0, 1.6), 2), "yaw": round(rng.uniform(0, 6.28), 3),
+                                   "tilt": round(rng.uniform(-0.5, 0.5), 3), "roll": round(rng.uniform(-0.5, 0.5), 3)})
+                s += dec["roots"] * rng.uniform(0.7, 1.3)
+        if dec.get("husk"):
+            # something pale crawled in here and died: a body length of husk, small enough to crawl over
+            hs = 0.55
+            s0 = min(total - 20.0, max(14.0, total * 0.35))
+            n_sec = 11
+            for j in range(n_sec):
+                s_ = s0 + j * 1.5 * hs
+                p, t, _ = tubes.along(spts, s_)
+                r_here = float(np.interp(s_, cum, srs))
+                side = np.cross(t, up)
+                side = side / max(1e-6, np.linalg.norm(side))
+                q = p + side * 0.35 * r_here
+                fl = p[1] - 0.55 * r_here
+                head = j == n_sec - 1
+                L["props"].append({"scene": world.A + ("Monster_Head.glb" if head else "Monster_BodySection.glb"),
+                                   "pos": v3([q[0], fl + 0.5 * hs, q[2]]),
+                                   "rot": [round(rng.uniform(-0.1, 0.1), 3), round(world.godot_yaw_facing(t) + rng.uniform(-0.15, 0.15), 3), 0.0],
+                                   "scale": hs, "box": None, "vis": 80.0, "pale": True})
+                if j == 5:
+                    L["tour"].append({"pos": v3(p - t * 4.0 + np.array([0, 0.15, 0])), "look": v3([q[0], fl + 0.3, q[2]]), "label": "burrow husk", "air": True})
+            L["texts"].append({"pos": v3(tubes.along(spts, s0 - 3.0)[0]), "r": 3.0, "text": "Something pale came this way and did not make it out. You crawl over it."})
+        if dec.get("bones") and total > 30:
+            p, t, _ = tubes.along(spts, 22.0)
+            L["tour"].append({"pos": v3(p + np.array([0, 0.1, 0])), "look": v3(tubes.along(spts, 30.0)[0] - np.array([0, 0.5, 0])), "label": "burrow bones", "air": True})
         for (ts, text) in dec.get("texts", []):
             p, t, _ = tubes.along(spts, min(ts, total - 2))
             L["texts"].append({"pos": v3(p), "r": 3.0, "text": text})
@@ -676,11 +793,69 @@ def resolve_tubes(R, F, report, rng):
             L["zones"].append({"name": plan["name"], "biome": world.BURROWS, "center": v3(p), "radius": 14.0,
                                "floor": round(float(p[1]) - 1.0, 2), "top": round(float(p[1]) + 2.0, 2)})
             s += 22.0
+        # v49 K12 review: the tube's own centre line and radii, so a flask can sit on the real tube
+        # floor (centre - 0.55 r) at the real end of a dead end. On R, not in L, so never written.
+        R._tube_ways = getattr(R, "_tube_ways", {})
+        R._tube_ways[plan["name"]] = (spts, srs, float(total))
         if plan["true_route"]:
             for ts in (18.0, 58.0, 96.0):
                 p, t, _ = tubes.along(spts, min(ts, total - 3))
                 L["tour"].append({"pos": v3(p + np.array([0, 0.2, 0])), "look": v3(p + t * 6.0), "label": "burrows %d m" % int(ts)})
         report.setdefault("tubes", []).append({"name": plan["name"], "length_m": round(total, 1), "min_r": round(float(srs.min()), 2)})
+
+
+def _collect_mouth_tris(zones, g, out):
+    """Keep the final (trimmed) triangles near each tube mouth for check_mouth_floors."""
+    if len(g["idx"]) == 0:
+        return
+    tri = g["pos"].astype(np.float64)[g["idx"]]
+    cen = tri.mean(axis=1)
+    for zi, z in enumerate(zones):
+        A, ln = z[0], z[3]
+        near = np.linalg.norm(cen - A, axis=1) < ln + 6.0
+        if near.any():
+            out[zi].append(tri[near])
+
+
+def check_mouth_floors(zones, mouth_tris, report, F):
+    """v48: cast straight down through the FINAL triangles on the chamber side of every tube mouth.
+    Every sample must find floor within 1.5 m under the tube axis, or the mouth trim has cut a pit.
+    A sample the field puts inside the rock (beside an oblique mouth) is wall, not floor: skipped."""
+    worst = []
+    counts = []
+    for zi, z in enumerate(zones):
+        A, d, room = z[0], z[1], z[5]
+        tris = np.concatenate(mouth_tris[zi]) if mouth_tris[zi] else np.zeros((0, 3, 3))
+        dh = np.array([d[0], 0.0, d[2]])
+        dh = dh / max(np.linalg.norm(dh), 1e-6)
+        lat = np.array([-dh[2], 0.0, dh[0]])
+        a2, b2, c2 = tris[:, 0][:, [0, 2]], tris[:, 1][:, [0, 2]], tris[:, 2][:, [0, 2]]
+        v0, v1 = b2 - a2, c2 - a2
+        den = v0[:, 0] * v1[:, 1] - v0[:, 1] * v1[:, 0]
+        ok_den = np.abs(den) > 1e-9
+        den = np.where(ok_den, den, 1.0)
+        missing = 0
+        for t in (1.5, 2.5, 3.5, 5.0):
+            for l in (-1.5, 0.0, 1.5):
+                q = A + dh * (room * t) + lat * l
+                if float(F.eval(np.array([[q[0], A[1] - 0.3, q[2]]]))[0]) > 0.0:
+                    continue
+                w = q[[0, 2]] - a2
+                u = (w[:, 0] * v1[:, 1] - w[:, 1] * v1[:, 0]) / den
+                v = (v0[:, 0] * w[:, 1] - v0[:, 1] * w[:, 0]) / den
+                inside = ok_den & (u >= -1e-6) & (v >= -1e-6) & (u + v <= 1.0 + 1e-6)
+                ys = tris[inside, 0, 1] + u[inside] * (tris[inside, 1, 1] - tris[inside, 0, 1]) + v[inside] * (tris[inside, 2, 1] - tris[inside, 0, 1])
+                hit = ys[(ys <= A[1] + 0.05) & (ys >= A[1] - 1.5)]
+                if len(hit) == 0:
+                    missing += 1
+                    below = ys[ys < A[1] - 1.5]
+                    worst.append({"mouth": zi, "t": t, "lat": l, "next_floor_below_axis": round(float(A[1] - below.max()), 2) if len(below) else None})
+        counts.append(missing)
+        if missing:
+            report["errors"].append("tube mouth %d at %s: %d of 12 floor samples on the chamber side find no floor within 1.5 m under the axis" % (zi, v3(A), missing))
+    report["mouth_floor_missing"] = counts
+    if worst:
+        report["mouth_floor_holes"] = worst
 
 
 def BURROWS_MAT(R):
@@ -752,7 +927,793 @@ def validate_rift(R, F, report):
         report["errors"].append("a gap of %.1f m is too wide to throw across" % max(gaps))
     spans = [m for m in R.moves if m["type"] in ("span", "spar")]
     report["spans"] = [(m["type"], m["length"], m["drop"]) for m in spans]
-    report["walk_m"] = round(sum(s2["length"] for s2 in []) , 0)
+    validate_built_drops(R, F, report)
+    validate_finale_spawns(R, F, report)
+    validate_stalker_homes(R, F, report)
+    validate_texts(R, report)
+    validate_gate_bypass(R, report)
+    # v49 (#119): walk_m summed an empty list. It is now the walking the builder planned: the great
+    # shelves (terrace walks) and, next to it, the decks and spars that cross the rift.
+    report["walk_m"] = round(sum(m["length"] for m in R.moves if m["type"] == "walk"), 0)
+    report["spans_m"] = round(sum(m["length"] for m in R.moves if m["type"] in ("span", "spar")), 0)
+
+
+def snap_stalker_homes(R, F, report):
+    """v49 (#39): a stalker home is a point on a landing from the builder, 1 m over where the shelf
+    was planned. The real rock can sit a few metres higher or lower (wall noise, the shelf's lip):
+    stalker 1 ended 3.4 m inside it. Every home now sits 1 m over the standable floor nearest to it
+    in its own column, searched from 8 m above to 45 m below (the runtime's own floor test)."""
+    out = []
+    for s_ in R.L.get("stalkers", []):
+        h = np.array(s_["home"], dtype=float)
+        tops = _floor_tops(F, h[0], h[2], h[1] + 8.0, h[1] - 45.0)
+        if not tops:
+            out.append({"id": s_["id"], "moved_m": None})
+            continue
+        fy = min(tops, key=lambda y_: abs(y_ - (h[1] - 1.0)))
+        s_["home"] = v3([h[0], fy + 1.0, h[2]])
+        out.append({"id": s_["id"], "moved_m": round(fy + 1.0 - h[1], 2)})
+    report["stalker_home_snap"] = out
+
+
+# ------------------------------------------------------------------ v49 K12: oil, wall spiders, the waking husk
+
+def _k12_stand(F, x, z, y_ref, tol=2.0):
+    """The standable floor nearest y_ref (within +-tol) in this column, with 2.2 m of air over it."""
+    tops = [t_ for t_ in _floor_tops(F, x, z, y_ref + tol + 2.4, y_ref - tol - 0.5, step=0.25, head=2.2) if abs(t_ - y_ref) <= tol]
+    if not tops:
+        return None
+    return min(tops, key=lambda t_: abs(t_ - y_ref))
+
+
+def _k12_walk(F, p, fy_p, q, max_step=1.0):
+    """You can walk from p to q on one floor: every metre on the way has rock within max_step of the
+    last metre (no gap to fall through, no wall to climb) and head room over it."""
+    dx, dz = q[0] - p[0], q[2] - p[2]
+    n = int(math.hypot(dx, dz)) + 1
+    y = fy_p
+    for i in range(1, n + 1):
+        x, z = p[0] + dx * i / n, p[2] + dz * i / n
+        top = y + max_step + 0.6
+        f = F.floor_below(x, z, top, 2.0 * max_step + 0.6)
+        if f is None or f > top - 1e-6 or abs(f - y) > max_step:
+            return False
+        if not np.all(F.eval(np.array([[x, f + 1.0, z], [x, f + 1.8, z]])) < 0.0):
+            return False
+        y = f
+    return True
+
+
+def _k12_margin(F, x, z, fy, r=1.6):
+    """Rock all round, r metres out: not on the lip of a balcony."""
+    for k in range(8):
+        a = k * math.pi / 4.0
+        f = F.floor_below(x + r * math.cos(a), z + r * math.sin(a), fy + 1.0, 2.2)
+        if f is None or f > fy + 1.0 - 1e-6:
+            return False
+    return True
+
+
+class MeshCols:
+    """v49 K12 review: vertical queries against the FINAL triangles (cave blocks after the mouth cuts,
+    tubes, collars, slabs, columns): what the game collides with. The field is meshed on 2.5 m voxels,
+    so a field floor can be 0.5-3.7 m off the real one (a flask floated 3.7 m up, another sat 0.6 m
+    under the floor, spider anchors hung 1 m under the ceiling). Triangle normals point into the air."""
+
+    def __init__(self, nodes, cell=8.0):
+        tris, nys = [], []
+        for _, prims in nodes:
+            for pr in prims:
+                I = np.asarray(pr["idx"]).reshape(-1, 3).astype(np.int64)
+                if len(I) == 0:
+                    continue
+                P = np.asarray(pr["pos"], dtype=np.float32)
+                N = np.asarray(pr["nrm"], dtype=np.float32)
+                tris.append(P[I])
+                nys.append(N[I][:, :, 1].mean(axis=1))
+        self.T = np.concatenate(tris)
+        self.ny = np.concatenate(nys)
+        self.cell = cell
+        xz = self.T[:, :, [0, 2]]
+        c0 = np.floor(xz.min(axis=1) / cell).astype(np.int64)
+        c1 = np.floor(xz.max(axis=1) / cell).astype(np.int64)
+        sp = c1 - c0
+        ids = np.arange(len(self.T), dtype=np.int64)
+        keys, owners = [], []
+        for di in range(int(sp[:, 0].max()) + 1):
+            for dk in range(int(sp[:, 1].max()) + 1):
+                m = (sp[:, 0] >= di) & (sp[:, 1] >= dk)
+                keys.append(self._key(c0[m, 0] + di, c0[m, 1] + dk))
+                owners.append(ids[m])
+        keys = np.concatenate(keys)
+        owners = np.concatenate(owners)
+        o = np.argsort(keys, kind="stable")
+        self.keys, self.owners = keys[o], owners[o]
+
+    @staticmethod
+    def _key(i, k):
+        return (np.asarray(i, dtype=np.int64) + 200000) * 400001 + (np.asarray(k, dtype=np.int64) + 200000)
+
+    def column(self, x, z):
+        """[(y, ny)] of every triangle the vertical line through (x, z) crosses, lowest first."""
+        key = self._key(int(math.floor(x / self.cell)), int(math.floor(z / self.cell)))
+        a0, a1 = np.searchsorted(self.keys, key, "left"), np.searchsorted(self.keys, key, "right")
+        if a1 <= a0:
+            return []
+        cand = self.owners[a0:a1]
+        tr = self.T[cand].astype(np.float64)
+        a, b, c = tr[:, 0], tr[:, 1], tr[:, 2]
+        v0 = b[:, [0, 2]] - a[:, [0, 2]]
+        v1 = c[:, [0, 2]] - a[:, [0, 2]]
+        v2 = np.array([x, z]) - a[:, [0, 2]]
+        den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]
+        ok = np.abs(den) > 1e-12
+        den = np.where(ok, den, 1.0)
+        u = (v2[:, 0] * v1[:, 1] - v1[:, 0] * v2[:, 1]) / den
+        w = (v0[:, 0] * v2[:, 1] - v2[:, 0] * v0[:, 1]) / den
+        ins = ok & (u >= -1e-9) & (w >= -1e-9) & (u + w <= 1.0 + 1e-9)
+        y = a[:, 1] + u * (b[:, 1] - a[:, 1]) + w * (c[:, 1] - a[:, 1])
+        return sorted(zip(y[ins].tolist(), self.ny[cand][ins].tolist()))
+
+    def floor_near(self, x, z, y, band=0.8, head=1.8):
+        """The real floor nearest y (within band), facing up, with `head` m of nothing over it."""
+        col = self.column(x, z)
+        best = None
+        for (s, ny) in col:
+            if ny < 0.2 or abs(s - y) > band:
+                continue
+            if any(s + 0.05 < s2 < s + head for (s2, _) in col):
+                continue
+            if best is None or abs(s - y) < abs(best - y):
+                best = s
+        return best
+
+    def ceiling_over(self, x, z, fy):
+        """The first surface over a floor at fy, if it faces down (a real ceiling), else None."""
+        for (s, ny) in self.column(x, z):
+            if s > fy + 0.05:
+                return s if ny < -0.2 else None
+        return None
+
+    def ring(self, x, z, fy, r, tol=0.6):
+        """How many of 8 points r metres out have floor within tol of fy (8 = not on a lip)."""
+        n = 0
+        for k in range(8):
+            a = k * math.pi / 4.0
+            col = self.column(x + r * math.cos(a), z + r * math.sin(a))
+            if any(ny >= 0.2 and abs(s - fy) <= tol for (s, ny) in col):
+                n += 1
+        return n
+
+
+def _k12_prop_clear(L, q, fy, base=1.5):
+    """Not inside or against a prop: a boxed prop's footprint plus 0.7 m, 3 m round the big unboxed
+    rocks and buildings (visual only, a flask vanished into them), `base` round anything else."""
+    for p in L["props"]:
+        pp = p["pos"]
+        if abs(pp[1] - fy) > 6.0:
+            continue
+        d = math.hypot(pp[0] - q[0], pp[2] - q[2])
+        if d > 6.0:
+            continue
+        nm = p["scene"]
+        if p.get("box") is not None:
+            r = max(p["box"][0], p["box"][2]) + 0.7
+        elif any(k in nm for k in ("boulder", "rocks", "Tower", "Structure", "Building", "Roof", "Wall", "Tent", "Monster_")):
+            r = 3.0
+        else:
+            r = base
+        if d < r:
+            return False
+    return True
+
+
+def place_k12(R, F, report, M):
+    """v49 K12: the lantern-oil flasks, the wall spiders of the Rootworks and Crystal Veins, and the
+    one great-shelf husk that wakes. Its own rng (never the builder's), so the rest of the layout is
+    unchanged by this pass. Runs after meshing (it adds no geometry) so every flask and spider can be
+    checked against, and put on, the real triangles (M)."""
+    import random
+    rng = random.Random(sdf.SEED + 4912)
+    k12 = report.setdefault("k12", {})
+    _k12_husk(R, F, report, k12)
+    _k12_oil(R, F, report, k12, rng, M)
+    _k12_spiders(R, F, report, k12, rng, M)
+    _k12_snap_homes(R, report, M)
+
+
+def _k12_snap_homes(R, report, M):
+    """Stalker homes: 1 m over the real floor under them (the field floor can be 1-2 m off)."""
+    for s_, rec in zip(R.L.get("stalkers", []), report.get("stalker_home_snap", [])):
+        h = s_["home"]
+        f = M.floor_near(h[0], h[2], h[1] - 1.0, band=2.5, head=1.6)
+        rec["mesh_floor_below_m"] = None if f is None else round(h[1] - f, 2)
+        if f is not None:
+            s_["home"] = v3([h[0], f + 1.0, h[2]])
+
+
+def _k12_husk(R, F, report, k12):
+    """One dead centipede on a great shelf is not dead. Pick the shelf husk that is whole (head and
+    at least 12 sections down), on a shelf where nothing else lives (no centipede, no dying lamps),
+    best with its head toward where you land: you walk its length and it gets up behind you."""
+    L = R.L
+    husks = L.pop("_terrace_husks", [])
+    best = None
+    for h in husks:
+        secs = h["sections"]
+        if h["lives"] or len(secs) < 12 or secs[-1][0] != h["n_sec"] - 1:
+            continue
+        path = np.array(h["path"], dtype=float)
+        plen = float(np.linalg.norm(path))
+        pdir = path / plen
+        land = np.array(h["land"], dtype=float)
+        t_head = float((secs[-1][1] - land) @ pdir) / plen
+        t_tail = float((secs[0][1] - land) @ pdir) / plen
+        land_side = t_head < t_tail
+        score = len(secs) + (10 if land_side else 0) + (5 if world.FUNGAL <= h["biome"] <= world.CRYSTAL else 0)
+        if best is None or score > best[0]:
+            best = (score, h, land, path, plen, pdir, t_head, land_side)
+    chosen = None
+    if best is not None:
+        _, h, land, path, plen, pdir, t_head, land_side = best
+        head = h["sections"][-1][1]
+        tail = h["sections"][0][1]
+        if land_side:
+            P = head + (tail - head) * 0.65                 # two thirds of its length walked: the head is behind you
+            t = float((P - land) @ pdir) / plen
+        else:
+            t = t_head + 10.0 / plen                        # just past its head
+        t = min(0.92, max(0.08, t))
+        q = land + path * t
+        fy = _k12_stand(F, q[0], q[2], float(land[1]), 3.0)
+        trig = [q[0], (fy if fy is not None else float(land[1])) + 1.0, q[2]]
+        fh = _k12_stand(F, head[0], head[2], h["y_top"], 3.0)
+        chosen = h["key"]
+        L["waking_husk"] = {"id": "wh1", "trigger": v3(trig), "r": 6.0,
+                            "head": v3([head[0], (fh if fh is not None else h["y_top"]) + 1.0, head[2]]),
+                            "yaw": round(float(godot_yaw_facing(np.array(h["hdir"], dtype=float))), 4)}
+        k12["waking_husk"] = {"biome": world.BIOMES[h["biome"]], "shelf": h["idx"], "sections": len(h["sections"]),
+                              "head_toward_landing": bool(land_side), "trigger_along_walk": round(t, 2),
+                              "trigger_to_head_m": round(float(np.linalg.norm(np.array(trig) - head)), 1)}
+    tagged = 0
+    for e in L["props"]:
+        k = e.pop("husk_key", None)
+        if k is not None and k == chosen:
+            e["husk_id"] = "wh1"
+            tagged += 1
+    if chosen is None:
+        report["errors"].append("waking husk: no whole great-shelf husk on a quiet shelf")
+    else:
+        k12["waking_husk"]["props_tagged"] = tagged
+        if tagged < 12:
+            report["errors"].append("waking husk: only %d props tagged" % tagged)
+
+
+def _k12_oil(R, F, report, k12, rng, M):
+    """2-4 flasks per biome from the Ossuary down, spread over its height: every other one on the
+    route (the back of a balcony you stand on anyway), the rest a short detour (the far side of a
+    great shelf, the back of a long balcony, the end of a dead-end tube)."""
+    L, rift = R.L, R.rift
+    st = [s_ for s_ in L["stations"] if s_["kind"] != "hard"]
+    main_xyz = np.array([s_["pos"] for s_ in st], dtype=float)
+    hazards = [np.array(x_["pos"], dtype=float) for x_ in L.get("spikes", []) + L.get("vents", []) + L.get("crumbles", [])]
+    lava = L.get("lava", [])
+    placed = []
+
+    def over_lava(q, fy):
+        for lv in lava:                                     # the lake is an axis-aligned rectangle (yaw 0)
+            c_ = lv["center"]
+            if abs(q[0] - c_[0]) <= lv["half_w"] and abs(q[2] - c_[2]) <= lv["half_l"] and fy < c_[1] + float(lv.get("kill_top", 5.0)) + 4.0:
+                return True
+        return False
+
+    def clear_of(q, fy):
+        p3 = np.array([q[0], fy, q[2]])
+        if over_lava(q, fy):
+            return False
+        if any(float(np.linalg.norm(p3 - z_)) < 5.0 for z_ in hazards):
+            return False
+        return all(float(np.linalg.norm(p3 - z_)) > 30.0 for z_ in placed)
+
+    def real_floor(q, fy, ring_r):
+        """The mesh floor the flask will really stand on: near the field floor, 1.8 m of air over
+        it, not on a lip, clear of props. None = reject this spot."""
+        y2 = M.floor_near(q[0], q[2], fy, band=0.6, head=1.8)
+        if y2 is None or M.ring(q[0], q[2], y2, ring_r) < 8 or not _k12_prop_clear(L, q, y2):
+            return None
+        return y2
+
+    def on_route(s_):
+        p = np.array(s_["pos"], dtype=float)
+        cx, cz = rift.center(p[1])
+        o = np.array([p[0] - float(cx), 0.0, p[2] - float(cz)])
+        o = o / max(float(np.linalg.norm(o)), 1e-6)
+        lat = np.array([-o[2], 0.0, o[0]])
+        for (u, v) in ((2.5, 0.0), (1.5, 1.5), (1.5, -1.5), (3.5, 0.0), (0.8, 2.5), (0.8, -2.5)):
+            q = p + o * u + lat * v
+            fy = _k12_stand(F, q[0], q[2], p[1], 1.5)
+            if fy is None or not clear_of(q, fy) or not _k12_margin(F, q[0], q[2], fy, 1.2):
+                continue
+            if _k12_walk(F, p, p[1], q):
+                y2 = real_floor(q, fy, 1.2)
+                if y2 is not None:
+                    return [q[0], y2, q[2]]
+        return None
+
+    def detour(s_):
+        p = np.array(s_["pos"], dtype=float)
+        near = main_xyz[np.abs(main_xyz[:, 1] - p[1]) < 8.0]
+        best = None
+        found = 0
+        for _ in range(90):
+            a = rng.uniform(0.0, 2.0 * math.pi)
+            d = rng.uniform(9.0, 28.0)
+            q = p + np.array([math.cos(a) * d, 0.0, math.sin(a) * d])
+            dmin = float(np.min(np.linalg.norm((near - q)[:, [0, 2]], axis=1))) if len(near) else 99.0
+            if dmin < 8.0:
+                continue                                    # still on the line: not a detour
+            f0 = F.floor_below(q[0], q[2], p[1] + 2.5, 5.0)
+            if f0 is None or f0 > p[1] + 2.5 - 1e-6:
+                continue
+            fy = _k12_stand(F, q[0], q[2], p[1], 2.0)
+            if fy is None or not clear_of(q, fy) or not _k12_margin(F, q[0], q[2], fy, 1.6):
+                continue
+            if not _k12_walk(F, p, p[1], q):
+                continue
+            y2 = real_floor(q, fy, 1.6)
+            if y2 is None:
+                continue
+            sc = min(dmin, 16.0) - 0.3 * abs(y2 - p[1])
+            if best is None or sc > best[0]:
+                best = (sc, [q[0], y2, q[2]])
+            found += 1
+            if found >= 6:
+                break
+        return None if best is None else best[1]
+
+    out = []
+    for b in range(world.OSSUARY, world.NEST):
+        cand = [s_ for s_ in st if s_["biome"] == b and s_["kind"] in ("shelf", "terrace")]
+        ys = [s_["pos"][1] for s_ in st if s_["biome"] == b]
+        if not cand:
+            continue
+        y_hi, y_lo = max(ys), min(ys)
+        H = y_hi - y_lo
+        n = 2 + (1 if H > 600.0 else 0) + (1 if H > 900.0 else 0)
+        for k in range(n):
+            want_detour = k % 2 == 1
+            b_hi = y_hi - H * k / n
+            b_lo = y_hi - H * (k + 1) / n
+            ym = 0.5 * (b_hi + b_lo)
+            pool = sorted([s_ for s_ in cand if b_lo - 1.0 <= s_["pos"][1] <= b_hi + 1.0], key=lambda s_: abs(s_["pos"][1] - ym))
+            pos, kind = None, None
+            for s_ in pool[:16]:
+                pos = detour(s_) if want_detour else on_route(s_)
+                if pos is not None:
+                    kind = "detour" if want_detour else "route"
+                    break
+            if pos is None:
+                for s_ in pool[:16]:
+                    pos = on_route(s_) if want_detour else detour(s_)
+                    if pos is not None:
+                        kind = "route" if want_detour else "detour"
+                        break
+            if pos is None:
+                # no balcony in this band (a foothold ladder like the Plunge): the nearest balcony
+                # outside it, still 30 m from any other flask
+                rest = sorted([s_ for s_ in cand if s_ not in pool], key=lambda s_: abs(s_["pos"][1] - ym))
+                for s_ in rest[:16]:
+                    pos, kind = (detour(s_), "detour") if want_detour else (None, None)
+                    if pos is None:
+                        pos, kind = on_route(s_), "route"
+                    if pos is not None:
+                        break
+            if pos is None:
+                report["warnings"].append("oil: no spot for flask %d of %s" % (k + 1, world.BIOMES[b]))
+                continue
+            placed.append(np.array(pos, dtype=float))
+            out.append((b, kind, pos))
+    # THE NEST: one where you land, one out in the nest itself, clear of the idol run and the eggs
+    zones = {z_["name"]: z_ for z_ in L["zones"]}
+    altar = np.array(L["altar"][0]["pos"], dtype=float) if L.get("altar") else None
+    eggs = [np.array(e_["pos"], dtype=float) for e_ in L.get("eggs", [])]
+    for (zname, kind, r0, r1) in (("Nest Landing", "route", 3.0, 8.0), ("The Nest", "detour", 16.0, 34.0)):
+        z_ = zones.get(zname)
+        if z_ is None:
+            continue
+        c = np.array(z_["center"], dtype=float)
+        got = None
+        for _ in range(80):
+            a = rng.uniform(0.0, 2.0 * math.pi)
+            d = rng.uniform(r0, r1)
+            q = c + np.array([math.cos(a) * d, 0.0, math.sin(a) * d])
+            if altar is not None and float(np.linalg.norm((q - altar)[[0, 2]])) < 14.0:
+                continue
+            if any(float(np.linalg.norm((q - e_)[[0, 2]])) < 4.0 for e_ in eggs):
+                continue
+            fy = _k12_stand(F, q[0], q[2], float(z_["floor"]), 3.0)
+            if fy is None or not clear_of(q, fy) or not _k12_margin(F, q[0], q[2], fy, 1.6):
+                continue
+            y2 = real_floor(q, fy, 1.6)
+            if y2 is None:
+                continue
+            got = [q[0], y2, q[2]]
+            break
+        if got is None:
+            report["warnings"].append("oil: no spot in %s" % zname)
+            continue
+        placed.append(np.array(got, dtype=float))
+        out.append((world.NEST, kind, got))
+    # THE BURROWS: one half way through, one at the very end of dead end A, before the body there.
+    # The tubes are not in the field: their flat floor is the centre line minus 0.55 r (tubes.py),
+    # checked on the tube mesh itself. Slide along the tube past the bones.
+    ways = getattr(R, "_tube_ways", {})
+    for (tname, kind, pick) in (("the way through", "route", "mid"), ("dead end A", "detour", "end")):
+        if tname not in ways:
+            report["warnings"].append("oil: no tube %s" % tname)
+            continue
+        spts, srs, total = ways[tname]
+        s0 = total * 0.5 if pick == "mid" else total - 5.5
+        got = None
+        for ds in (0.0, -1.0, 1.0, -2.0, 2.0, -3.0, -4.0, -5.0):
+            s = min(max(s0 + ds, 2.0), total - 4.5)
+            p, t, i = tubes.along(spts, s)
+            if abs(float(t[1])) >= 0.6:
+                continue                                    # a steep bit has no flat floor
+            fl = float(p[1]) - 0.55 * float(srs[min(i, len(srs) - 1)])
+            y2 = M.floor_near(p[0], p[2], fl, band=0.4, head=1.1)
+            if y2 is None or not _k12_prop_clear(L, p, y2, base=0.7):
+                continue
+            got = [float(p[0]), y2, float(p[2])]
+            break
+        if got is None:
+            report["warnings"].append("oil: no spot in %s" % tname)
+            continue
+        placed.append(np.array(got, dtype=float))
+        out.append((world.BURROWS, kind, got))
+    L["oil"] = []
+    by_b = {}
+    for i, (b, kind, pos) in enumerate(out):
+        L["oil"].append({"id": "oil_%d" % (i + 1), "pos": v3(pos), "biome": int(b)})
+        by_b.setdefault(world.BIOMES[b], {"route": 0, "detour": 0})[kind] += 1
+    k12["oil"] = {"total": len(out), "route": sum(1 for o_ in out if o_[1] == "route"),
+                  "detour": sum(1 for o_ in out if o_[1] == "detour"), "by_biome": by_b}
+    for b in range(world.OSSUARY, 10):
+        nb = sum(1 for o_ in out if o_[0] == b)
+        if not 2 <= nb <= 4:
+            report["errors"].append("oil: %s has %d flasks (want 2-4)" % (world.BIOMES[b], nb))
+
+
+def _k12_spiders(R, F, report, k12, rng, M):
+    """Wall spiders where a walkway runs under rock with 6-14 m of air over it, in the Rootworks and
+    the Crystal Veins. anchor = the ceiling point, floor = the walkable point under it."""
+    L = R.L
+    st = [s_ for s_ in L["stations"] if s_["kind"] != "hard"]
+    cps = [np.array(c_["pos"], dtype=float) for c_ in L.get("checkpoints", [])]
+    wh = L.get("waking_husk")
+    busy = [np.array(wh["trigger"], dtype=float), np.array(wh["head"], dtype=float)] if wh else []
+    cand = []
+    for b in (world.ROOTS, world.CRYSTAL):
+        own = [s_ for s_ in st if s_["biome"] == b and s_["kind"] in ("shelf", "terrace", "span", "foothold")]
+        pts = []
+        n_try = max(8, int(720 / max(len(own), 1)))         # the Rootworks has few stand points: look harder round each
+        for s_ in own:
+            p = np.array(s_["pos"], dtype=float)
+            pts.append((p, p))
+            for _ in range(n_try):
+                a = rng.uniform(0.0, 2.0 * math.pi)
+                d = rng.uniform(2.0, 12.0)
+                pts.append((p + np.array([math.cos(a) * d, 0.0, math.sin(a) * d]), p))
+        for (q, base) in pts:
+            fy = _k12_stand(F, q[0], q[2], base[1], 1.5)
+            if fy is None:
+                continue
+            up = F.ray_to_rock([q[0], fy + 1.0, q[2]], [0, 1, 0], 15.5, 0.1)
+            if up is None:
+                continue
+            hh = 1.0 + up
+            if not 6.0 <= hh <= 14.0:
+                continue
+            n_ok = 0                                        # something to cling to (a ceiling or a root), not a knife edge
+            for (dx, dz) in ((1.5, 0.0), (-1.5, 0.0), (0.0, 1.5), (0.0, -1.5)):
+                u2 = F.ray_to_rock([q[0] + dx, fy + 1.0, q[2] + dz], [0, 1, 0], 18.0, 0.2)
+                if u2 is not None and abs((1.0 + u2) - hh) <= 4.0:
+                    n_ok += 1
+            ok = n_ok >= 2
+            f3 = np.array([q[0], fy, q[2]])
+            if not ok or any(float(np.linalg.norm(f3 - c_)) < 10.0 for c_ in cps):
+                continue
+            if any(float(np.linalg.norm(f3 - c_)) < 30.0 for c_ in busy):
+                continue                                    # the waking husk's shelf has its own scare
+            if (q is not base) and not _k12_walk(F, base, base[1], q):
+                continue
+            # the real triangles: the floor near the field floor and, straight over it with nothing
+            # between, a real ceiling (a down-facing face) 6-14 m up. The anchor sits on that face.
+            mf = M.floor_near(q[0], q[2], fy, band=0.8, head=2.0)
+            if mf is None or M.ring(q[0], q[2], mf, 1.0) < 6:
+                continue
+            mc = M.ceiling_over(q[0], q[2], mf)
+            if mc is None or not 6.0 <= mc - mf <= 14.0:
+                continue
+            fy, hh = mf, mc - mf
+            # best: ~9 m of air (a long, readable drop) and close to where people actually walk
+            cand.append((abs(hh - 9.0) + 0.3 * float(np.linalg.norm((q - base)[[0, 2]])), b, [q[0], fy, q[2]], hh))
+    cand.sort(key=lambda c_: c_[0])
+    chosen = []
+    for b in (world.ROOTS, world.CRYSTAL):                  # each biome picks its own (at most 7), 20 m apart
+        for (_, b_, f, hh) in cand:
+            if b_ != b:
+                continue
+            if sum(1 for c_ in chosen if c_[0] == b) >= 7:
+                break
+            if any(float(np.linalg.norm(np.array(f) - np.array(c_[1]))) < 20.0 for c_ in chosen):
+                continue
+            chosen.append((b, f, hh))
+    chosen.sort(key=lambda c_: -c_[1][1])
+    L["spiders"] = []
+    for i, (b, f, hh) in enumerate(chosen):
+        L["spiders"].append({"id": "sp_%d" % (i + 1), "anchor": v3([f[0], f[1] + hh - 0.05, f[2]]), "floor": v3(f), "biome": int(b)})
+    k12["spiders"] = {"total": len(chosen), "candidates": len(cand),
+                      "by_biome": {world.BIOMES[b]: sum(1 for c_ in chosen if c_[0] == b) for b in (world.ROOTS, world.CRYSTAL)},
+                      "headroom_m": [round(c_[2], 1) for c_ in chosen]}
+    if not 8 <= len(chosen) <= 14:
+        report["errors"].append("spiders: %d placed (want 8-14, %d candidate spots)" % (len(chosen), len(cand)))
+
+
+def validate_stalker_homes(R, F, report):
+    """v49 (#39): a stalker whose home has no floor under it snaps back there on every step and never
+    moves (underdark.gd casts from home+8 m down to home-45 m). Same test here, and the home must be
+    in open air. A home far from every stand point is only a warning."""
+    L = R.L
+    st = [np.array(s_["pos"], dtype=float) for s_ in L.get("stations", []) if s_["kind"] != "hard"]
+    out = []
+    for s_ in L.get("stalkers", []):
+        h = np.array(s_["home"], dtype=float)
+        v = float(F.eval(h[None, :])[0])
+        fy = F.floor_below(h[0], h[2], h[1] + 8.0, 53.0)
+        near = min((float(np.linalg.norm(h - q)) for q in st), default=1e9)
+        out.append({"id": s_["id"], "floor_below_m": None if fy is None else round(float(h[1] - fy), 1), "nearest_station_m": round(near, 1)})
+        if v >= 0.0:
+            report["errors"].append("stalker %s home %s is inside rock" % (s_["id"], v3(h)))
+        elif fy is None:
+            report["errors"].append("stalker %s home %s has no floor within 45 m below it" % (s_["id"], v3(h)))
+        if near > 40.0:
+            report["warnings"].append("stalker %s home is %.0f m from the nearest stand point" % (s_["id"], near))
+    report["stalker_homes"] = out
+
+
+def validate_texts(R, report):
+    """v49 (#51): two text spheres that overlap show one text over the other. A text whose centre is
+    inside another text's sphere can be hidden outright: an error. A partial overlap is a warning."""
+    T = R.L.get("texts", [])
+    worst = []
+    for i in range(len(T)):
+        for j in range(i + 1, len(T)):
+            d = math.dist(T[i]["pos"], T[j]["pos"])
+            ri, rj = float(T[i]["r"]), float(T[j]["r"])
+            if d < ri + rj:
+                worst.append((round(d, 1), i, j))
+                if d < max(ri, rj):
+                    report["errors"].append("text %d (%s...) and text %d (%s...) are %.1f m apart: one hides the other"
+                                            % (i, T[i]["text"][:30], j, T[j]["text"][:30], d))
+    report["text_overlaps"] = {"partial": len(worst), "pairs": worst[:12]}
+
+
+def validate_gate_bypass(R, report):
+    """v49 (#20): a co-op door must not be skippable with one rappel. No main-route stand point
+    after a gate's entry balcony may lie within 63 m under it (23 m of rope plus a survivable fall)
+    and 30 m to the side of it."""
+    st = R.L.get("stations", [])
+    for entry, after in (("KILN GATE", "ROOTWORKS"), ("PLATE HALL", "BELOW THE PLATES")):
+        ei = [i for i, s_ in enumerate(st) if s_["label"] == entry]
+        ai = [i for i, s_ in enumerate(st) if s_["label"] == after]
+        if not ei or not ai:
+            report["errors"].append("gate check: no %s or %s balcony found" % (entry, after))
+            continue
+        for i in ei:
+            a_ = np.array(st[i]["pos"], dtype=float)
+            for j in range(ai[0], len(st)):
+                if st[j]["kind"] == "hard":
+                    continue
+                b_ = np.array(st[j]["pos"], dtype=float)
+                dy = a_[1] - b_[1]
+                h = float(np.linalg.norm((a_ - b_)[[0, 2]]))
+                if 0.0 < dy < 63.0 and h < 30.0:
+                    report["errors"].append("%s can be skipped: station %d (%s %s) is %.1f m below and %.1f m beside station %d"
+                                            % (entry, j, st[j]["kind"], st[j]["label"], dy, h, i))
+
+
+def _floor_tops(F, x, z, y_hi, y_lo, step=0.5, head=1.5):
+    """Every floor surface (air above rock, with `head` m of air over it) in a vertical column."""
+    ys = np.arange(y_hi, y_lo, -step)
+    if len(ys) < 3:
+        return []
+    P = np.stack([np.full(len(ys), x), ys, np.full(len(ys), z)], axis=1)
+    air = F.eval(P) < 0.0
+    k = max(1, int(round(head / step)))
+    out = []
+    for i in np.nonzero(air[:-1] & ~air[1:])[0]:
+        if i - k + 1 >= 0 and air[i - k + 1:i + 1].all():
+            fy = float(ys[i + 1])
+            # standable, not a bump on a wall: floor within 0.6 m on all four sides, 0.8 m out
+            ok = True
+            for (dx, dz) in ((0.8, 0.0), (-0.8, 0.0), (0.0, 0.8), (0.0, -0.8)):
+                f2 = F.floor_below(x + dx, z + dz, fy + 1.2, 1.8)
+                if f2 is None or abs(f2 - fy) > 0.6 or f2 > fy + 1.1:
+                    ok = False
+                    break
+            if ok:
+                out.append(fy)
+    return out
+
+
+def validate_built_drops(R, F, report, limit=23.6):
+    """v48 (#16): the drops in R.moves are what the builder PLANNED. This walks the main-route stand
+    points in order and measures what was BUILT: when the next stand point is more than `limit`
+    below the last one, something to stand on must exist between them (a span deck, a tunnel floor,
+    a hanging house, a spar), found with the same field floor probes, so that no single fall in
+    the chain is longer than `limit`. Short Way ledges are separate routes and are skipped."""
+    L = R.L
+    st = L.get("stations", [])
+    plats = [np.array(p_["pos"], dtype=float) for p_ in L.get("platforms", [])]
+    spar_pts = []
+    for sp in L.get("spars", []):
+        a_, b_ = np.array(sp["a"], dtype=float), np.array(sp["b"], dtype=float)
+        n_ = max(2, int(np.linalg.norm(b_ - a_) / 4.0))
+        for f in np.linspace(0.0, 1.0, n_):
+            spar_pts.append(a_ + (b_ - a_) * f + np.array([0, float(sp["r"]), 0]))
+    tun_pts = []
+    for p_ in R.prims:
+        if getattr(p_, "kind", "") == "tunnel" and not getattr(p_, "phantom", False):
+            ln = float(np.linalg.norm(p_.b - p_.a))
+            for f in np.linspace(0.0, 1.0, max(2, int(ln / 2.0))):
+                q = p_.a + (p_.b - p_.a) * f
+                tun_pts.append(np.array([q[0], q[1] - 0.55 * p_.r, q[2]]))
+    for ch in R.chambers:
+        tun_pts.append(np.array([ch.c[0], ch.floor_y, ch.c[2]]))
+    for plan in getattr(R, "tube_plans", []):          # the Burrows crawl tubes are meshed by hand
+        if plan.get("true_route"):
+            for q, r_ in zip(plan["pts"], plan["rs"]):
+                tun_pts.append(np.array([q[0], q[1] - 0.55 * float(r_), q[2]]))
+    tun_pts = np.array(tun_pts) if tun_pts else np.zeros((0, 3))
+
+    def stand_y(s_, upper):
+        """A station is a small area, not a point: probe a 3 x 3 grid 1.5 m apart and stand on the
+        lowest floor of the one you leave (you can always lower yourself) and the highest floor of
+        the one you land on. A floor needs 1.9 m of air over it."""
+        p = s_["pos"]
+        if s_["kind"] in ("platform", "gantry") or s_.get("repaired"):
+            return float(p[1])
+        fys = []
+        for dx in (-1.5, 0.0, 1.5):
+            for dz in (-1.5, 0.0, 1.5):
+                fy = F.floor_below(p[0] + dx, p[2] + dz, p[1] + 4.5, 9.0)
+                if fy is not None and p[1] - 1.6 <= fy <= p[1] + 2.6:
+                    fys.append(float(fy))
+        if not fys:
+            return float(p[1])
+        return min(fys) if upper else max(fys)
+
+    worst = []
+    checked = 0
+    built_max = 0.0
+    for i in range(len(st) - 1):
+        a_, b_ = st[i], st[i + 1]
+        if a_["kind"] == "hard" or b_["kind"] == "hard":
+            continue
+        ya, yb = stand_y(a_, True), stand_y(b_, False)
+        dy = ya - yb
+        if dy <= limit:
+            built_max = max(built_max, dy)
+            continue
+        checked += 1
+        pa, pb = np.array(a_["pos"], dtype=float), np.array(b_["pos"], dtype=float)
+        seg = (pb - pa)[[0, 2]]
+        seg_l = float(np.linalg.norm(seg))
+        hs = []
+        n_col = max(2, min(80, int(seg_l / 2.0) + 1))
+        for f in np.linspace(0.0, 1.0, n_col):
+            q = pa + (pb - pa) * f
+            hs += _floor_tops(F, q[0], q[2], ya + 2.0, yb - 1.0)
+
+        def near_seg(q, reach):
+            w = (q - pa)[[0, 2]]
+            t = float(np.clip((w @ seg) / max(seg_l * seg_l, 1e-9), 0.0, 1.0))
+            return float(np.linalg.norm(w - seg * t)) < reach
+
+        for q in plats:                       # hanging houses and gantries are not in the field
+            if near_seg(q, 25.0):
+                hs.append(float(q[1]))
+        for q in spar_pts:                    # nor are the crystal spars
+            if near_seg(q, 25.0):
+                hs.append(float(q[1]))
+        if len(tun_pts):                      # a walk through the rock: tunnels and their rooms
+            dd = np.minimum(np.linalg.norm(tun_pts - pa, axis=1), np.linalg.norm(tun_pts - pb, axis=1))
+            if (dd < 40.0).any():
+                box_lo, box_hi = np.minimum(pa, pb) - 120.0, np.maximum(pa, pb) + 120.0
+                m_ = np.all((tun_pts >= box_lo) & (tun_pts <= box_hi), axis=1)
+                hs += [float(v) for v in tun_pts[m_, 1]]
+        chain = sorted([ya, yb] + [h for h in hs if yb + 0.5 < h < ya - 0.5], reverse=True)
+        step = max(chain[k] - chain[k + 1] for k in range(len(chain) - 1))
+        built_max = max(built_max, step)
+        worst.append((round(step, 1), i, i + 1, a_["kind"], b_["kind"], round(dy, 1)))
+        if step > limit:
+            report["errors"].append("built drop of %.1f m with nothing to stand on between station %d (%s %s) and %d (%s), %.1f m lower"
+                                    % (step, i, a_["kind"], a_.get("label", ""), i + 1, b_["kind"], dy))
+    worst.sort(reverse=True)
+    report["built_drops"] = {"pairs_over_limit_checked": checked, "max_unbridged_step": round(built_max, 1), "worst": worst[:10]}
+
+
+def validate_finale_spawns(R, F, report):
+    """v48: the creatures that wake on the idol, and the Follower's finale spawn, must start in open
+    air with floor under them (the Follower used to spawn over the Nest chasm)."""
+    L = R.L
+    pts = []
+    for c_ in L.get("centipedes", []):
+        if c_.get("on"):
+            pts += [("%s %s" % (c_["id"], c_["on"]), sp) for sp in c_["spawn"]]
+    if L.get("follower_finale"):
+        pts.append(("follower_finale", L["follower_finale"]["spawn"]))
+    for name, sp in pts:
+        p = np.array(sp, dtype=float)
+        v = float(F.eval(p[None, :])[0])
+        fy = F.floor_below(p[0], p[2], p[1], 12.0)
+        if v >= 0.0 or fy is None:
+            report["errors"].append("%s spawn %s is %s" % (name, v3(p), "inside rock" if v >= 0.0 else "over no floor within 12 m"))
+
+
+def unbury_lanterns(R, F, report):
+    """v48 (#50): no guide lamp may sit inside rock. Shelves, overhangs and caves add rock the rift
+    formula cannot see, so check every lantern against the real field and walk a buried one out
+    toward the middle of the rift, 0.5 m at a time, until it has 1 m of air around it (8 m at most)."""
+    rift = getattr(R, "rift", None)
+    lan = R.L.get("lanterns", [])
+    if rift is None or not lan:
+        return
+    P = np.array([l_["pos"] for l_ in lan], dtype=np.float64)
+    v = np.array([float(F.eval(P[i:i + 1])[0]) for i in range(len(P))])
+    inside0 = int((v > 0.0).sum())
+    moved = 0
+    stuck = 0
+    steps = np.arange(0.5, 8.01, 0.5)
+    for i in np.nonzero(v > -1.0)[0]:
+        p = P[i]
+        cx, cz = rift.center(p[1])
+        dirv = np.array([float(cx) - p[0], 0.0, float(cz) - p[2]])
+        n = float(np.linalg.norm(dirv))
+        if n < 1e-6:
+            continue
+        dirv = dirv / n
+        done = False
+        best = None
+        # out toward the middle of the rift first; under an overhang, out and down
+        for dv in (dirv, dirv * 0.7 + np.array([0, -0.7, 0]), dirv * 0.7 + np.array([0, 0.7, 0])):
+            cand = p[None, :] + steps[:, None] * dv[None, :]
+            vc = F.eval(cand)
+            ok = np.nonzero(vc <= -1.0)[0]
+            if len(ok):
+                lan[i]["pos"] = v3(cand[ok[0]])
+                moved += 1
+                done = True
+                break
+            j = int(np.argmin(vc))
+            if best is None or vc[j] < best[0]:
+                best = (float(vc[j]), cand[j])
+        if not done:
+            if v[i] > 0.0 and best is not None and best[0] < 0.0:
+                lan[i]["pos"] = v3(best[1])           # at least out of the rock
+                moved += 1
+            elif v[i] > 0.0:
+                lan[i]["drop"] = True                 # buried deep: nobody can see it, remove it
+                stuck += 1
+    if stuck:
+        R.L["lanterns"] = [l_ for l_ in lan if not l_.get("drop")]
+    report["lanterns_inside_rock_before"] = inside0
+    report["lanterns_moved_out"] = moved
+    report["lanterns_removed_buried"] = stuck
+    if stuck:
+        report["warnings"].append("%d lanterns were buried deeper than an 8 m walk out and were removed" % stuck)
+    print("lanterns: %d inside rock, %d moved out, %d removed" % (inside0, moved, stuck))
 
 
 def validate(R, F, report, lo, hi):
@@ -872,7 +1833,10 @@ def main():
 
     resolve(R, F, report)
     print("intents resolved (%.1fs)" % (time.time() - t0))
+    report["warnings"] += R.L.pop("warnings_gen", [])          # v49 (#71): planned terraces that were not built
     repair_stations(R, F, report)
+    unbury_lanterns(R, F, report)
+    snap_stalker_homes(R, F, report)
 
     dims = np.ceil((hi - lo) / VOX).astype(int)
     jobs = []
@@ -897,6 +1861,7 @@ def main():
     tri_total = 0
     vert_total = 0
     zones = getattr(R, "mouth_zones", [])
+    mouth_tris = [[] for _ in zones]
     for bi, groups in results:
         if not groups:
             continue
@@ -905,17 +1870,31 @@ def main():
             g["mat"] = g["biome"] * 2 + (1 if g["floor"] else 0)
             if zones:
                 pos = g["pos"].astype(np.float64)
-                bad = np.zeros(len(pos), dtype=bool)
-                for (A, d, rad, ln) in zones:
+                cut = np.zeros(len(g["idx"]), dtype=bool)
+                cen = None
+                for (A, d, rad, ln, keep_y, room) in zones:
                     q = pos - A
                     t = q @ d
                     perp = np.linalg.norm(q - np.outer(t, d), axis=1)
-                    bad |= (np.abs(t) < ln * 0.5) & (perp < rad)
-                if bad.any():
-                    keep = ~bad[g["idx"]].any(axis=1)
-                    g["idx"] = g["idx"][keep]
+                    zb = (np.abs(t) < ln * 0.5) & (perp < rad)
+                    if not zb.any():
+                        continue
+                    tb = zb[g["idx"]].any(axis=1)
+                    if keep_y is not None:
+                        # v48: a floor triangle on the room side stays, right up to the hole (it used
+                        # to be cut with the wall face, leaving a 2-4 m pit in front of every mouth)
+                        # (a floor triangle is 2.5 m wide and climbs into the wall fillet, so test its
+                        # lowest corner against the floor band and its centre against the axis)
+                        if cen is None:
+                            cen = pos[g["idx"]].mean(axis=1)
+                            low = pos[g["idx"]][:, :, 1].min(axis=1)
+                        tb &= ~((room * ((cen - A) @ d) > 0.0) & (low < keep_y) & (cen[:, 1] < A[1] - 0.5))
+                    cut |= tb
+                if cut.any():
+                    g["idx"] = g["idx"][~cut]
                     if len(g["idx"]) == 0:
                         continue
+                _collect_mouth_tris(zones, g, mouth_tris)
             prims.append(g)
             tri_total += len(g["idx"]); vert_total += len(g["pos"])
         if prims:
@@ -924,6 +1903,9 @@ def main():
         m["mat"] = mat
         nodes.append(("%s_%03d" % (kind, i), [m]))
         tri_total += len(m["idx"])
+        if zones:
+            _collect_mouth_tris(zones, m, mouth_tris)
+    check_mouth_floors(zones, mouth_tris, report, F)
     for i, s in enumerate(R.slabs):
         m = slab_mesh(s["poly"], s["top"], s["bottom"])
         m["mat"] = s["biome"] * 2
@@ -940,18 +1922,30 @@ def main():
     report["cave_vertices"] = int(vert_total)
     report["glb_mb"] = round(os.path.getsize(glb) / 1e6, 2)
     print("glb written: %s tris, %.1f MB (%.1fs)" % (tri_total, report["glb_mb"], time.time() - t0))
+    # v49 K12 (review): placed on the final triangles; adds no geometry, so it can follow the mesh
+    M = MeshCols(nodes)
+    place_k12(R, F, report, M)
+    del M
+    print("k12 placed (%.1fs)" % (time.time() - t0))
 
     validate(R, F, report, lo, hi)
     L = R.L
     L.pop("slabs_meta", None)
     counts = {k: len(v) for k, v in L.items() if isinstance(v, list)}
+    counts["waking_husk"] = 1 if L.get("waking_husk") else 0
     report["counts"] = counts
     min_y = min(z["floor"] for z in L["zones"])
     report["deepest_floor"] = min_y
     report["max_horizontal"] = round(max(math.hypot(z["center"][0], z["center"][2]) for z in L["zones"]), 1)
+    # v49 (#119): the old figure summed the distance between biome zone centres in list order. This is
+    # the main route itself: the straight lines between its stand points in order (a lower bound:
+    # tunnels and caves count as a straight line). Short Way ledges are left out; they are their own.
     path_len = 0.0
-    for a_, b_ in zip(L["zones"], L["zones"][1:]):
-        path_len += math.dist(a_["center"], b_["center"])
+    main_st = [s_["pos"] for s_ in L.get("stations", []) if s_["kind"] != "hard"]
+    for a_, b_ in zip(main_st, main_st[1:]):
+        d_ = math.dist(a_, b_)
+        if d_ < 500.0:
+            path_len += d_
     report["route_length_m"] = round(path_len, 0)
     with open(os.path.join(OUT, "layout.json"), "w", encoding="utf-8") as fh:
         json.dump(L, fh, separators=(",", ":"))

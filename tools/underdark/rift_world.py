@@ -215,6 +215,10 @@ class Builder:
                 lobe = self.under(rem2 if rem2 <= 22.5 else self.rng.uniform(16, 21), switchback=False)
             else:
                 lobe = self.under(self.rng.uniform(*dy_rng))
+        # v49 (#71): a planned great shelf the run had no room left for used to vanish silently
+        for t_ in pending:
+            self.L.setdefault("warnings_gen", []).append(
+                "%s: planned terrace at %.0f not built (run ended at %.0f, a terrace needs 62 m left below it)" % (BIOMES[biome], t_, self.y))
         return lobe
 
     # ------------------------------------------------------------ dressing every balcony
@@ -337,8 +341,15 @@ class Builder:
         ]))
         # the lamp line: lanterns and light every ~28 m from where you land to where you leave
         nl = max(3, int(plen / 28.0))
+        # v49 (#96): on the shelves where something lives (odd idx) the lamps past the trigger go
+        # out one by one when it wakes (the runtime DyingLights). The corner lamp stays lit so the
+        # way off the shelf is still readable. Same rng draws as before.
+        dying = []
         for j in range(nl + 1):
             q = land + path * (j / nl) + pside * rng.uniform(-2.5, 2.5)
+            if idx % 2 == 1 and 0.45 <= j / nl and j < nl:
+                dying.append(q)
+                continue
             L.setdefault("lanterns_extra", []).append({"pos": v3(q + np.array([0, 2.4, 0])), "color": GLOW[biome], "s": 1.3})
             if j % 2 == 0:
                 L["lights"].append({"pos": v3(q + np.array([0, 5.0, 0])), "color": GLOW[biome], "energy": 0.9, "range": 32.0})
@@ -362,17 +373,27 @@ class Builder:
         h0 = land + path * rng.uniform(0.22, 0.4) + pside * rng.choice([-1, 1]) * rng.uniform(13.0, 19.0)
         placed_h = 0
         n_sec = 17
+        # v49 K12: every piece of this husk carries a key, so gen.py can pick one great-shelf husk to
+        # wake (it tags that one's props "husk_id" for the map to hide). No rng draws added.
+        hkey = "t%d" % idx
+        hsec = []
         for j in range(n_sec):
             q = h0 + hdir * (j * 1.5 * hs)
             if T.side(q) < 12.0 or self.rift.wall_r(self.rift.bearing(q), y_top) - float(np.hypot(*(q[[0, 2]] - cxz))) < 9.0:
                 continue
             R.prop(A + ("Monster_Head.glb" if j == n_sec - 1 else "Monster_BodySection.glb"), [q[0], y_top + 0.5 * hs, q[2]],
                    yaw=godot_yaw_facing(hdir) + rng.uniform(-0.12, 0.12), scale=hs, rot_x=rng.uniform(-0.08, 0.08), snap=False)
+            R.intents[-1][1]["husk_key"] = hkey
+            hsec.append((j, np.array(q, dtype=float)))
             if j % 2 == 0 and j < n_sec - 1:
                 for sgn in (-1, 1):
                     R.prop(A + "Monster_UpperLeg.glb", [q[0], y_top + 0.35 * hs, q[2]], yaw=godot_yaw_facing(hdir) + sgn * 1.45,
                            scale=hs * 1.3, rot_x=0.5, snap=False)
+                    R.intents[-1][1]["husk_key"] = hkey
             placed_h += 1
+        L.setdefault("_terrace_husks", []).append({"key": hkey, "idx": idx, "biome": biome, "y_top": float(y_top), "hs": float(hs),
+                                                   "hdir": hdir.copy(), "land": land.copy(), "path": path.copy(), "sections": hsec,
+                                                   "n_sec": n_sec, "lives": idx % 2 == 1})
         if placed_h >= 6:
             if not hasattr(self, "husk_marks"):
                 self.husk_marks = []
@@ -396,9 +417,13 @@ class Builder:
         self.xterrace(T, land, path, pside, plen, biome, y_top, r, cxz)
         # on some of them, something lives
         if idx % 2 == 1:
-            cx, cz = self.rift.center(y_top)
-            den = np.array([float(cx) - T.ca * (k * r - 22.0), y_top + 3.0, float(cz) - T.sa * (k * r - 22.0)])
-            L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(land + path * 0.45 + np.array([0, 1.5, 0])), 14.0], "spawn": [v3(den)]})
+            trig = land + path * 0.45 + np.array([0, 1.5, 0])
+            # v49 (#96): it comes down the lamp line from the corner end, the way the dark walks
+            spawn = land + path * 0.92 + np.array([0, 3.0, 0])
+            L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(trig), 14.0], "spawn": [v3(spawn)]})
+            if dying:
+                # far lamps first: DyingLights puts out lights[0] first, so the dark walks toward you
+                R.intents.append(("dying_lights", dict(id=R.next_id("dl"), points=dying[::-1], trigger=[trig, 14.0], off=0.0)))
             R.text(land + path * 0.4, 8.0, "The lamps ahead are going out, one by one. Something is walking down the line toward you.")
         self.tour(land + np.array([0, 22.0, 0]) - pdir * 10.0, land + path * 0.6, name)
         L["tour"][-1]["air"] = True
@@ -464,10 +489,12 @@ class Builder:
                             yaw=face_void(a), scale=1.6, col="box", dim=0.5)
             q, a = pts[1], angs[1]
             for k in range(rng.randint(2, 4)):
-                R.xprop(X + rng.choice(["quat/Barrel.glb", "dungeon/barrel.glb", "ph/old_military_crate.glb", "quat/Crate.glb"]),
-                        inner(q, a, rng.uniform(1.0, 3.5)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.3), col="box", dim=0.42)
+                # v49 (#78): the barrel pile gets one hull per barrel, not one box over the whole pile
+                sc_ = rng.choice(["ph/wooden_crate_01.glb", "ph/wooden_crate_02.glb", "ph/wooden_barrels_01.glb", "ph/wine_barrel_01.glb"])
+                R.xprop(X + sc_, inner(q, a, rng.uniform(1.0, 3.5)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.3),
+                        col=("hull" if "barrels_01" in sc_ else "box"), dim=0.42)
             for q, a in list(zip(pts, angs))[1::3]:
-                R.xprop(X + "graveyard/lightpost-single.glb", inner(q, a, lip + 1.2), yaw=face_void(a) + math.pi, scale=2.6, dim=0.4)
+                R.xprop(X + "ph/wooden_lantern_01.glb", inner(q, a, lip + 1.2), yaw=face_void(a) + math.pi, scale=1.8, dim=0.5)
             if i % 3 == 1:
                 R.xprop(X + "ph/lantern_01.glb", inner(pts[-2], angs[-2], 1.0) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=2.2, dim=0.5)
         elif b == OSSUARY:
@@ -477,11 +504,11 @@ class Builder:
                                         "graveyard/gravestone-broken.glb", "graveyard/gravestone-wide.glb", "graveyard/gravestone-decorative.glb"]),
                         inner(q, a, rng.uniform(back - 3.0, back)) + jit(1.5), yaw=face_void(a) + rng.uniform(-0.4, 0.4), scale=2.4, dim=0.4)
                 if rng.random() < 0.5:
-                    R.xprop(X + rng.choice(["graveyard/coffin-old.glb", "graveyard/coffin.glb"]), inner(q, a, rng.uniform(0.5, back - 2.5)) + jit(2.0),
-                            yaw=rng.uniform(0, 6.28), scale=2.4, col="box", dim=0.4)
+                    R.xprop(X + rng.choice(["graveyard/coffin-old.glb", "graveyard/coffin.glb"]), inner(q, a, back - 0.9) + jit(0.6),
+                            yaw=face_void(a) + rng.uniform(-0.3, 0.3), scale=2.4, col="box", dim=0.4)
             for q, a in list(zip(pts, angs))[1::2]:
-                R.xprop(X + rng.choice(["graveyard/urn-round.glb", "graveyard/urn-square.glb", "graveyard/candle-multiple.glb", "quat/Candles_1.glb", "quat/Candles_2.glb"]),
-                        inner(q, a, rng.uniform(1.0, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.6, 2.4), dim=0.42)
+                R.xprop(X + rng.choice(["ph/antique_ceramic_vase_01.glb", "ph/ceramic_pot.glb", "ph/brass_candleholders.glb", "ph/brass_goblets.glb", "quat/Candles_1.glb"]),
+                        inner(q, a, rng.uniform(1.0, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.4, 2.0), dim=0.5)
             # a pile of skulls where the balcony narrows
             q, a = pts[-2], angs[-2]
             for k in range(rng.randint(4, 8)):
@@ -503,8 +530,8 @@ class Builder:
                             inner(q, a, rng.uniform(0.5, back)) + jit(2.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(5.0, 13.0), dim=0.32)
             if i % 2 == 0:
                 q, a = pts[mid], angs[mid]
-                R.xprop(X + rng.choice(["nature/log.glb", "nature/log_large.glb", "nature/stump_old.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
-                        yaw=rng.uniform(0, 6.28), scale=3.0, col="box", dim=0.35)
+                R.xprop(X + rng.choice(["ph/tree_stump_01.glb", "ph/tree_stump_02.glb", "ph/dead_tree_trunk_02.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
+                        yaw=rng.uniform(0, 6.28), scale=1.2, col="box", dim=0.5)
         elif b == ROOTS:
             # dead trees still stand where roots come through the roof
             for q, a in list(zip(pts, angs))[1::2]:
@@ -512,17 +539,18 @@ class Builder:
                         yaw=rng.uniform(0, 6.28), scale=rng.uniform(2.0, 2.8), dim=0.5)
             if i % 2 == 1:
                 q, a = pts[mid], angs[mid]
-                R.xprop(X + rng.choice(["nature/log_stack.glb", "nature/log_stackLarge.glb", "nature/stump_round.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
-                        yaw=rng.uniform(0, 6.28), scale=2.6, col="box", dim=0.35)
+                R.xprop(X + rng.choice(["ph/dead_tree_trunk_02.glb", "ph/tree_stump_02.glb", "ph/single_root.glb"]), inner(q, a, rng.uniform(0.0, back)) + jit(2.0),
+                        yaw=rng.uniform(0, 6.28), scale=1.3, col="box", dim=0.5)
         elif b == DROWNED:
             # what the water left: barrels, a boat, a broken rail along the lip
             for q, a in list(zip(pts, angs))[::2]:
                 for k in range(rng.randint(1, 3)):
-                    R.xprop(X + rng.choice(["quat/Barrel.glb", "dungeon/barrel.glb", "quat/Barrel.glb", "quat/Pot1_Broken.glb", "quat/Pot2_Broken.glb"]),
-                            inner(q, a, rng.uniform(0.5, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4), col="box", dim=0.42)
+                    sc_ = rng.choice(["ph/wooden_barrels_01.glb", "ph/wine_barrel_01.glb", "ph/wooden_bucket_02.glb", "ph/ceramic_pot.glb", "quat/Pot1_Broken.glb"])
+                    R.xprop(X + sc_, inner(q, a, rng.uniform(0.5, back)) + jit(2.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4),
+                            col=("hull" if "barrels_01" in sc_ else "box"), dim=0.42)
             if i % 3 == 0:
                 q, a = pts[mid], angs[mid]
-                R.xprop(X + "nature/canoe.glb", inner(q, a, rng.uniform(0.0, back - 1.0)), yaw=rng.uniform(0, 6.28), scale=3.0, rot_x=rng.uniform(-0.15, 0.15), dim=0.35)
+                R.xprop(X + "nature/canoe.glb", inner(q, a, back - 0.5), yaw=face_void(a) + math.pi * 0.5 + rng.uniform(-0.3, 0.3), scale=3.0, rot_x=rng.uniform(-0.15, 0.15), dim=0.3)
             for q, a in list(zip(pts, angs))[1::3]:
                 R.xprop(X + "quat/Rail_Straight.glb", inner(q, a, lip + 0.6), yaw=face_void(a) + math.pi * 0.5, scale=1.5, dim=0.5)
         elif b == VILLAGE:
@@ -541,8 +569,12 @@ class Builder:
                     R.xprop(X + rng.choice(["quat/Cart.glb", "quat/Bookcase_Full.glb", "quat/Bookcase_Empty.glb"]), inner(q, a, back - 0.5) + jit(0.5),
                             yaw=face_void(a) + rng.uniform(-0.3, 0.3), scale=1.2, col="box", dim=0.5)
                 else:
-                    R.xprop(X + rng.choice(["quat/Chest.glb", "quat/Pot1.glb", "quat/Pot2.glb", "quat/Pot3.glb", "quat/Crate.glb"]),
-                            inner(q, a, rng.uniform(1.0, back - 1.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.4), col="box", dim=0.5)
+                    R.xprop(X + rng.choice(["ph/treasure_chest.glb", "ph/antique_ceramic_vase_01.glb", "ph/ceramic_pot.glb", "ph/planter_pot_clay.glb", "ph/wooden_crate_02.glb"]),
+                            inner(q, a, rng.uniform(1.0, back - 1.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 1.5), col="box", dim=0.5)
+                    if j % 4 == 1:
+                        q2 = inner(q, a, rng.uniform(0.5, back - 1.5)) + jit(1.0)
+                        R.xprop(X + "ph/wooden_table_02.glb", q2, yaw=rng.uniform(0, 6.28), scale=1.3, col="box", dim=0.5)
+                        R.xprop(X + "ph/wooden_stool_02.glb", q2 + jit(1.4), yaw=rng.uniform(0, 6.28), scale=2.0, dim=0.5)
             if i % 3 == 1:
                 q, a = pts[-2], angs[-2]
                 R.xprop(X + "quat/Torch.glb", inner(q, a, back + 0.2), yaw=face_void(a), scale=1.5, up=1.6, dim=0.6)
@@ -563,17 +595,19 @@ class Builder:
                 q, a = pts[mid], angs[mid]
                 R.xprop(X + "quat/Cart.glb", inner(q, a, back - 1.5) + jit(0.5), yaw=face_void(a) + rng.uniform(-0.4, 0.4), scale=1.2, col="box", dim=0.5)
             for q, a in list(zip(pts, angs))[1::2]:
-                R.xprop(X + rng.choice(["ph/old_military_crate.glb", "quat/Crate.glb", "dungeon/barrel.glb", "quat/Bricks.glb", "quat/Chest.glb"]),
+                R.xprop(X + rng.choice(["ph/old_military_crate.glb", "ph/wooden_crate_01.glb", "ph/wine_barrel_01.glb", "quat/Bricks.glb", "ph/wooden_bucket_01.glb"]),
                         inner(q, a, rng.uniform(1.0, back - 1.5)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.1, 2.4) if rng.random() < 0.3 else 1.2, col="box", dim=0.45)
             if i % 3 == 0:
                 q, a = pts[-2], angs[-2]
                 R.xprop(X + "ph/picke_dirty_01.glb", inner(q, a, back) + jit(0.5), yaw=face_void(a), scale=1.6, rot_x=-0.35, dim=0.55)
                 R.xprop(X + "quat/BearTrap_Open.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=1.4, dim=0.5)
+                R.xprop(X + "ph/wooden_ladder.glb", inner(pts[1], angs[1], back + 0.4), yaw=face_void(angs[1]), scale=2.2, rot_x=-0.22, dim=0.5)
+                R.xprop(X + rng.choice(["ph/rusted_spade_01.glb", "ph/wooden_axe_02.glb"]), inner(pts[1], angs[1], back + 0.1) + jit(0.8), yaw=face_void(angs[1]) + rng.uniform(-0.5, 0.5), scale=1.5, rot_x=-0.3, dim=0.5)
             if i % 4 == 1:
                 q, a = pts[1], angs[1]
                 R.xprop(X + rng.choice(["quat/Arch_Gothic.glb", "quat/Support_Tall.glb", "quat/Column_Square.glb"]), inner(q, a, back - 1.5), yaw=face_void(a), scale=1.6, col="box", dim=0.5)
-                R.xprop(X + "dungeon/table.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=2.4, col="box", dim=0.42)
-                R.xprop(X + "dungeon/chair.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=2.4, dim=0.42)
+                R.xprop(X + "ph/wooden_table_02.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.0), yaw=rng.uniform(0, 6.28), scale=1.3, col="box", dim=0.5)
+                R.xprop(X + "ph/wooden_stool_02.glb", inner(q, a, rng.uniform(1.0, back - 2.0)) + jit(1.5), yaw=rng.uniform(0, 6.28), scale=2.0, dim=0.5)
         elif b in (NEST, BURROWS):
             q, a = pts[mid], angs[mid]
             for k in range(rng.randint(3, 6)):
@@ -611,7 +645,7 @@ class Builder:
         extra = {
             OSSUARY: (["graveyard/gravestone-round.glb", "graveyard/gravestone-cross-large.glb", "graveyard/cross.glb", "graveyard/coffin-old.glb", "quat/Skull.glb"], 2.3, 10),
             FUNGAL: (["nature/mushroom_redGroup.glb", "nature/mushroom_tanGroup.glb", "nature/mushroom_redTall.glb", "nature/mushroom_tan.glb"], 9.0, 14),
-            ROOTS: (["quat/DeadTree_1.glb", "quat/DeadTree_2.glb", "quat/DeadTree_3.glb", "nature/log_large.glb"], 2.4, 8),
+            ROOTS: (["quat/DeadTree_1.glb", "quat/DeadTree_2.glb", "quat/DeadTree_3.glb", "ph/dead_tree_trunk_02.glb"], 2.4, 8),
             DROWNED: (["quat/Barrel.glb", "quat/Crate.glb", "quat/Column_BridgeSupport.glb", "nature/canoe.glb"], 1.5, 8),
             VILLAGE: (["quat/Column_Round.glb", "quat/Wall_Broken.glb", "quat/Wall_ArchRound_Broken.glb", "quat/Statue_Stag.glb", "quat/Cart.glb", "quat/Stairs.glb"], 1.6, 9),
             CRYSTAL: (["ph/namaqualand_boulder_02.glb", "ph/namaqualand_boulder_05.glb"], 2.0, 5),
@@ -625,6 +659,8 @@ class Builder:
                     continue
                 nm = rng.choice(names)
                 s_ = sc * (3.4 / 1.6 if nm.startswith("dungeon/") else 1.0) * rng.uniform(0.85, 1.15)
+                if nm.startswith("ph/"):
+                    s_ = rng.uniform(1.1, 1.5)
                 R.xprop(X + nm, q, yaw=rng.uniform(0, 6.28), scale=s_, col="box" if not nm.endswith("Skull.glb") else None, dim=0.45)
 
     def detail(self, s):
@@ -825,6 +861,16 @@ def hard_routes(B):
             return False
         return True
 
+    # v49 (#2): a secret ladder may skip embers and checkpoints, never something the team was sent
+    # down to do. Short Way 2 ran from the Fungal landing past all four kilns and fragment 1, so a
+    # solo player landed under the Kiln Gate with nothing lit. Every required objective's height:
+    obj_y = [float(a_["y"]) for (k_, a_) in R.intents if k_ in ("kiln", "plate") and a_.get("plinth") is None]
+    obj_y += [float(a_["tunnel"]["points"][0][1]) for (k_, a_) in R.intents if k_ == "gate"]
+    obj_y += [float(f_["pos"][1]) for f_ in L["fragments"]]
+
+    def skips_objective(y_hi, y_lo):
+        return any(y_lo - 6.0 < oy < y_hi for oy in obj_y)
+
     wanted = [("underdark_relic_1", (OSSUARY, MOUTH)), ("underdark_relic_2", (DROWNED, ROOTS, FUNGAL, VILLAGE)), ("underdark_relic_3", (FOUNDRY, CRYSTAL))]
     used_S = []
     for (rid, biomes) in wanted:
@@ -850,6 +896,8 @@ def hard_routes(B):
                 for (T, terr, bonus) in cands:
                     span = S["y"] - T["y"]
                     if not (100.0 <= span <= 340.0):
+                        continue
+                    if skips_objective(S["y"], T["y"]):
                         continue
                     if terr is not None:
                         if terr["solid"].side(rift.point(a_c, terr["y_top"], 4.0)) < 14.0:
@@ -893,7 +941,7 @@ def hard_routes(B):
         last = entry
         while y - T["y"] > 24.0:
             rem = y - T["y"]
-            dy = rng.uniform(20.0, 22.8) if rem > 47.0 else max(12.0, rem - 21.0)
+            dy = rng.uniform(20.0, 22.8) if rem > 47.0 else max(12.0, rem * 0.5)   # split the last two evenly: rem-21 went over the rope at rem 44-47
             y -= dy
             r_ = float(rift.radius(y))
             side = -side
@@ -976,8 +1024,13 @@ def megastructures(B):
         L["landmarks"].append({"name": "The Ribs", "pos": v3(mid), "n": n})
         B.tour(B.spot(a_mid + 0.9, y0 - Hm * 0.3, 40.0) - np.array([0, 1.8, 0]), mid, "The Ribs")
         L["tour"][-1]["air"] = True
-        near_st = min((s_ for s_ in L["stations"] if abs(s_["pos"][1] - (y0 - Hm * 0.5)) < 90), default=None,
-                      key=lambda s_: np.linalg.norm(np.array(s_["pos"]) - mid))
+        # v49 (#51): the nearest station whose text sphere overlaps no other text (the Ribs text sat
+        # exactly on the Stalker's warning and hid it)
+        def _clear(s_):
+            q_ = np.array(s_["pos"]) + np.array([0, 1.5, 0])
+            return all(np.linalg.norm(q_ - np.array(t_["pos"])) >= 9.0 + float(t_["r"]) for t_ in L["texts"])
+        band_ = [s_ for s_ in L["stations"] if abs(s_["pos"][1] - (y0 - Hm * 0.5)) < 90 and s_["kind"] != "hard"]
+        near_st = min((s_ for s_ in band_ if _clear(s_)), default=None, key=lambda s_: np.linalg.norm(np.array(s_["pos"]) - mid))
         if near_st is not None:
             R.text(np.array(near_st["pos"]), 9.0, "Ribs. Each one longer than a street, grown into the wall. Whatever it was, it died before anyone dug here. The rift was cut around it.")
 
@@ -1030,7 +1083,81 @@ def megastructures(B):
     L["landmarks"].append({"name": "The Needles", "pos": v3([float(cx), LAKE_Y + 60, float(cz)]), "n": made})
 
 
+# ==================================================================== strata that match the route
+
+def align_strata(B):
+    """v49 (#22): the strata were fixed numbers, and the route has moved under them: the Drowned
+    Galleries started 175 m inside the Rootworks stratum, so the HUD, fog, music and rock colour all
+    switched in the wrong place. Each boundary is now put at the first balcony of the lower biome
+    (the runtime shifts it 8 m up, so the HUD switches just above that balcony), as long as the
+    upper biome's last stand point is at least 10 m above it. The Ossuary/Fungal boundary stays
+    where it is: it sits above the Lid, and the rock under the Lid belongs to the Fungal Hollow."""
+    L, rift = B.L, B.rift
+    st = [s_ for s_ in L["stations"] if s_["kind"] != "hard"]
+    new = [list(t_) for t_ in rift.strata]
+    for k in range(1, len(new)):
+        lower, upper = new[k][2], new[k - 1][2]
+        if lower == FUNGAL:
+            continue
+        first = next((i for i, s_ in enumerate(st) if s_["biome"] == lower), None)
+        if first is None or first == 0:
+            continue
+        prev = [s_ for s_ in st[:first] if s_["biome"] == upper]
+        if not prev:
+            continue
+        y_first = float(st[first]["pos"][1])
+        y_last = float(prev[-1]["pos"][1])
+        y_b = y_first if y_last - y_first >= 10.0 else 0.5 * (y_last + y_first) - 4.0
+        if not (new[k][1] < y_b < new[k - 1][0]):
+            continue                                      # never swallow a whole stratum
+        new[k - 1][1] = round(y_b, 1)
+        new[k][0] = round(y_b, 1)
+    rift.strata = [tuple(t_) for t_ in new]
+    L["strata"] = [{"top": t_, "bottom": b_, "biome": bi_} for (t_, b_, bi_) in rift.strata]
+
+
 # ==================================================================== the descent
+
+def nest_dress(R, L, n1, altar, rng):
+    """The Nest is where they come from: egg clusters glow along the walls and thicken around the
+    altar, and whoever built the altar left its temple: a ring of columns, an arch on the approach."""
+    d, s = n1.d, n1.s
+    rx, rz = float(n1.r[0]), float(n1.r[2])
+    fy = n1.floor_y
+    for i in range(26):
+        lx = rng.uniform(-0.8, 0.8) * rx
+        lz = rng.choice([-1, 1]) * rng.uniform(0.55, 0.88) * rz
+        p = n1.world_point(lx, lz, fy)
+        R.egg(p, rng.randint(4, 9), rng.uniform(0.55, 1.0))
+        if i % 3 == 0:
+            L["lights"].append({"pos": v3(p + np.array([0, 1.6, 0])), "color": [0.45, 0.95, 0.35], "energy": 0.5, "range": 11.0})
+    for i in range(9):                                   # thick around the altar
+        ang = i * 0.7 + rng.uniform(-0.2, 0.2)
+        p = altar + (d * math.cos(ang) + s * math.sin(ang)) * rng.uniform(4.5, 9.0)
+        R.egg(p, rng.randint(6, 11), rng.uniform(0.7, 1.15))
+        if i % 3 == 1:
+            L["lights"].append({"pos": v3(p + np.array([0, 1.8, 0])), "color": [0.45, 0.95, 0.35], "energy": 0.6, "range": 12.0})
+    for i in range(8):                                   # the temple ring
+        ang = i * math.pi / 4 + math.pi / 8
+        p = altar + (d * math.cos(ang) + s * math.sin(ang)) * 11.0
+        R.xprop(X + ("quat/Column_Round.glb" if i % 2 == 0 else "quat/Column_Round_Short.glb"), p, yaw=rng.uniform(0, 6.28), scale=2.1, col="box", dim=0.35)
+    for k in (-1, 1):
+        R.xprop(X + "quat/Arch_Round.glb", altar - d * 17.0 + s * k * 6.5, yaw=godot_yaw_facing(d), scale=1.9, dim=0.35)
+    # v49 (#34): the broken walls stand 9.5 m off the axis (were 4.5): their box collision made an
+    # invisible wall across the idol run. The inner edges now sit ~5.7 m to each side of the altar-to-
+    # exit line (which passes ~1.9 m off the axis here), so they frame the run instead of blocking it.
+    for k in (-1, 1):
+        R.xprop(X + "quat/Wall_ArchRound_Broken.glb", altar + d * 9.0 + s * k * 9.5, yaw=godot_yaw_facing(-d), scale=1.9, col="box", dim=0.35)
+    R.xprop(X + "quat/Stairs.glb", altar - d * 6.0, yaw=godot_yaw_facing(d), scale=1.6, dim=0.35)
+    for i in range(14):
+        ang = rng.uniform(0, 6.28)
+        p = altar + (d * math.cos(ang) + s * math.sin(ang)) * rng.uniform(2.6, 4.2)
+        R.xprop(X + ("quat/Skull.glb" if i % 3 else rng.choice(["quat/Candles_1.glb", "quat/Candles_2.glb"])), p,
+                yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.3), rot_x=rng.uniform(-0.4, 0.4), dim=0.4)
+    L["tour"].append({"pos": v3(altar - d * 22.0 + np.array([0, 4.0, 0])), "look": v3(altar + np.array([0, 2.0, 0])), "label": "nest altar", "air": True})
+    L["tour"].append({"pos": v3(altar + s * 7.0 - d * 2.0 + np.array([0, 1.7, 0])), "look": v3(altar + s * 7.0 + d * 6.0 + np.array([0, 0.4, 0])), "label": "nest eggs", "air": True})
+    L["tour"].append({"pos": v3(n1.world_point(0.1 * rx, 0.45 * rz, fy + 1.7)), "look": v3(n1.world_point(0.25 * rx, 0.8 * rz, fy + 0.5)), "label": "nest wall eggs", "air": True})
+
 
 def build(seed):
     B = Builder(seed)
@@ -1083,8 +1210,11 @@ def build(seed):
         L["lights"].append({"pos": v3(B.along(p0, p1, f, 5.0)), "color": GLOW[OSSUARY], "energy": 1.1, "range": 30.0})
     for f in (0.15, 0.3, 0.7, 0.85):
         R.prop(rng.choice(STANDING), B.along(p0, p1, f, 0.0), yaw=rng.uniform(0, 6.28))
-    stalk_home = B.along(p0, p1, 0.5, -40.0)
     info = B.landing(OSSUARY, "THE FAR WALL", None, checkpoint=True)
+    # v49 (#39): the home was 40 m under the middle of the Span, in open air, so the stalker snapped
+    # back to it on every step and never moved. It now coils on real rock: the quiet end of this
+    # landing (the way on leaves by the other end), 11 m from the checkpoint in the middle.
+    stalk_home = info["pts"][0] + np.array([0, 1.0, 0])
     gal_a = 0.5 * (info["a0"] + info["a1"])
     g0 = B.spot(gal_a, B.y + 15.0, -6.0)
     g1 = B.spot(gal_a, B.y + 15.0, 19.0)
@@ -1094,7 +1224,7 @@ def build(seed):
     R.text(info["pts"][len(info["pts"]) // 2], 8.0, "A bell on a stone gallows, hung by the miners. Throw your hook at it. Anything hunting will come to the sound instead of to you.")
     cz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-380 * Z, -480 * Z, -580 * Z, -680 * Z, -750 * Z)]
     L["stalkers"].append({"id": "stalker1", "home": v3(stalk_home), "zone": cz, "speed": 33.0})
-    R.text(info["pts"][0], 8.0, "Something pale is coiled out there in the dark. It does not move while you watch it.")
+    R.text(info["pts"][0], 8.0, "Something pale is coiled at the end of this ledge. It does not move while you watch it. Do not look away for long.")
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(info["pts"][-1]), 9.0], "spawn": [v3(B.spot(B.a + 0.5, B.y + 10, 3.0))]})
     B.under(17.0)
     B.run(OSSUARY, -748.0 * Z, terraces=(-640 * Z,))
@@ -1111,6 +1241,8 @@ def build(seed):
     B.checkpoint(bm.arrival + bm.d * 5.0, "THE BURROWS", BURROWS)
     R.text(bm.arrival, 7.0, "Three holes, low in the wall. One goes through. You will have to crawl.")
     R.scatter_floor(bm, 4, lambda p: R.prop(rng.choice(CORPSES), p, yaw=rng.uniform(0, 6.28)), min_r=0.3)
+    R.scatter_floor(bm, 14, lambda p: R.xprop(X + rng.choice(["quat/Skull.glb", "quat/Skull.glb", "ph/rock_07.glb", "ph/rock_09.glb"]), p,
+                                              yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.4) if rng.random() < 0.5 else rng.uniform(3.0, 6.0), rot_x=rng.uniform(-0.4, 0.4), dim=0.4), min_r=0.2)
     L["ambience"].append({"pos": v3([bm.c[0], bm.floor_y + 2, bm.c[2]]), "sounds": WHISPERS, "min": 9.0, "max": 20.0, "range": 24.0, "db": -4.0})
     R.tube(bm, 0.0, [(14, 0, 2, 1.55), (10, -35, 4, 1.4), (9, 45, 5, 1.25), (0, 0, 9, 1.3), (11, -50, 5, 1.5), (14, 30, 6, 1.28),
                      (0, 0, 10, 1.3), (12, -40, 5, 1.6), (0, 0, 9, 1.3), (10, 25, 4, 1.25), (14, 10, 3, 1.7)],
@@ -1118,13 +1250,15 @@ def build(seed):
            decor=dict(candles=13.0, texts=[(6.0, "Barely wider than your shoulders. You go in on your hands and knees."),
                                            (52.0, "It narrows. Breathe out and push."),
                                            (96.0, "Somewhere above you is the weight of the Lid. You try not to think about it.")],
-                      ambience=[30.0, 70.0, 110.0]))
+                      ambience=[30.0, 70.0, 110.0], bones=9.0, roots=7.0, husk=True))
     R.tube(bm, math.radians(100), [(10, 0, 0, 1.5), (12, -55, 2, 1.35), (9, -40, 1, 1.25), (5, 0, 0, 1.6)],
-           r0=1.5, name="dead end A", decor=dict(end_corpse=True, end_ember=True, end_text="It ends. Someone got this far and stopped. Back out, feet first."))
+           r0=1.5, name="dead end A", decor=dict(end_corpse=True, end_ember=True, end_text="It ends. Someone got this far and stopped. Back out, feet first.", bones=6.0, roots=9.0))
     R.tube(bm, math.radians(-118), [(14, 0, 1, 1.5), (0, 0, 6, 1.3), (10, -60, 1, 1.3), (8, 30, 0, 2.2)],
-           r0=1.5, name="dead end B", decor=dict(end_corpse=True, end_corpses=4, end_text="A pocket of bones. No way on. The hole you dropped through is above you."))
+           r0=1.5, name="dead end B", decor=dict(end_corpse=True, end_corpses=4, end_text="A pocket of bones. No way on. The hole you dropped through is above you.", bones=4.0, roots=8.0))
     br = R.chamber(BURROWS, 13, 9, 12, amp=(1.6, 1.0, 0.4), name="Breathing Room")
     R.text(br.arrival, 6.0, "You can stand. Your knees are bleeding. Somewhere ahead, green light.")
+    R.scatter_floor(br, 12, lambda p: R.xprop(X + rng.choice(["quat/Skull.glb", "ph/rock_07.glb", "ph/tree_stump_02.glb", "ph/single_root.glb"]), p,
+                                              yaw=rng.uniform(0, 6.28), scale=rng.uniform(1.0, 1.5), rot_x=rng.uniform(-0.3, 0.3), dim=0.45), min_r=0.2)
     R.feature(br, "lore")
     R.tunnel(FUNGAL, [(34, 5, 95), (34, 5, 85)], r=5.0)
     B.tunnel_to_rift(FUNGAL, r=5.5, slope=0.08)
@@ -1157,6 +1291,9 @@ def build(seed):
             kp = B.spot(side_a - B.dirn * (5.0 / info["r"]), B.y + 3.0, 5.0)
             R.intents.append(("kiln", dict(gate=gate_k, idx=kiln_i, x=float(kp[0]), z=float(kp[2]), y=float(kp[1]) + 4, plinth=None)))
             L["lights"].append({"pos": v3(kp + np.array([0, 4, 0])), "color": [1.0, 0.55, 0.2], "energy": 0.8, "range": 20.0})
+            if kiln_i == 0:
+                # v49 (#2): the instruction sits at the first kiln, not 200-375 m lower at the gate
+                R.text(info["pts"][0], 7.0, "A kiln, cold, on a bracket of its own off the path. There are four on the way down. Light them all, or the door at the bottom will not open.")
             kiln_i += 1
         if step == 12:
             # fragment 1: a side passage behind the glowing brackets
@@ -1173,7 +1310,7 @@ def build(seed):
         B.moves.append({"type": "hop", "dy": round(dy, 1), "y": B.y})
         if step % 7 == 0:
             B.dirn *= -1
-    R.text(B.spot(B.a, B.y + 12, 5.0), 9.0, "Four kilns, cold, each on a bracket of its own. Light them all.")
+    R.text(B.spot(B.a, B.y + 12, 5.0), 9.0, "The door below wants all four kilns lit.")
     info = B.shelf(FUNGAL, 34, p=13.0, label="KILN GATE")
     B.enter_wall(0.5 * (info["a0"] + info["a1"]))
     t = R.tunnel(FUNGAL, [(40, 9, 70), (40, 9, 80)], r=5.5)
@@ -1184,17 +1321,46 @@ def build(seed):
     info = B.landing(ROOTS, BIOMES[ROOTS], "Roots of something that should not be this deep. They cross the whole rift, wall to wall, thick as streets. You will have to walk them.")
     for k in range(4):
         q0 = B.spot(B.a, B.y, 5.0)
-        p0, p1 = B.span(ROOTS, rng.uniform(68, 80), 4.6, 8.5, 0.55, gap=0.0, swing=0.5, look=LOOK_BARK)
+        # v48: roots 1 and 3 (k 0 and 2, no ambush on them) have split in the middle: a ~10 m
+        # swing to the far half. The centipede roots (k 1 and 3) stay one continuous deck.
+        gap_k = 10.0 if k in (0, 2) else 0.0
+        p0, p1 = B.span(ROOTS, rng.uniform(68, 80), 4.6, 8.5, 0.55, gap=gap_k, swing=0.5, look=LOOK_BARK)
         B.tour(B.along(p0, p1, 0.12), B.along(p0, p1, 0.8), "Root %d" % (k + 1))
+        # both deck halves are places you stand: the validator checks there is floor there
+        B.station(B.along(p0, p1, 0.1), "span", ROOTS)
+        B.station(B.along(p0, p1, 0.9), "span", ROOTS)
         for f in (0.1, 0.3, 0.5, 0.7, 0.9):
             L["lights"].append({"pos": v3(B.along(p0, p1, f, 4.0)), "color": GLOW[ROOTS], "energy": 0.9, "range": 24.0})
         for f in (0.22, 0.55, 0.78):
             R.prop(A + "Roots.glb", B.along(p0, p1, f, 0.0), yaw=rng.uniform(0, 6.28), scale=rng.uniform(0.5, 0.9), snap=False)
-        # a thin side root that ends in mid-air, with something worth the risk at its tip
-        f = rng.uniform(0.35, 0.6)
-        base = B.along(p0, p1, f)
         t_dir = (p1 - p0) / np.linalg.norm(p1 - p0)
         side = np.cross(np.array([0, 1.0, 0]), t_dir)
+        side = side / np.linalg.norm(side)
+        # v48: the root reads as a root, not a bare beam. Every 18-25 m a tangle of the game's own
+        # roots (Roots.glb, 552 triangles) hangs off alternating deck edges, its body outside the
+        # 9.2 m deck so the walking lane stays clear. Its long axis runs along the root.
+        span_m = float(np.linalg.norm((p1 - p0)[[0, 2]]))
+        gap_f = (0.5 * gap_k + 3.0) / span_m if gap_k > 0 else -1.0
+        s_m = rng.uniform(6.0, 12.0)
+        sgn = rng.choice([-1, 1])
+        while s_m < span_m - 8.0:
+            f_ = s_m / span_m
+            if abs(f_ - 0.5) > gap_f:
+                o_ = side * sgn
+                sc_ = rng.uniform(0.8, 1.2)
+                q_ = B.along(p0, p1, f_, -0.6) + o_ * (4.9 + 1.55 * sc_)
+                R.prop(A + "Roots.glb", q_, yaw=math.atan2(o_[2], -o_[0]) + rng.uniform(-0.15, 0.15), scale=sc_,
+                       rot_x=rng.uniform(-0.12, 0.12), snap=False)
+                sgn = -sgn
+            s_m += rng.uniform(18.0, 25.0)
+        if gap_k > 0:
+            R.text(B.along(p0, p1, 0.5 - gap_f), 7.0, "The root has split. The far half is a hook's throw away.")
+        # a thin side root that ends in mid-air, with something worth the risk at its tip
+        if gap_k > 0:
+            f = rng.uniform(0.30, 0.42) if rng.random() < 0.5 else rng.uniform(0.58, 0.66)       # never inside the split
+        else:
+            f = rng.uniform(0.35, 0.6)
+        base = B.along(p0, p1, f)
         tip = base + side * rng.choice([-1, 1]) * rng.uniform(24, 34) + np.array([0, -5.0, 0])
         B.solids.append(BeamSolid(base, tip, 1.5, 2.6, 0.4))
         B.solids[-1].look = LOOK_BARK
@@ -1232,12 +1398,19 @@ def build(seed):
         else:
             key = R.plinth(d2, spot[1], spot[2])
             R.intents.append(("plate", dict(gate=gate_p, idx=idx, plinth=key)))
-    t = R.tunnel(DROWNED, [(40, 8, 95), (40, 8, 85)], r=5.5)
+    # v49 (#20): the exit used to turn a flat 180 degrees and come out straight under the PLATE HALL
+    # balcony, 36 m down: one rappel and a survivable fall skipped the co-op door. A long leg along
+    # the wall now carries it well round the rift first, the way the route goes on (away from the
+    # balcony, so no later stand point lies under it). Same total drop as before, 16 m.
+    t = R.tunnel(DROWNED, [(40, 5, -95), (75, 3, 0), (40, 8, -85)], r=5.5)
     R.intents.append(("gate", dict(id=gate_p, kind="plates", need=0, tunnel=t, dist=10.0)))
     B.tunnel_to_rift(DROWNED, r=5.5, slope=0.1)
-    B.landing(DROWNED, "BELOW THE PLATES", None)
+    info = B.landing(DROWNED, "BELOW THE PLATES", "The pale thing is down here too, coiled at the end of this ledge. It only moves while nobody is looking at it. Keep your eyes on it.")
     sz = [[v3(np.array([float(rift.center(yy)[0]), yy, float(rift.center(yy)[1])])), 270.0] for yy in (-1620 * Z, -1720 * Z, -1820 * Z, -1920 * Z)]
-    L["stalkers"].append({"id": "stalker2", "home": v3(B.spot(B.a + 2.0, B.y - 30, 12.0)), "zone": sz, "speed": 36.0})
+    # v49 (#39): its home was a point 30 m under the far side of the rift with no floor within 45 m,
+    # so it snapped back there on every step and never hunted. It now coils on this landing's quiet
+    # end, like the first one (gen.py puts the home 1 m over the real rock there).
+    L["stalkers"].append({"id": "stalker2", "home": v3(info["pts"][0] + np.array([0, 1.0, 0])), "zone": sz, "speed": 36.0})
     B.under(17.0)
     # THE PLUNGE: the longest stretch with no balcony at all
     info = B.shelf(DROWNED, 30, lobe_p=17.0, label="THE PLUNGE")
@@ -1259,7 +1432,11 @@ def build(seed):
         a0 = B.a
         a1 = a0 + math.pi + rng.uniform(-0.4, 0.4)
         n = 22
-        start = B.spot(a0, B.y, 12.0)
+        # v48: the second crossing follows run(), whose last step-down builds no floor, so the first
+        # house hung 28 m below the last balcony. Start the line no more than 12 m under the last
+        # place you stood (the first house then sits within one rope of it).
+        y_last = float(L["stations"][-1]["pos"][1])
+        start = B.spot(a0, max(B.y, y_last - 12.0), 12.0)
         end = B.spot(a1, B.y - 150.0, 12.0)
         prev = start
         for k in range(1, n + 1):
@@ -1338,6 +1515,9 @@ def build(seed):
             foundry_shelf = True
             info = B.shelf(FOUNDRY, 30)
             lobe_t = B.terrace(FOUNDRY)
+            # v48: a checkpoint on the great shelf splits the 554 m Foundry stretch. It sits at the
+            # exit corner every player has to walk through (a Short Way 3 landing passes it too).
+            B.checkpoint(B.terraces[-1]["corner"], "THE FOUNDRY, THE GREAT SHELF", FOUNDRY)
             info = B.shelf(FOUNDRY, 34, lobe_p=lobe_t)
             B.under(18.0, switchback=False)
         r = B.rw()
@@ -1355,10 +1535,14 @@ def build(seed):
         B.station(c, "gantry", FOUNDRY)
         B.a += B.dirn * (Lg / r)
         info = B.shelf(FOUNDRY, rng.uniform(26, 40), lobe_p=None)
-        lobe = B.under(rng.uniform(16, 21))
+        # v48: the ladder hangs straight off this balcony, like run() builds it. Stepping down
+        # with under() first moved the cursor 16-21 m with no floor there, so the first foothold
+        # sat 37-42 m below the balcony (two of them past the 40 m lethal line).
         if rng.random() < 0.9:
             B.chain(FOUNDRY, rng.randint(3, 5), above=info["pts"][-1])
             B.under(17.0, switchback=False)
+        else:
+            B.under(rng.uniform(16, 21))
     # THE CRUCIBLE: monkey bars clean across the rift, over the lake
     B.run(FOUNDRY, LAKE_Y + 22.0, chain_every=1)
     info = B.shelf(FOUNDRY, 40, lobe_p=18.0, p=15.0, label="THE CRUCIBLE")
@@ -1396,11 +1580,11 @@ def build(seed):
         aa = k / 10.0 * 2 * math.pi
         L["lights"].append({"pos": v3([float(cx) + math.cos(aa) * 95, LAKE_Y + 10, float(cz) + math.sin(aa) * 95]), "color": [1.0, 0.4, 0.08], "energy": 1.1, "range": 95.0})
     B.a = a1 % (2 * math.pi)
-    info = B.landing(FOUNDRY, "PAST THE CRUCIBLE", "You made it across. Your hands will not stop shaking.", length=40.0)
+    # v49 (#51): one text, not two on top of each other (the door text sat 1 m from this one)
+    info = B.landing(FOUNDRY, "PAST THE CRUCIBLE", "You made it across. Your hands will not stop shaking. In the wall, a door wears the mark of the idol. It wants all three pieces.", length=40.0)
     B.enter_wall(0.5 * (info["a0"] + info["a1"]))
     t = R.tunnel(FOUNDRY, [(40, 10, 0), (30, 8, 15)], r=5.5)
     R.intents.append(("gate", dict(id="gate_idol", kind="idol", need=3, tunnel=t, dist=12.0)))
-    R.text(t["points"][0] - np.array([0, 2.5, 0]), 8.0, "The door wears the mark of the idol. It wants all three pieces.")
     R.tunnel(NEST, [(60, 40, 20), (60, 45, -25), (50, 35, 15)], r=6.0)
 
     # ---------------------------------------------------------------- 8 THE NEST
@@ -1415,12 +1599,17 @@ def build(seed):
     # the Follower comes out of the dark at the far side of the Nest, about 80 m behind the altar,
     # so it reaches you while you run for the exit (from the tunnel mouth it was 250 m away and
     # would have arrived after the level was over)
-    L["follower_finale"] = {"spawn": v3(n1.world_point(0.72 * n1.r[0] - 80.0, -0.25 * n1.r[2], n1.floor_y + 4.0))}
+    # v48: 80 m behind the altar was over the chasm (the trench spans |lx| < 24 m), so the Follower
+    # dropped into it. It now comes out on the altar side of the chasm, about 60 m behind the altar.
+    L["follower_finale"] = {"spawn": v3(n1.world_point(0.72 * n1.r[0] - 52.0, -0.25 * n1.r[2], n1.floor_y + 4.0))}
     L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(n1.arrival + n1.d * 14), 10.0], "spawn": [v3(t["points"][0] + np.array([0, 2.5, 0]))]})
+    # v48 finale: when the idol is taken the chasers come out BETWEEN the altar and the exit tunnel,
+    # flanking the escape line 31-40 m from the altar (never on the line), so the run out is a run
+    # past them, not away from them. The exit sits at 0.85 rx on the axis, the altar at 0.72 rx.
     L["centipedes"].append({"id": R.next_id("cen"), "on": "idol",
-                            "spawn": [v3(n1.world_point(0.2 * n1.r[0], 0.86 * n1.r[2], n1.floor_y + 5)),
-                                      v3(n1.world_point(0.3 * n1.r[0], -0.86 * n1.r[2], n1.floor_y + 5)),
-                                      v3(n1.world_point(-0.6 * n1.r[0], 0.5 * n1.r[2], n1.floor_y + 5))]})
+                            "spawn": [v3(n1.world_point(0.72 * n1.r[0] + 12.0, 0.30 * n1.r[2], n1.floor_y + 5)),
+                                      v3(n1.world_point(0.72 * n1.r[0] + 12.0, -0.30 * n1.r[2], n1.floor_y + 5)),
+                                      v3(n1.world_point(0.72 * n1.r[0] + 22.0, -0.20 * n1.r[2], n1.floor_y + 5))]})
     R.chasm(n1, 20.0, 26.0, spacing=11.5)
     for i in range(4):
         bp = n1.world_point(rng.uniform(0.45, 0.8) * n1.r[0], rng.uniform(-0.35, 0.35) * n1.r[2], n1.floor_y)
@@ -1435,6 +1624,7 @@ def build(seed):
     altar = n1.world_point(0.72 * n1.r[0], 0, n1.floor_y)
     R.intents.append(("altar", dict(x=altar[0], z=altar[2], y=n1.floor_y + 4)))
     R.text(n1.arrival, 10.0, "At the far end, on the altar, it waits. Like she said.")
+    nest_dress(R, L, n1, altar, rng)
     R.bell(n1, lx_frac=-0.35, lz_frac=0.45, scale=3.0)
     for i in range(5):
         L["ambience"].append({"pos": v3(n1.world_point(rng.uniform(-70, 70), rng.uniform(-60, 60), n1.floor_y + 8)),
@@ -1480,12 +1670,13 @@ def build(seed):
         p1_ = np.array(S_["pts"][-1])
         L["tour"].append({"pos": v3(p0_ + np.array([0, 1.8, 0])), "look": v3(p1_ + np.array([0, 0.3, 0])), "label": "along %s %d m" % (BIOMES[S_["biome"]], -p0_[1])})
 
+    align_strata(B)
     # every other centipede belongs to the stratum it was woken in, and stays there
     for c_ in L["centipedes"]:
         if c_.get("follower") or "trigger" not in c_:
             continue
         yy_ = c_["trigger"][0][1]
-        for (t_, b_, bi_) in STRATA:
+        for (t_, b_, bi_) in rift.strata:
             if t_ >= yy_ > b_:
                 c_["territory"] = [t_, b_]
                 if bi_ in (OSSUARY, CRYSTAL, FOUNDRY, BURROWS, NEST) or int(c_["id"][-1]) % 2 == 1:
@@ -1534,15 +1725,30 @@ def build(seed):
             aa = k * 2.399963 + j * 2.0944
             q = B.spot(aa, yy + rng.uniform(-12, 12), 9.0)
             q = B.spot(aa, q[1], 17.0)
-            if B.in_terrace(q, 6.0):
+            if B.in_terrace(q, 6.0) or LID[1] - 4.0 < q[1] < LID[0] + 4.0:          # v48: not inside the Lid's plug
                 continue
             L["lights"].append({"pos": v3(q), "color": GLOW[bi], "energy": 0.62, "range": 85.0})
             L["lanterns"].append({"pos": v3(B.spot(aa, q[1], 2.0)), "color": GLOW[bi], "s": round(rng.uniform(3.0, 4.6), 2)})
         yy -= 46.0
         k += 1
-    for st_ in L["stations"][::2]:
+    # v48: every foothold, hanging platform and Short Way ledge gets its guide lamp (the every-other
+    # pattern stays for balconies and terraces). The dot is hung from the wall surface at its own
+    # height: 3 m toward the wall, but never closer than 1.2 m to the first rock on that bearing,
+    # so noise outcrops can no longer swallow it (a fixed 3 m push buried a third of them).
+    for i_, st_ in enumerate(L["stations"]):
+        if i_ % 2 != 0 and st_["kind"] not in ("foothold", "platform", "hard"):
+            continue
         p_ = np.array(st_["pos"])
-        L["lanterns"].append({"pos": v3(p_ + np.array([0, 2.6, 0]) + B.out_dir(rift.bearing(p_)) * 3.0), "color": GLOW[st_["biome"]], "s": 1.4})
+        a_ = rift.bearing(p_)
+        y_ = float(p_[1]) + 2.6
+        cxx_, czz_ = rift.center(y_)
+        d_ = float(math.hypot(p_[0] - float(cxx_), p_[2] - float(czz_)))
+        inset_ = rift.wall_r(a_, y_) - d_
+        if inset_ >= 1.2:
+            q_ = rift.point(a_, y_, max(inset_ - 3.0, 1.2))
+        else:
+            q_ = p_ + np.array([0, 2.6, 0])          # already at the rock face: hang it right over the stand point
+        L["lanterns"].append({"pos": v3(q_), "color": GLOW[st_["biome"]], "s": 1.4})
     # the HUD and fog switch a little before each stratum's first balcony
     for st_ in L["strata"]:
         st_["top"] += 8.0

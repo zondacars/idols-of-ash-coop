@@ -1,0 +1,132 @@
+{
+ "0": {
+  "albedo": "mouth/albedo.jpg",
+  "normal": "mouth/normal.jpg",
+  "rough": "mouth/rough.jpg",
+  "uv_scale": 0.11,
+  "tint": [
+   1.036,
+   0.997,
+   0.927
+  ],
+  "source": "Rock049",
+  "mean_lin_lum": 0.27
+ },
+ "1": {
+  "albedo": "ossuary/albedo.jpg",
+  "normal": "ossuary/normal.jpg",
+  "rough": "ossuary/rough.jpg",
+  "uv_scale": 0.1,
+  "tint": [
+   1.028,
+   0.999,
+   0.929
+  ],
+  "source": "Rock026",
+  "mean_lin_lum": 0.33
+ },
+ "2": {
+  "albedo": "fungal/albedo.jpg",
+  "normal": "fungal/normal.jpg",
+  "rough": "fungal/rough.jpg",
+  "uv_scale": 0.12,
+  "tint": [
+   0.959,
+   1.018,
+   0.939
+  ],
+  "source": "Rock063",
+  "mean_lin_lum": 0.26
+ },
+ "3": {
+  "albedo": "roots/albedo.jpg",
+  "normal": "roots/normal.jpg",
+  "rough": "roots/rough.jpg",
+  "uv_scale": 0.12,
+  "tint": [
+   1.062,
+   0.992,
+   0.901
+  ],
+  "source": "Rock053",
+  "mean_lin_lum": 0.27
+ },
+ "4": {
+  "albedo": "drowned/albedo.jpg",
+  "normal": "drowned/normal.jpg",
+  "rough": "drowned/rough.jpg",
+  "uv_scale": 0.11,
+  "tint": [
+   0.934,
+   1.014,
+   1.054
+  ],
+  "source": "Rock037",
+  "mean_lin_lum": 0.22
+ },
+ "5": {
+  "albedo": "village/albedo.jpg",
+  "normal": "village/normal.jpg",
+  "rough": "village/rough.jpg",
+  "uv_scale": 0.13,
+  "tint": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "source": "Rock064",
+  "mean_lin_lum": 0.27
+ },
+ "6": {
+  "albedo": "crystal/albedo.jpg",
+  "normal": "crystal/normal.jpg",
+  "rough": "crystal/rough.jpg",
+  "uv_scale": 0.1,
+  "tint": [
+   0.947,
+   1.007,
+   1.088
+  ],
+  "source": "Rock034",
+  "mean_lin_lum": 0.28
+ },
+ "7": {
+  "albedo": "foundry/albedo.jpg",
+  "normal": "foundry/normal.jpg",
+  "rough": "foundry/rough.jpg",
+  "uv_scale": 0.12,
+  "tint": [
+   1.068,
+   0.987,
+   0.927
+  ],
+  "source": "Rock033",
+  "mean_lin_lum": 0.22
+ },
+ "8": {
+  "albedo": "nest/albedo.jpg",
+  "normal": "nest/normal.jpg",
+  "rough": "nest/rough.jpg",
+  "uv_scale": 0.11,
+  "tint": [
+   1.072,
+   0.981,
+   0.981
+  ],
+  "source": "Rock029",
+  "mean_lin_lum": 0.25
+ },
+ "9": {
+  "albedo": "burrows/albedo.jpg",
+  "normal": "burrows/normal.jpg",
+  "rough": "burrows/rough.jpg",
+  "uv_scale": 0.14,
+  "tint": [
+   1.019,
+   0.999,
+   0.959
+  ],
+  "source": "Ground048",
+  "mean_lin_lum": 0.25
+ }
+}

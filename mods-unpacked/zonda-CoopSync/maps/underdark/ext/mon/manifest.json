@@ -1,0 +1,58 @@
+{
+ "spider": {
+  "file": "spider.glb",
+  "anims": {
+   "idle": "Idle",
+   "walk": "Walk",
+   "attack": "Attack",
+   "death": "Death",
+   "jump": "Jump"
+  },
+  "height_m": 0.55,
+  "size_m": [
+   1.624,
+   0.55,
+   1.395
+  ],
+  "forward": "+Z",
+  "loop": [
+   "idle",
+   "walk"
+  ],
+  "anim_len_s": {
+   "idle": 4.17,
+   "walk": 0.83,
+   "attack": 0.75,
+   "death": 1.04,
+   "jump": 0.71
+  }
+ },
+ "crawler": {
+  "file": "crawler.glb",
+  "anims": {
+   "idle": "Idle",
+   "walk": "Walk",
+   "attack": "Attack",
+   "death": "Death",
+   "jump": "Jump"
+  },
+  "height_m": 0.32,
+  "size_m": [
+   0.945,
+   0.32,
+   0.812
+  ],
+  "forward": "+Z",
+  "loop": [
+   "idle",
+   "walk"
+  ],
+  "anim_len_s": {
+   "idle": 4.17,
+   "walk": 0.83,
+   "attack": 0.75,
+   "death": 1.04,
+   "jump": 0.71
+  }
+ }
+}

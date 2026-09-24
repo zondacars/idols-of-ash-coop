@@ -14,6 +14,12 @@ Outputs `out/underdark.glb`, `out/layout.json`, `out/report.json` (validation: c
 - `gen.py`: meshing, placement, glTF export, validation
 - `make_normals.py`: builds the F4 graphics normal/roughness maps from the game's own textures (needs the game's extracted texture files)
 - `glb_bounds.py`: measures model bounds
+- `ext_manifest.json`: bounds and triangle counts of the CC0 prop models (read by `world.py`, written by `convert_assets.py`)
+- `convert_assets.py`: converts the downloaded CC0 model packs into `maps/underdark/ext/` (needs trimesh; expects the packs and a local `build/` folder)
+- `make_zip.py`: packs a local `build/` folder into the release zip (`python make_zip.py <version> [output folder]`)
+- `xprop_tour.py`: adds camera tour stops for placed props (expects `out/`)
+
+`make_normals.py` also needs Pillow.
 
 
 ## v4: The Great Rift

@@ -1,0 +1,268 @@
+{
+ "beds": {
+  "0": [
+   {
+    "file": "bed_mouth_roomtone.ogg",
+    "db": -10.0
+   }
+  ],
+  "1": [
+   {
+    "file": "bed_ossuary_drips.ogg",
+    "db": -8.7
+   },
+   {
+    "file": "bed_mouth_roomtone.ogg",
+    "db": -18.0
+   }
+  ],
+  "2": [
+   {
+    "file": "bed_fungal_bubbling.ogg",
+    "db": -13.0
+   },
+   {
+    "file": "bed_fungal_drips.ogg",
+    "db": -14.0
+   }
+  ],
+  "3": [
+   {
+    "file": "bed_rootworks_creak.ogg",
+    "db": -14.0
+   },
+   {
+    "file": "bed_rootworks_air.ogg",
+    "db": -12.9
+   }
+  ],
+  "4": [
+   {
+    "file": "bed_drowned_drips.ogg",
+    "db": -3.0
+   },
+   {
+    "file": "bed_drowned_trickle.ogg",
+    "db": -12.0
+   }
+  ],
+  "5": [
+   {
+    "file": "bed_village_hull.ogg",
+    "db": -11.6
+   },
+   {
+    "file": "bed_village_creaks.ogg",
+    "db": -16.6
+   },
+   {
+    "file": "res://sfx/soundsnap/202422-EFX_INT_Hanging_by_Rope_Creak.wav",
+    "db": 14.0
+   }
+  ],
+  "6": [
+   {
+    "file": "bed_crystal_wind.ogg",
+    "db": -12.9
+   },
+   {
+    "file": "bed_crystal_drips.ogg",
+    "db": -10.4
+   }
+  ],
+  "7": [
+   {
+    "file": "bed_foundry_lava.ogg",
+    "db": -8.4
+   },
+   {
+    "file": "bed_foundry_rumble.ogg",
+    "db": -11.0
+   }
+  ],
+  "8": [
+   {
+    "file": "bed_nest_cavern.ogg",
+    "db": -11.0
+   },
+   {
+    "file": "bed_nest_rumble.ogg",
+    "db": -13.1
+   }
+  ],
+  "9": [
+   {
+    "file": "bed_burrows_breath.ogg",
+    "db": -12.0
+   },
+   {
+    "file": "bed_burrows_draft.ogg",
+    "db": -15.0
+   }
+  ]
+ },
+ "rift_wind": [
+  {
+   "file": "rift_wind_howl.ogg",
+   "db": -9.8
+  },
+  {
+   "file": "rift_wind_moan.ogg",
+   "db": -15.9
+  },
+  {
+   "file": "res://sfx/soundsnap/249565-Heavy_Wind_Ambience_2.wav",
+   "db": -12.0
+  }
+ ],
+ "oneshots": {
+  "drip": [
+   {
+    "file": "drip_1621161.ogg",
+    "db": -2.0
+   },
+   {
+    "file": "drip_1621162.ogg",
+    "db": -2.0
+   },
+   {
+    "file": "drip_166325.ogg",
+    "db": -7.8
+   },
+   {
+    "file": "drip_174718.ogg",
+    "db": -5.2
+   },
+   {
+    "file": "drip_792932.ogg",
+    "db": -6.9
+   }
+  ],
+  "rockfall": [
+   {
+    "file": "rockfall_1559341.ogg",
+    "db": -3.0
+   },
+   {
+    "file": "rockfall_1559342.ogg",
+    "db": -2.4
+   },
+   {
+    "file": "rockfall_3816451.ogg",
+    "db": 0.7
+   },
+   {
+    "file": "rockfall_3816452.ogg",
+    "db": -0.3
+   },
+   {
+    "file": "rockfall_567249.ogg",
+    "db": -2.9
+   },
+   {
+    "file": "res://sfx/soundsnap/41281-FOLEY_FOOTSTEPS_BOOTS_SLIDE_GRAVEL_SCATTER_01.wav",
+    "db": 12.0
+   }
+  ],
+  "chain_creak": [
+   {
+    "file": "chain_creak_1082651.ogg",
+    "db": -5.7
+   },
+   {
+    "file": "chain_creak_1082652.ogg",
+    "db": -5.8
+   },
+   {
+    "file": "chain_creak_1082653.ogg",
+    "db": -5.7
+   },
+   {
+    "file": "chain_creak_387240.ogg",
+    "db": -5.9
+   },
+   {
+    "file": "chain_creak_3976201.ogg",
+    "db": -4.6
+   },
+   {
+    "file": "chain_creak_3976202.ogg",
+    "db": -4.0
+   },
+   {
+    "file": "res://sfx/soundsnap/244895-rope_slide_through_pulley-03.wav",
+    "db": -5.0
+   },
+   {
+    "file": "res://sfx/soundsnap/478116-METLMvmt-Vice_Grip_Large_Aluminium_Scrap_Screw_Drag_05-SSPRK-GgtPrps.wav",
+    "db": -8.0
+   }
+  ],
+  "oil_pickup": [
+   {
+    "file": "oil_pickup_137028.ogg",
+    "db": -3.8
+   },
+   {
+    "file": "oil_pickup_568471.ogg",
+    "db": -2.3
+   },
+   {
+    "file": "oil_pickup_667272.ogg",
+    "db": -3.1
+   },
+   {
+    "file": "oil_pickup_667273.ogg",
+    "db": 2.0
+   }
+  ],
+  "spider_click": [
+   {
+    "file": "spider_click_3376211.ogg",
+    "db": -1.7
+   },
+   {
+    "file": "spider_click_3376212.ogg",
+    "db": -2.1
+   },
+   {
+    "file": "spider_click_4677001.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "spider_click_4677002.ogg",
+    "db": -0.6
+   },
+   {
+    "file": "spider_click_4677003.ogg",
+    "db": 0.3
+   }
+  ],
+  "brood_skitter": [
+   {
+    "file": "brood_skitter_1752251.ogg",
+    "db": -3.9
+   },
+   {
+    "file": "brood_skitter_1752252.ogg",
+    "db": -3.9
+   },
+   {
+    "file": "brood_skitter_1752253.ogg",
+    "db": -3.9
+   },
+   {
+    "file": "brood_skitter_175226.ogg",
+    "db": -3.8
+   },
+   {
+    "file": "brood_skitter_3807691.ogg",
+    "db": 2.0
+   },
+   {
+    "file": "brood_skitter_3807692.ogg",
+    "db": 1.1
+   }
+  ]
+ }
+}

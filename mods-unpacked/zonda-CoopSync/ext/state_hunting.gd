@@ -35,6 +35,8 @@ func physics_tick(delta: float) -> void:
 			if Time.get_ticks_msec() > coop_hunting_sfx_last_played_ms + 2000:
 				coop_hunting_sfx_last_played_ms = Time.get_ticks_msec()
 				_centipede.hunting_sfx.play()
+				# a counter the host streams with the creature, so every guest hears this cry too
+				_centipede.set_meta("zonda_cry", int(_centipede.get_meta("zonda_cry", 0)) + 1)
 
 		if target and _path.size() > 0 and Time.get_ticks_msec() > _last_ms_new_path + 15000:
 			if _path_target_position.distance_to(target.global_position) > 10.0:

@@ -15,6 +15,8 @@ func physics_tick(delta: float):
 		if Time.get_ticks_msec() > centipede_state_base.roar_wander_sfx_last_played_ms + 120000:
 			centipede_state_base.roar_wander_sfx_last_played_ms = Time.get_ticks_msec()
 			_centipede.roar_wander_sfx.play()
+			# streamed like the hunting cry, so a guest's puppet roars too
+			_centipede.set_meta("zonda_roar", int(_centipede.get_meta("zonda_roar", 0)) + 1)
 
 	if Time.get_ticks_msec() > twitchy_movement_buffer_added_ms + 250:
 		twitchy_movement_buffer_added_ms = Time.get_ticks_msec() + randi_range(0, 150)

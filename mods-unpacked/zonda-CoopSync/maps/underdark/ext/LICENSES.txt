@@ -5,3 +5,4 @@ dungeon/    Kenney Mini Dungeon        https://kenney.nl/assets/mini-dungeon    
 nature/     Kenney Nature Kit          https://kenney.nl/assets/nature-kit      CC0
 ph/         Poly Haven models (1k)     https://polyhaven.com/models             CC0
 quat/       Quaternius Ultimate Modular Ruins  https://quaternius.com/packs/ultimatemodularruins.html  CC0
+mon/        Quaternius Spider (LowPoly Animated Easy Enemies)  https://quaternius.com/packs/easyenemy.html  CC0 (details in mon/LICENSES.txt)

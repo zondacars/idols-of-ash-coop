@@ -1,0 +1,13 @@
+Animated creature models for the Underdark map (wall spider + brood crawler). Licence CC0 1.0 (public domain).
+
+spider.glb   Quaternius "Spider" from LowPoly Animated Easy Enemies (Jan 2019)
+crawler.glb  same Quaternius Spider, recoloured pale as a spiderling for the Nest brood
+  Pack page:  https://quaternius.com/packs/easyenemy.html  (states CC0; pack License.txt: CC0 1.0 Universal)
+  itch.io:    https://quaternius.itch.io/animated-easy-enemies  (states CC0)
+  GLB source: https://poly.pizza/m/yRYJiAJyiM  (Quaternius upload, listed "Public Domain (CC0)", animated)
+             file https://static.poly.pizza/4259fbdb-afb5-4d40-9108-363625dd6b6e.glb
+  Licence:    https://creativecommons.org/publicdomain/zero/1.0/
+
+Changes (2026-09-23): root node rescaled (spider 0.55 m tall / 1.62 m leg span, crawler 0.32 m / 0.95 m),
+animations renamed Idle/Walk/Attack/Death/Jump, materials set to dim non-metallic colours. No textures;
+single self-contained GLB each. Model faces +Z.

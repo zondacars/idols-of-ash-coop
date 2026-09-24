@@ -194,6 +194,7 @@ with open(os.path.join(OUT, 'LICENSES.txt'), 'w') as f:
     f.write('nature/     Kenney Nature Kit          https://kenney.nl/assets/nature-kit      CC0\n')
     f.write('ph/         Poly Haven models (1k)     https://polyhaven.com/models             CC0\n')
     f.write('quat/       Quaternius Ultimate Modular Ruins  https://quaternius.com/packs/ultimatemodularruins.html  CC0\n')
+    f.write('mon/        Quaternius Spider (LowPoly Animated Easy Enemies)  https://quaternius.com/packs/easyenemy.html  CC0 (details in mon/LICENSES.txt)\n')
 tot = sum(v['bytes'] for v in manifest.values())
 print('assets: %d, %.1f MB, tris total %d' % (len(manifest), tot / 1e6, sum(v['tris'] for v in manifest.values())))
 for pk in ['graveyard', 'dungeon', 'nature', 'ph', 'quat']:

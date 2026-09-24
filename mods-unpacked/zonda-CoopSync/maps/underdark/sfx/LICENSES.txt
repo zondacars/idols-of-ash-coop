@@ -1,0 +1,219 @@
+THE UNDERDARK - sound files in this folder (maps/underdark/sfx)
+
+Every .ogg here is derived from a Freesound.org recording released under
+Creative Commons 0 (CC0 1.0 Universal Public Domain Dedication,
+https://creativecommons.org/publicdomain/zero/1.0/). The licence was checked
+on each sound's page on 2026-09-23 (page links to publicdomain/zero/1.0).
+Processing (ZondaCoopSync v4.9): downmixed to mono, resampled to 44.1 kHz, filtered
+(high/low-pass, some pitched down), beds trimmed to 20-60 s with a 2 s equal-power
+crossfaded loop seam, loudness-normalised (beds -23 LUFS, oneshots -18 LUFS,
+look-ahead limited where needed), encoded Ogg Vorbis. Attribution is not required
+by CC0 but is given as a courtesy.
+
+Entries in manifest.json that start with res://sfx/ are the game's own sounds
+(Idols of Ash). They are referenced at runtime only and are NOT copied here.
+
+bed_burrows_breath.ogg
+    source: "DSGNDron_Underground Eerie Breathing Ambience 8_EM" by newlocknew (Freesound #789913)
+    url: https://freesound.org/people/newlocknew/sounds/789913/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_burrows_draft.ogg
+    source: "ATRL door constant low ventilation wind tone TK01" by thaighaudio (Freesound #502180)
+    url: https://freesound.org/people/thaighaudio/sounds/502180/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_crystal_drips.ogg
+    source: "cave 01" by rucisko (Freesound #343742)
+    url: https://freesound.org/people/rucisko/sounds/343742/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_crystal_wind.ogg
+    source: "Icy Yellow Sky Wind" by craigsmith (Freesound #817187)
+    url: https://freesound.org/people/craigsmith/sounds/817187/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_drowned_drips.ogg
+    source: "Water Dripping in Cave.wav" by Sclolex (Freesound #177958)
+    url: https://freesound.org/people/Sclolex/sounds/177958/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_drowned_trickle.ogg
+    source: "Water Flowing into Underground Sinkhole" by hinchinbrook (Freesound #552485)
+    url: https://freesound.org/people/hinchinbrook/sounds/552485/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_foundry_lava.ogg
+    source: "Lava Loop 4" by Fission9 (Freesound #474852)
+    url: https://freesound.org/people/Fission9/sounds/474852/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_foundry_rumble.ogg
+    source: "Cinematic Deep Rumble" by swiftoid (Freesound #184313)
+    url: https://freesound.org/people/swiftoid/sounds/184313/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_fungal_bubbling.ogg
+    source: "Mud Volcano Field - Salton Sea" by RTB45 (Freesound #415608)
+    url: https://freesound.org/people/RTB45/sounds/415608/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_fungal_drips.ogg
+    source: "Droplets in a cave" by iampagan (Freesound #177031)
+    url: https://freesound.org/people/iampagan/sounds/177031/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_mouth_roomtone.ogg
+    source: "INT Cave Room tone.wav" by deleted_user_2104797 (Freesound #164785)
+    url: https://freesound.org/people/deleted_user_2104797/sounds/164785/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_nest_cavern.ogg
+    source: "cavernscape.wav" by blaukreuz (Freesound #79707)
+    url: https://freesound.org/people/blaukreuz/sounds/79707/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_nest_rumble.ogg
+    source: "Bass Rumble In The Distance" by BrainClaim (Freesound #273805)
+    url: https://freesound.org/people/BrainClaim/sounds/273805/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_ossuary_drips.ogg
+    source: "Water Dripping (Large Echo)" by editor_adp (Freesound #162116)
+    url: https://freesound.org/people/editor_adp/sounds/162116/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_rootworks_air.ogg
+    source: "Dungeon Air" by Flamiffer (Freesound #530161)
+    url: https://freesound.org/people/Flamiffer/sounds/530161/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_rootworks_creak.ogg
+    source: "Ice - Fracture, roots or growing plants" by Vrymaa (Freesound #735401)
+    url: https://freesound.org/people/Vrymaa/sounds/735401/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_village_creaks.ogg
+    source: "Wood Creaking.wav" by laft2k (Freesound #397620)
+    url: https://freesound.org/people/laft2k/sounds/397620/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_village_hull.ogg
+    source: "ship_creak.mp3" by Walter_Odington (Freesound #31574)
+    url: https://freesound.org/people/Walter_Odington/sounds/31574/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_1752251.ogg
+    source: "creatures-scuttle-long-many.wav" by MinigunFiend (Freesound #175225)
+    url: https://freesound.org/people/MinigunFiend/sounds/175225/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_1752252.ogg
+    source: "creatures-scuttle-long-many.wav" by MinigunFiend (Freesound #175225)
+    url: https://freesound.org/people/MinigunFiend/sounds/175225/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_1752253.ogg
+    source: "creatures-scuttle-long-many.wav" by MinigunFiend (Freesound #175225)
+    url: https://freesound.org/people/MinigunFiend/sounds/175225/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_175226.ogg
+    source: "creatures-scuttle-fast-01.wav" by MinigunFiend (Freesound #175226)
+    url: https://freesound.org/people/MinigunFiend/sounds/175226/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_3807691.ogg
+    source: "BS _Swarm of roaches.wav" by szczur_banshee (Freesound #380769)
+    url: https://freesound.org/people/szczur_banshee/sounds/380769/
+    licence: CC0 1.0 (Creative Commons 0)
+brood_skitter_3807692.ogg
+    source: "BS _Swarm of roaches.wav" by szczur_banshee (Freesound #380769)
+    url: https://freesound.org/people/szczur_banshee/sounds/380769/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_1082651.ogg
+    source: "ChainsRattling.aif" by klakmart (Freesound #108265)
+    url: https://freesound.org/people/klakmart/sounds/108265/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_1082652.ogg
+    source: "ChainsRattling.aif" by klakmart (Freesound #108265)
+    url: https://freesound.org/people/klakmart/sounds/108265/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_1082653.ogg
+    source: "ChainsRattling.aif" by klakmart (Freesound #108265)
+    url: https://freesound.org/people/klakmart/sounds/108265/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_387240.ogg
+    source: "chain" by nettimato (Freesound #387240)
+    url: https://freesound.org/people/nettimato/sounds/387240/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_3976201.ogg
+    source: "Wood Creaking.wav" by laft2k (Freesound #397620)
+    url: https://freesound.org/people/laft2k/sounds/397620/
+    licence: CC0 1.0 (Creative Commons 0)
+chain_creak_3976202.ogg
+    source: "Wood Creaking.wav" by laft2k (Freesound #397620)
+    url: https://freesound.org/people/laft2k/sounds/397620/
+    licence: CC0 1.0 (Creative Commons 0)
+drip_1621161.ogg
+    source: "Water Dripping (Large Echo)" by editor_adp (Freesound #162116)
+    url: https://freesound.org/people/editor_adp/sounds/162116/
+    licence: CC0 1.0 (Creative Commons 0)
+drip_1621162.ogg
+    source: "Water Dripping (Large Echo)" by editor_adp (Freesound #162116)
+    url: https://freesound.org/people/editor_adp/sounds/162116/
+    licence: CC0 1.0 (Creative Commons 0)
+drip_166325.ogg
+    source: "Water_drop_9.wav" by deleted_user_2104797 (Freesound #166325)
+    url: https://freesound.org/people/deleted_user_2104797/sounds/166325/
+    licence: CC0 1.0 (Creative Commons 0)
+drip_174718.ogg
+    source: "Single Water Drop" by paespedro (Freesound #174718)
+    url: https://freesound.org/people/paespedro/sounds/174718/
+    licence: CC0 1.0 (Creative Commons 0)
+drip_792932.ogg
+    source: "Slow Single Water Drop Splash" by qubodup (Freesound #792932)
+    url: https://freesound.org/people/qubodup/sounds/792932/
+    licence: CC0 1.0 (Creative Commons 0)
+oil_pickup_137028.ogg
+    source: "Drain glug.wav" by majorasflask (Freesound #137028)
+    url: https://freesound.org/people/majorasflask/sounds/137028/
+    licence: CC0 1.0 (Creative Commons 0)
+oil_pickup_568471.ogg
+    source: "Glug Glug" by Zott820 (Freesound #568471)
+    url: https://freesound.org/people/Zott820/sounds/568471/
+    licence: CC0 1.0 (Creative Commons 0)
+oil_pickup_667272.ogg
+    source: "Bottle Slosh" by alegemaate (Freesound #667272)
+    url: https://freesound.org/people/alegemaate/sounds/667272/
+    licence: CC0 1.0 (Creative Commons 0)
+oil_pickup_667273.ogg
+    source: "Bottle Slosh 2" by alegemaate (Freesound #667273)
+    url: https://freesound.org/people/alegemaate/sounds/667273/
+    licence: CC0 1.0 (Creative Commons 0)
+rift_wind_howl.ogg
+    source: "AMBUndr_Subterranean Howling Wind Loop_KOLBYR_FREE SOUNDS" by KolbyRFX (Freesound #852822)
+    url: https://freesound.org/people/KolbyRFX/sounds/852822/
+    licence: CC0 1.0 (Creative Commons 0)
+rift_wind_moan.ogg
+    source: "G55-12-Moaning Whistle Wind.wav" by craigsmith (Freesound #438866)
+    url: https://freesound.org/people/craigsmith/sounds/438866/
+    licence: CC0 1.0 (Creative Commons 0)
+rockfall_1559341.ogg
+    source: "Rocks Crumbling from room or cave" by ALLANZ10D (Freesound #155934)
+    url: https://freesound.org/people/ALLANZ10D/sounds/155934/
+    licence: CC0 1.0 (Creative Commons 0)
+rockfall_1559342.ogg
+    source: "Rocks Crumbling from room or cave" by ALLANZ10D (Freesound #155934)
+    url: https://freesound.org/people/ALLANZ10D/sounds/155934/
+    licence: CC0 1.0 (Creative Commons 0)
+rockfall_3816451.ogg
+    source: "RockFall1b.wav" by AlanCat (Freesound #381645)
+    url: https://freesound.org/people/AlanCat/sounds/381645/
+    licence: CC0 1.0 (Creative Commons 0)
+rockfall_3816452.ogg
+    source: "RockFall1b.wav" by AlanCat (Freesound #381645)
+    url: https://freesound.org/people/AlanCat/sounds/381645/
+    licence: CC0 1.0 (Creative Commons 0)
+rockfall_567249.ogg
+    source: "Bricks/Stones/Rocks/Gravel Falling" by iwanPlays (Freesound #567249)
+    url: https://freesound.org/people/iwanPlays/sounds/567249/
+    licence: CC0 1.0 (Creative Commons 0)
+spider_click_3376211.ogg
+    source: "Weird Clicking" by dotY21 (Freesound #337621)
+    url: https://freesound.org/people/dotY21/sounds/337621/
+    licence: CC0 1.0 (Creative Commons 0)
+spider_click_3376212.ogg
+    source: "Weird Clicking" by dotY21 (Freesound #337621)
+    url: https://freesound.org/people/dotY21/sounds/337621/
+    licence: CC0 1.0 (Creative Commons 0)
+spider_click_4677001.ogg
+    source: "insectoid monster clicking" by LucasDuff (Freesound #467700)
+    url: https://freesound.org/people/LucasDuff/sounds/467700/
+    licence: CC0 1.0 (Creative Commons 0)
+spider_click_4677002.ogg
+    source: "insectoid monster clicking" by LucasDuff (Freesound #467700)
+    url: https://freesound.org/people/LucasDuff/sounds/467700/
+    licence: CC0 1.0 (Creative Commons 0)
+spider_click_4677003.ogg
+    source: "insectoid monster clicking" by LucasDuff (Freesound #467700)
+    url: https://freesound.org/people/LucasDuff/sounds/467700/
+    licence: CC0 1.0 (Creative Commons 0)
