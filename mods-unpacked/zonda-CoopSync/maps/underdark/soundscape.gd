@@ -24,10 +24,19 @@ extends Node
 #       Distance to the nearest awake threat. Heartbeat (game's own heartbeat sample)
 #       starts at 18 m and gets faster and louder as it closes in. 1e9 = none.
 #       Cheap to call every frame.
+#   var heart_floor := 0.0   (v5.0)
+#       0..1, a floor under the heartbeat's strength whatever set_threat says: the idol module
+#       (idol_host.gd) sets it from the idol's weight, clamp((W - 6) / 24, 0, 1), so the one who
+#       carries the idol hears their own heart speed up. 0 = no floor (the v4.9 behaviour).
+#   var last_beat_ms := -100000   (v5.0, read only)
+#       Time.get_ticks_msec() of the last heartbeat played; the idol glow pulses with it.
 #   play_oneshot(kind: String, pos: Vector3) -> void
 #       Plays a random manifest "oneshots"[kind] sound at a world position through the
 #       cave bus, muffled if rock is between the camera and pos (one occlusion test).
 #       Kinds: drip, rockfall, chain_creak, oil_pickup, spider_click, brood_skitter.
+#   has_oneshot(kind: String) -> bool   (v5.0)
+#       true when the manifest lists at least one sound for that kind, so a caller can play
+#       its documented game-file fallback instead of silence (idol_burn, 2.10).
 #   static occlusion(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3) -> float
 #       0 = clear line, 0.5 = grazing (only the raised ray gets through), 1 = blocked by
 #       rock on collision layer 1. At most 2 rays.
@@ -84,6 +93,8 @@ var manifest: Dictionary = {}
 var biome := -1
 var is_open := true
 var threat_dist := 1e9
+var heart_floor := 0.0           # v5.0: 0..1 floor under the heartbeat (the idol's weight)
+var last_beat_ms := -100000      # v5.0: when the last heartbeat played (read by the idol glow)
 
 var _streams: Dictionary = {}     # path -> AudioStream (null when it failed)
 var _beds: Array = []             # each: {"players": Array, "vols": Array, "gain": float, "target": float}
@@ -291,6 +302,14 @@ func play_oneshot(kind: String, pos: Vector3) -> void:
 	q.play()
 
 
+func has_oneshot(kind: String) -> bool:
+	var shots = manifest.get("oneshots", {})
+	if not (shots is Dictionary):
+		return false
+	var list = shots.get(kind, [])
+	return list is Array and not list.is_empty()
+
+
 static func occlusion(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3) -> float:
 	if space == null:
 		return 0.0
@@ -482,6 +501,7 @@ func _process(delta: float) -> void:
 	var want := 0.0
 	if threat_dist < THREAT_RANGE:
 		want = clampf(1.0 - threat_dist / THREAT_RANGE, 0.0, 1.0)
+	want = maxf(want, clampf(heart_floor, 0.0, 1.0))
 	_heart_k = move_toward(_heart_k, want, delta * (0.9 if want > _heart_k else 0.35))
 	if _heart_k > 0.02 and not _hearts.is_empty():
 		_heart_t -= delta
@@ -494,6 +514,7 @@ func _process(delta: float) -> void:
 				h.volume_db = lerpf(-26.0, -4.0, kk)
 				h.pitch_scale = 0.95 + 0.1 * kk
 				h.play()
+				last_beat_ms = Time.get_ticks_msec()
 	else:
 		_heart_t = minf(_heart_t, 0.25)
 	# --- ambient one-shots around the listener

@@ -8,17 +8,17 @@ Unlike the earlier "ghost" co-op mod, this one runs a **shared world**: one set 
 
 - **See each other:** every teammate is an armored knight with a name tag and health, plus their rope and hook in real time. Movement is interpolated at 60 updates/second, and you hear your friends' hooks.
 - **Shared centipedes:** the host runs the AI, everyone else sees exactly the same centipede. Each centipede hunts the **closest player**; with several centipedes they spread out over different players.
-- **Version-checked, worldwide lobbies:** friends anywhere find your lobby, and nobody joins a session on a different build by mistake. A friend still on v4.6 or older won't see a v4.9 lobby at all, so everyone updates first.
+- **Version-checked, worldwide lobbies:** friends anywhere find your lobby, and nobody joins a session on a different build by mistake. A friend still on v4.9 or older won't see a v5.0 lobby at all, so everyone updates first.
 - **Shared progression:** the host picks the level and difficulty (campaign or sandbox); everyone follows automatically. Restarts and the ending are shared too. Health pickups are per player.
 - **Respawn and spectate:** each player gets 1 free respawn per run, placed on solid ground next to a living teammate. Die again and you spectate; **Jump** cycles who you watch. Checkpoints refresh respawns and revive spectators. **Rescue:** a player who runs out of respawns leaves a pale soul where they last stood, and a living teammate who stays next to it for 1.5 s pulls them back into the run on the spot (works on every map). When the last living player dies, the run restarts for the whole team.
-- **3D voice chat on every level:** hold **V** to talk, or **F7** for an open mic (uses the microphone chosen in Steam > Settings > Voice). Voices come from your teammate's knight, fade with distance (out by about 70 m) and are muffled when rock is between you. In THE UNDERDARK they echo with the cave, long in the open rift and tight in tunnels, tuned per biome. A ((•)) mark shows over whoever is talking; the F2 panel has one voice volume slider (0 to 200%) and a Mute box for each teammate.
+- **3D voice chat on every level, always on:** just talk, silence is never sent, and **F7** mutes your own mic. Pick the microphone in the **pause menu** (Esc > MICROPHONE) or the F2 panel: Steam's microphone by default, or any other input device (the mod then records it itself), with a live level meter. Voices come from your teammate's knight, fade with distance (out by about 70 m) and are muffled when rock is between you. In THE UNDERDARK they echo with the cave, long in the open rift and tight in tunnels, tuned per biome. A ((•)) mark shows over whoever is talking; the F2 panel has one voice volume slider (0 to 200%) and a Mute box for each teammate.
 - **A hand lantern on every level:** press **L** in the campaign or any map. A caged flame in your right hand that throws a warm beam ahead, glows around you, flickers and gusts; teammates see it in your knight's hand. Remembered per player.
 - **All sandbox maps unlocked** (without touching campaign progress or achievements).
-- **F2 panel:** host/join lobby with a password, player list, voice volume and per-player mute, and a live FPS readout.
+- **F2 panel:** host/join lobby with a password, player list, voice volume, per-player mute, the microphone picker, and a live FPS readout.
 
 ## Custom maps (Sandbox)
 
-### THE UNDERDARK (v4.9, "The Great Rift")
+### THE UNDERDARK (v5.0, "The Great Rift")
 One colossal abyss modelled on the campaign's own chasm (measured in game: the campaign is 2,100 m deep and 310 to 400 m wide, with 150 to 300 m sightlines).
 
 - **4,144 m** deep (the campaign is 2,100 m). The rift is **190 to 460 m across**, and you can see the far wall, the ledges below you and the landmarks from hundreds of metres away.
@@ -43,6 +43,14 @@ One colossal abyss modelled on the campaign's own chasm (measured in game: the c
 - Crumbling sand ledges (they rumble and shake first), rocks that let go above you, fire vents, spike beds, ice shelves, waterfalls that push, per-biome music, and a scripted finale in the Nest.
 - Everything that changes the world is synced for all players, and the 21 checkpoints survive a team wipe.
 - **The finale:** whoever takes the idol carries it out in their hand, the exit opens only when every living player is there, and an end card shows the team time and who carried the idol. A team run clock survives deaths.
+- **Saved runs:** a run on THE UNDERDARK or INFERNO survives quitting, a crash or a new session. Only the host's PC keeps the save. Starting the map again with an unfinished run opens a CONTINUE / NEW RUN panel (NEW RUN asks first and keeps the replaced run as a backup); guests wait for the host's choice. Lamp oil and the team clock carry on as they were.
+- **The Omen Altar** (The Mouth camp): eight skull pillars, each with a cold candle (press **E**, then **E** again within 8 seconds). Each candle is a curse for the whole team on the way down: The Cold Hearth (every fire goes out), The Thirsty Flame (lanterns drink twice as fast), The Early Brood (eggs far below hatch as you pass), The Patient One (the Follower stays closer and no bell turns it), The Cracked Bell (the bells turn nothing), Brittle Bones (harder landings), The Hollow Shrine (fires heal 20, not 60), Hungry Silk (spiders strike from further away and rest less). The altar seals when anyone drops over the lip of the rift, and what you carry to the bottom decides your trophy (Bone Charm, Grave Candle, Ember Eyes, The Full Dark) on the end card.
+- **The Idol Wants a Host:** whoever holds the idol is hunted by the Nest and grows heavy (a heartbeat, a dimmer and redder lantern, a voice that sounds wrong to your friends, then a telegraphed burn). Hold **G** within 3 m of a living teammate to push it into their hands; they cannot refuse.
+- **The Shades:** eleven tall, thin creatures in three dark stretches (Ossuary, Fungal Hollow, Drowned Galleries). They only move in the dark; a beam freezes one with a hiss and it slides back out of the light. Put your lantern out and one within 22 m shrieks and rushes you (20 HP). Light stops it dead.
+- **The Void Harriers:** five bat-winged divers over the open rift: hang, shriek, dive (1.5 s warning), then a shove toward the drop. Hook in, step back from the edge, or dodge.
+- **Creatures that fear the lantern:** the pale blind crawlers back off and circle behind you, the wall spiders scatter from the beam. Lantern off and they hunt you.
+- **Creatures no longer pass through rock:** every creature is kept out of walls, floors and ceilings, a big creature cannot follow into a gap its head does not fit, and one that cannot reach you takes the long way round. Big creatures stay in their own part of the map.
+- **Every surface catches the lantern:** rock relief and a soft wet sheen, crystals and glass that bend the light, glinting ice and waterfalls, in both light modes (F5) and both graphics modes (F4), with no tiny sparkles. In LANTERN light the floor now catches your flame (and fires and teammates' lanterns) instead of staying nearly black; rock that no light reaches stays as dark as before.
 - Difficulty: about 9 out of 10 (the campaign is about a 5). 21 checkpoints; dying twice keeps your checkpoint and everything the team opened. Leave the "Additional Centipedes" slider at 0, the map places its own.
 
 ### INFERNO
@@ -57,13 +65,13 @@ Per player, remembered between sessions, NORMAL PIXELS by default. **F4** toggle
 | NORMAL PIXELS | the game's own look at 640x360, lit properly: indirect light in the crevices, soft shadows on the 16 nearest lights |
 | ULTRA HD | native resolution through AMD FSR 2.2 (drawn at 77%, upscaled with its own anti-aliasing; 4x MSAA where FSR 2.2 is unavailable), real CC0 rock textures (ambientCG) in THE UNDERDARK, normal maps on stone, glow, filmic color, bounce lighting (SDFGI), indirect light, reflections, ultra-soft shadows on the 32 nearest lights. NORMAL light is as bright as in NORMAL PIXELS. |
 
-Works in the campaign and every map. On a strong PC ULTRA HD costs about 20 to 30% of the FPS.
+Works in the campaign and every map. On a strong PC ULTRA HD costs about 20 to 30% of the FPS. In THE UNDERDARK both modes show the lantern on every surface (rock relief and sheen, refraction in crystals and glass).
 
 ## Install (every player)
 
 1. Download the latest release zip from the [Releases](../../releases) page.
 2. In Steam, right-click **Idols of Ash** → **Manage** → **Browse local files**.
-3. Copy `override.cfg` and the `mods-unpacked` folder into that folder, next to `idols_of_ash.exe`.
+3. Copy `override.cfg` and the `mods-unpacked` folder into that folder, next to `idols_of_ash.exe` (replace both when you update: `override.cfg` also lets the game use your microphone).
 4. Launch the game normally through Steam.
 
 To uninstall, delete `override.cfg` and the `mods-unpacked` folder.
@@ -85,6 +93,7 @@ THE UNDERDARK is generated offline from a fixed seed (Python: a signed distance 
 - Built against game version **1.41**. A game update can break it.
 - Guests should let the host drive the menus.
 - Dialog scenes (lore points) pause only the player who triggered them.
+- v5.0 was tested hands-off in the game (automated runs, a loopback partner, a synthetic voice), not yet with two real players.
 
 ## Credits
 

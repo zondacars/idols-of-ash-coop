@@ -1,4 +1,4 @@
-Animated creature models for the Underdark map (wall spider + brood crawler). Licence CC0 1.0 (public domain).
+Animated creature models for the Underdark map (wall spider, brood crawler, void harrier). Licence CC0 1.0 (public domain).
 
 spider.glb   Quaternius "Spider" from LowPoly Animated Easy Enemies (Jan 2019)
 crawler.glb  same Quaternius Spider, recoloured pale as a spiderling for the Nest brood
@@ -11,3 +11,14 @@ crawler.glb  same Quaternius Spider, recoloured pale as a spiderling for the Nes
 Changes (2026-09-23): root node rescaled (spider 0.55 m tall / 1.62 m leg span, crawler 0.32 m / 0.95 m),
 animations renamed Idle/Walk/Attack/Death/Jump, materials set to dim non-metallic colours. No textures;
 single self-contained GLB each. Model faces +Z.
+
+harrier.glb  Quaternius "Bat" from LowPoly Animated Monsters, used for the Void Harriers (ZondaCoopSync 5.0)
+  GLB source: https://poly.pizza/m/hNO9XvjlKa  (Quaternius upload, listed "Public Domain (CC0)" / Licence "CC0 1.0",
+             animated; checked live 2026-09-24)
+             file https://static.poly.pizza/4ae13ae9-c257-41ed-86b5-1b4760924ebc.glb
+  Licence:    https://creativecommons.org/publicdomain/zero/1.0/
+
+Changes (2026-09-24): root node scaled x0.82464 so the wings span 4.0 m at their widest in Bat_Flying,
+materials set to dim non-metallic colours. Mesh, skin and animations unchanged; the manifest names the real
+animations (BatArmature|Bat_Flying, Bat_Attack, Bat_Attack2, Bat_Death, Bat_Hit). height_m is the bind-pose
+box the loader scales by (so it keeps this size); size_m and center_m are the flying pose. Model faces +Z.

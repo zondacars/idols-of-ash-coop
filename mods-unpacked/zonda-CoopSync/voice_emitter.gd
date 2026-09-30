@@ -15,6 +15,12 @@ extends Node3D
 #                             CoopSync.voice.decode()). Call it from the main thread for every
 #                             packet; before the node is in the tree it is simply ignored.
 #   static func occlusion(space, from, to, exclude: Array[RID] = []) -> float  0 clear, .5 half, 1 blocked
+#   func set_bus_override(bus: String) -> void   (v5.0) "" = the normal bus (ZondaCave, else
+#                             MainBus). Any other name routes this voice through that bus while
+#                             it exists (remote_player uses "ZondaDemon" for the idol's host,
+#                             voice.gd ensure_demon_bus). A switch while audio plays dips the
+#                             volume for 60 ms (30 ms down, the bus changes, 30 ms up): no click.
+#   var bus_override := ""    read only: the bus set_bus_override asked for
 #
 # WHAT IT DOES
 #   An AudioStreamPlayer3D playing an AudioStreamGenerator at the voice sample rate.
@@ -79,6 +85,11 @@ var _lp := 0.0
 var _slow_t := 0.0
 var _mark: Label3D = null
 var _mark_t := 0.0
+# v5.0 bus override (the idol's demon voice)
+const BUS_DIP_S := 0.06
+var bus_override := ""
+var _dip_t := 0.0                       # > 0 while a bus switch dips the volume
+var _dip_switched := true               # the bus was changed at the bottom of the current dip
 
 
 func _ready() -> void:
@@ -118,7 +129,7 @@ func _build_player() -> void:
 	_player.attenuation_filter_cutoff_hz = OCC_CLEAR_HZ
 	_player.attenuation_filter_db = -24.0
 	_player.doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_DISABLED
-	_player.bus = _pick_bus()
+	_player.bus = _want_bus()
 	add_child(_player)
 	_pb = null
 	_cap = 0
@@ -140,6 +151,29 @@ static func _pick_bus() -> String:
 	if AudioServer.get_bus_index(CAVE_BUS) >= 0:
 		return CAVE_BUS
 	return "MainBus" if AudioServer.get_bus_index("MainBus") >= 0 else "Master"
+
+
+func _want_bus() -> String:
+	# the override while its bus exists, else the normal pick
+	if bus_override != "" and AudioServer.get_bus_index(bus_override) >= 0:
+		return bus_override
+	return _pick_bus()
+
+
+func set_bus_override(bus: String) -> void:
+	if bus == bus_override:
+		return
+	bus_override = bus
+	if not is_instance_valid(_player):
+		return
+	if _player.bus == _want_bus():
+		return
+	if _player.playing and is_inside_tree():
+		# 30 ms down, switch, 30 ms up (_process)
+		_dip_t = BUS_DIP_S
+		_dip_switched = false
+	else:
+		_player.bus = _want_bus()
 
 
 func _voice() -> Object:
@@ -208,7 +242,16 @@ func _process(delta: float) -> void:
 	_occ = lerpf(_occ, _occ_target, 1.0 - exp(-delta * 7.0))
 	var cutoff := OCC_CLEAR_HZ * pow(OCC_BLOCKED_HZ / OCC_CLEAR_HZ, _occ)
 	_player.attenuation_filter_cutoff_hz = cutoff
-	_player.volume_db = (linear_to_db(_gain) if _gain > 0.0001 else -80.0) + OCC_DB * _occ
+	var g := _gain
+	if _dip_t > 0.0:
+		# a bus switch (set_bus_override): fade out, change the bus at the bottom, fade back in
+		_dip_t = maxf(0.0, _dip_t - delta)
+		var half := BUS_DIP_S * 0.5
+		if not _dip_switched and _dip_t <= half:
+			_dip_switched = true
+			_player.bus = _want_bus()
+		g *= clampf(absf(_dip_t - half) / half, 0.0, 1.0)
+	_player.volume_db = (linear_to_db(g) if g > 0.0001 else -80.0) + OCC_DB * _occ
 
 	var on := now - _last_push_ms < TALK_HOLD_MS and _gain > 0.0
 	if on != talking:
@@ -230,8 +273,8 @@ func _process(delta: float) -> void:
 
 
 func _slow_update() -> void:
-	var bus := _pick_bus()
-	if is_instance_valid(_player) and _player.bus != bus:
+	var bus := _want_bus()
+	if is_instance_valid(_player) and _player.bus != bus and _dip_t <= 0.0:
 		_player.bus = bus
 	var p := get_parent()
 	if p != null:

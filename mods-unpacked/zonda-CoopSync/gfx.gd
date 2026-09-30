@@ -18,6 +18,10 @@ extends Node
 #
 # API (v4.9, K11): signal mode_changed(mode: int), emitted after every mode change and once
 # after startup; func is_ultra() -> bool. Maps (the Underdark's rock textures) follow it.
+# v5.0 lighting: materials with meta "zonda_surf" (tuned by a map, e.g. the Underdark's surfaces.gd)
+# are never given gfx's maps. The screen-space roughness limiter (_apply_limiter) runs everywhere in
+# ULTRA HD, and in NORMAL PIXELS only while a map that tunes its own sheen for 640x360 holds it
+# (np_limiter_use(true/false), the Underdark's surfaces.gd): the campaign keeps the game's own look.
 
 signal mode_changed(mode: int)
 
@@ -61,6 +65,7 @@ var _orig_3d_mode := -1
 var _orig_3d_scale := 1.0
 var _fsr_logged := false
 var _report_t := 6.0
+var _np_lim_users := 0                # maps holding the NORMAL PIXELS roughness limiter on (np_limiter_use)
 
 
 func _ready() -> void:
@@ -147,6 +152,29 @@ func _apply_global() -> void:
 		q = RenderingServer.SHADOW_QUALITY_SOFT_HIGH
 	RenderingServer.positional_soft_shadow_filter_set_quality(q)
 	RenderingServer.directional_soft_shadow_filter_set_quality(q)
+	_apply_limiter()
+
+
+func np_limiter_use(on: bool) -> void:
+	# a map that tunes its own sheen for 640x360 holds the limiter on in NORMAL PIXELS while loaded
+	_np_lim_users = maxi(0, _np_lim_users + (1 if on else -1))
+	_apply_limiter()
+
+
+func _apply_limiter() -> void:
+	# screen-space roughness limiter (off in the game's project settings): widens a highlight wherever
+	# the normal changes fast across a pixel (thin chains, Shade limbs, texel edges), so a lantern
+	# glint there spreads over a few pixels instead of flashing one. NORMAL PIXELS is stronger (every
+	# pixel is big) and runs only while a map holds it (glossy campaign materials such as the centipede
+	# carapace keep the game's own highlights); ULTRA HD uses Godot's defaults everywhere.
+	_read_dev()
+	var on := mode == 3 or _np_lim_users > 0
+	var lim_a: float = (0.25 if mode == 3 else 0.5) if _dev_lim_amount < 0.0 else _dev_lim_amount
+	var lim_l: float = (0.18 if mode == 3 else 0.3) if _dev_lim_limit < 0.0 else _dev_lim_limit
+	if not on:
+		lim_a = float(ProjectSettings.get_setting("rendering/anti_aliasing/screen_space_roughness_limiter/amount", 0.25))
+		lim_l = float(ProjectSettings.get_setting("rendering/anti_aliasing/screen_space_roughness_limiter/limit", 0.18))
+	RenderingServer.screen_space_roughness_limiter_set_active(on, lim_a, lim_l)
 
 
 func _fsr2_available() -> bool:
@@ -373,7 +401,7 @@ func _tex(path: String) -> ImageTexture:
 	var img := Image.new()
 	if img.load_png_from_buffer(bytes) != OK:
 		return null
-	img.generate_mipmaps()
+	img.generate_mipmaps(path.ends_with("_n.png"))    # normal maps: renormalise every mip level
 	return ImageTexture.create_from_image(img)
 
 
@@ -412,6 +440,8 @@ var _dev_budget := -2          # -2 unread, -1 none; developer override from use
 var _dev_nomaps := false
 var _dev_pixels := false
 var _dev_nofsr := false
+var _dev_lim_amount := -1.0    # roughness limiter overrides (limiter_amount / limiter_limit), -1 = none
+var _dev_lim_limit := -1.0
 
 
 func _read_dev() -> void:
@@ -424,6 +454,8 @@ func _read_dev() -> void:
 		_dev_nomaps = bool(c.get_value("dev", "ultra_nomaps", false))
 		_dev_pixels = bool(c.get_value("dev", "ultra_pixels", false))
 		_dev_nofsr = bool(c.get_value("dev", "ultra_nofsr", false))
+		_dev_lim_amount = float(c.get_value("dev", "limiter_amount", -1.0))
+		_dev_lim_limit = float(c.get_value("dev", "limiter_limit", -1.0))
 
 
 func _enhance_material(m: Material) -> void:
@@ -436,8 +468,14 @@ func _enhance_material(m: Material) -> void:
 	if _mat_done.has(id):
 		return
 	var sm: StandardMaterial3D = m
+	if sm.has_meta("zonda_surf"):
+		# a map's own tuned material (the Underdark rock, surfaces.gd's classes): it sets its own maps
+		# per mode, never gfx's 1.7 + roughness map
+		_mat_done[id] = null
+		return
 	var key := _key_for(sm.albedo_texture)
-	if key == "" or not _maps.has(key) or sm.normal_enabled:
+	# normal_enabled with no texture (the game's Ancient_Kiln, Monster, Rope, Hook) still gets its map
+	if key == "" or not _maps.has(key) or (sm.normal_enabled and sm.normal_texture != null):
 		_mat_done[id] = null
 		return
 	_mat_done[id] = [sm, sm.normal_enabled, sm.normal_texture, sm.normal_scale, sm.roughness_texture, sm.roughness]

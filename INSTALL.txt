@@ -67,6 +67,99 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v5.0:
+  - EVERYONE NEEDS v5.0, and copy BOTH override.cfg and the mods-unpacked
+    folder again (override.cfg carries the line that lets the game use your
+    microphone). Lobbies are version-checked: a friend still on v4.9 or older
+    is told "That lobby runs another CoopSync build" and must update first.
+  - SAVED RUNS (THE UNDERDARK and INFERNO). A run survives quitting, a crash or a
+    new session. Only the host's PC keeps the save. When the host starts the map
+    again with an unfinished run, a panel asks CONTINUE or NEW RUN (NEW RUN asks
+    "Sure?" first and keeps the replaced run as a backup file). Guests see
+    "Waiting for <host>" meanwhile. Lamp oil is kept exactly as it was, and the
+    team clock picks up where it stopped.
+  - THE OMEN ALTAR (in THE MOUTH camp). A ring of 8 skull pillars, each with a cold
+    candle. Light one (press E, then E again within 8 seconds) and the descent
+    gets harder for the whole team, all the way down:
+      The Cold Hearth: every fire in the rift goes out.
+      The Thirsty Flame: every lantern drinks its oil twice as fast.
+      The Early Brood: a clutch of eggs far below hatches as you pass.
+      The Patient One: what follows you stays closer, and no bell turns it.
+      The Cracked Bell: the bells turn nothing.
+      Brittle Bones: hard landings hurt more (a long fall still kills).
+      The Hollow Shrine: a checkpoint fire heals 20 instead of 60.
+      Hungry Silk: the wall spiders strike from further away and rest less.
+    The altar seals once anyone drops over the lip of the rift. The omens you
+    carry to the bottom decide your trophy (Bone Charm, Grave Candle, Ember Eyes
+    or The Full Dark), shown on the end card and kept in your saved record.
+  - THE IDOL WANTS A HOST. Whoever holds the idol is hunted by the Nest and grows
+    heavy: a heartbeat, a dimmer and redder lantern, a voice that sounds wrong
+    to your friends, then a burn every couple of seconds (with a flare of the
+    lantern as a warning first). Hold G within 3 m of a living teammate to push
+    the idol into their hands; they cannot refuse. If the holder goes missing
+    for a few seconds it passes to the nearest living player. While you carry it,
+    G passes the idol instead of pouring oil.
+  - THE SHADES: eleven tall, thin, wet-black figures in three dark stretches (the
+    Ossuary, the Fungal Hollow and the Drowned Galleries). They only move in the
+    dark, in jerky bursts, and stand a few steps past the edge of your light.
+    Put your beam on one and it freezes with a hiss, then slides back out of the
+    light. If your lantern goes out or runs dry while one within 22 m stands in
+    the dark, it shrieks for a moment, then rushes you. Light stops it dead. If it
+    reaches you in the dark it hits for 20 HP and slinks home.
+  - THE VOID HARRIERS: five pale, bat-winged things wheel over the open rift. One
+    picks a player standing unhooked on a foothold near a drop, hangs about 18 m
+    up and shrieks (with an echo off the far wall), then dives. You get a 1.5
+    second warning, and it flings you about 4 m toward the drop. Hook in (5 HP and
+    a sway), step back from the edge, dodge, or walk back against the shove. The
+    first dive in each band of the rift is a teaching feint.
+  - SOME CREATURES FEAR YOUR LANTERN. The pale blind crawlers back off when the
+    beam reaches their head (a hiss, then they circle round behind you) and the
+    wall spiders scatter from the beam instead of dropping on you. Put the lantern
+    out, or let it run dry, and they come for you like any other hunter.
+  - CREATURES NO LONGER PASS THROUGH ROCK. In THE UNDERDARK every creature is kept
+    out of the walls, floors and ceilings: centipedes, crawlers, the Follower, the
+    Stalker, spiders, the Brood, the Shades and the Harriers. A big creature cannot
+    follow you into a gap its head does not fit, so squeezing through is a way
+    out, and a centipede that cannot reach you takes the long way round instead of
+    freezing. Big creatures stay in their own part of the map.
+  - EVERY SURFACE CATCHES THE LANTERN. Rock has relief and a soft wet sheen,
+    crystals and glass bend the light, ice glints and the waterfalls shine, in
+    both light modes (F5) and both graphics modes (F4). Nothing sparkles in tiny
+    specks.
+  - THE LANTERN LIGHTS THE FLOOR. In LANTERN light the ground in front of you
+    now catches your flame (it used to stay close to black) and fades into the
+    dark further out; fires and teammates' lanterns light the floor the same
+    way. Rock that no light reaches is as dark as before, and NORMAL light (F5)
+    looks the same.
+  - CENTIPEDE SOUNDS, checked cue by cue. The idle rumble, the distant roar and the
+    hunting call when one is far off, the wet snarl as it closes in (it played
+    rarely on fast PCs before), the lunge snarl, the crunch of every snap of the
+    jaws and the sting when it bites you. Your teammates now hear the distant roar
+    too, and a pale crawler hisses on every screen when your beam hits it.
+  - THE MICROPHONE PICKER and always-on voice chat from v4.9.1 are in this version
+    (see the v4.9.1 notes below): pick your microphone in the pause menu, talk
+    freely, F7 mutes your own mic.
+  - Coming later, not in this version: The Span Falls and The Chandelier Comes
+    Down.
+
+  Honest note: v5.0 was tested hands-off in the game with automated runs, a
+  loopback co-op partner and a synthetic voice. It has not yet been played by two
+  real people on two real PCs. If something is off, tell us.
+
+NEW IN v4.9.1 (never released on its own; everything here is part of v5.0):
+  - Copy BOTH override.cfg and the mods-unpacked folder when you install
+    (override.cfg carries the line that lets the game use your microphone).
+  - VOICE CHAT IS ALWAYS ON. No push to talk: just talk. Silence is never
+    sent (Steam's voice detection, or the mod's own voice gate, cuts it).
+    F7 mutes or unmutes your own mic, only until the game closes. Don't want
+    to hear anyone? Turn the voice volume to 0 in the F2 panel, or tick Mute
+    next to one player.
+  - PICK YOUR MICROPHONE in the PAUSE MENU (Esc > MICROPHONE) or in the F2
+    panel. STEAM MICROPHONE (the one set in Steam > Settings > Voice) is the
+    default; pick any other input device and the mod records that one itself.
+    A gold level meter under the picker moves when the mic hears you, so you
+    can tell a live mic from a silent one. Your pick is remembered.
+
 NEW IN v4.9:
   - EVERYONE NEEDS v4.9. Lobbies are version-checked: a friend on v4.6 or
     older will not see your lobby at all, and one on v4.8 is told to update,
@@ -375,9 +468,10 @@ Works in the campaign and every map. NORMAL PIXELS by default. The F2 panel show
 FPS and the current graphics mode.
 
 VOICE CHAT
-Hold V to talk, or F7 for an open mic. Uses the microphone chosen in
-Steam > Settings > Voice. F2 panel: one voice volume slider and a Mute box
-for each teammate.
+Always on: just talk (silence is not sent). F7 mutes or unmutes your own mic.
+Pick the microphone in the pause menu (Esc > MICROPHONE) or the F2 panel:
+STEAM MICROPHONE by default, or any other input device, with a level meter.
+F2 panel: one voice volume slider and a Mute box for each teammate.
 
 UNINSTALL
 Delete override.cfg and the mods-unpacked folder from the game folder.

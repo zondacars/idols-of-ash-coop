@@ -43,12 +43,25 @@ func physics_tick(delta: float) -> void:
 				_path.clear()
 				reached_end_of_path()
 
-		if target and (dist_to_target < 4.0 or (dist_to_target < lerpf(7.0, 9.0, _centipede.stamina) and randf() < _centipede.stamina * _centipede.stamina)):
+		# light-fear (v5.0): a pale centipede with a lantern beam on its head never starts a lunge
+		# no-clip (v5.0, A10 and 7A, only while the no-clip helper is on): never at the bell's lure (it
+		# idles by the bell instead of biting into its cylinder), and not for 2.5 s after a lunge gave up
+		# at a gap narrower than its head (ext/centipede.gd), so it does not snarl in a loop at the mouth
+		if target and (dist_to_target < 4.0 or (dist_to_target < lerpf(7.0, 9.0, _centipede.stamina) and randf() < _centipede.stamina * _centipede.stamina)) and not _centipede.has_meta("zonda_lit") \
+				and not _nc_hold_lunge(target):
 			var los_ray: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(target.global_position, _centipede.global_position, 1)
 			var los_results: Dictionary = _centipede.get_world_3d().direct_space_state.intersect_ray(los_ray)
 			if los_results.size() == 0:
 				_centipede.set_state(centipede_state_attack.new())
 				return
+
+
+func _nc_hold_lunge(target: Node3D) -> bool:
+	if not _centipede.has_method("nc_on") or not bool(_centipede.call("nc_on")):
+		return false
+	if target == CoopSync.lure_node():
+		return true
+	return Time.get_ticks_msec() < int(_centipede.get_meta("zonda_squeeze_until", 0))
 
 
 func reached_end_of_path():

@@ -53,6 +53,11 @@ const STONE_LEDGE := "res://Art/Stone_03.glb"
 const SAND_LEDGE := "res://Art/Sand_Shelf_Base.glb"
 const BIG_PIECES := ["res://Art/Stone_07.glb", "res://Art/Stone_09.glb", "res://Art/Rock_02.glb", "res://Art/Stone_08.glb", "res://Art/Spikes_01.glb"]
 const REST_PIECE := "res://Art/Stone_10.glb"
+# Stone_10 is a ring (inner radius 7.1, outer 7.68, 0 to 2.36 high at scale 1; 6.0 / 6.5 / 2.0 at the
+# rest platform's 0.85): the floor that fills it (v5.0)
+const REST_FLOOR_R := 5.95
+const REST_FLOOR_H := 1.7
+const REST_FLOOR_DROP := 0.25
 const BOULDER_PIECE := "res://Art/Stone_09.glb"
 const ICICLE_PIECE := "res://Art/Spikes_01.glb"
 const SPIKES_PIECE := "res://Art/Spikes_02.glb"
@@ -84,6 +89,14 @@ var _boulders: Dictionary = {}     # id -> Boulder
 var _vents: Array = []             # every FireVent, all driven by one shared clock
 var _vent_clock := 0.0             # the host's clock in co-op (guests follow it), own clock solo
 var _vent_sync_t := 0.0
+# v5.0 saved runs: the rest platforms are the team's checkpoints in CoopSync.map_state, the run has a
+# team clock ("clock" event), and a CONTINUE starts at the saved rest platform. A death reload keeps
+# Inferno's own rule (back to the top); only a continued save starts lower down.
+var _cp_spawn: Array = []          # checkpoint id -> spawn point on that rest platform
+var _clock_t0 := 0.0               # unix start of the team run clock (from the "clock" event)
+var _clock_asked := false
+var _continued := false            # this load is a SAVE continue
+var _load_announced := false
 
 
 func _ready() -> void:
@@ -97,6 +110,9 @@ func _ready() -> void:
 	_noise_b.frequency = 0.012
 	_noise_c.seed = SEED + 3
 	_noise_c.frequency = 0.09
+	# read before map_request_sync below, which creates this scene's state on a fresh start
+	var fresh: bool = str(CoopSync.map_state.get("scene", "")) != scene_file_path and CoopSync.map_checkpoint_for(scene_file_path) < 0
+	_continued = bool(CoopSync.get("continue_load"))
 
 	_mat_rock = (load(MAT_ROCK) as StandardMaterial3D).duplicate()
 	_mat_rock.albedo_color = Color(0.9, 0.55, 0.42)
@@ -134,11 +150,72 @@ func _ready() -> void:
 		DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/maps/thumb.flag")
 	# pass our own path: this runs a frame before the autoload notices the scene change
 	CoopSync.map_request_sync(scene_file_path)
+	if _continued:
+		_spawn_at_saved_checkpoint()
 	call_deferred("_reapply_events")
+	call_deferred("_announce_load", fresh)
+
+
+func _announce_load(fresh: bool) -> void:
+	# saved runs: CoopSync opens the CONTINUE / NEW RUN panel on a fresh start with a saved run
+	if CoopSync.has_method("map_loaded"):
+		CoopSync.call("map_loaded", scene_file_path, fresh)
+	_load_announced = true
+
+
+func _spawn_at_saved_checkpoint() -> void:
+	# a SAVE continue starts at the saved rest platform (a death reload keeps Inferno's rule: the top)
+	var cp := CoopSync.map_checkpoint_for(scene_file_path)
+	if cp < 0 or cp >= _cp_spawn.size():
+		return
+	for i in cp + 1:
+		_checkpoints_hit[i] = true         # no free heal at the platforms the team already passed
+	var climber = get_node_or_null("Climber")
+	if climber:
+		climber.position = _cp_spawn[cp]
+		print("[Inferno] saved run: starting at REST PLATFORM %d" % (cp + 1))
+
+
+func checkpoint_label(id: int) -> String:
+	return "REST PLATFORM %d" % (id + 1) if id >= 0 else "THE TOP"
+
+
+func checkpoint_ids() -> Array:
+	return range(_cp_spawn.size())
+
+
+func checkpoint_pos(id: int) -> Vector3:
+	return _cp_spawn[id] if id >= 0 and id < _cp_spawn.size() else Vector3.INF
+
+
+func map_build_id() -> String:
+	# the shaft is built from a fixed seed: the same seed and depth build the same map
+	return "inferno-%d-%d" % [SEED, int(DEPTH)]
+
+
+func run_secs() -> int:
+	# the team run clock (same start for everyone, survives death reloads and saved runs)
+	if _clock_t0 > 0.0:
+		return maxi(0, int(Time.get_unix_time_from_system() - _clock_t0))
+	return int(_clock)
+
+
+func _ensure_clock() -> void:
+	# the authority starts the team clock once, as a stored map event, after the saved-run panel
+	# (a continue brings the saved clock back instead)
+	if _clock_t0 > 0.0 or _clock_asked or not _load_announced or not CoopSync.map_is_authority():
+		return
+	if CoopSync.has_method("save_prompt_open") and bool(CoopSync.call("save_prompt_open")):
+		return
+	if CoopSync.current_scene_path() != scene_file_path:
+		return
+	_clock_asked = true
+	CoopSync.map_event("clock", {"t0": Time.get_unix_time_from_system()})
 
 
 func _process(delta: float) -> void:
 	_clock += delta
+	_ensure_clock()
 	_update_vents(delta)
 	_update_environment(delta)
 	_update_snow()
@@ -504,16 +581,47 @@ func _place_rest_platform(wall_y: float, angle: float) -> void:
 	if n == null:
 		return
 	var top := _wall_point(wall_y, angle) + _inward(wall_y, angle) * (protrude * 0.5)
-	_place_fire(top + Vector3(1.5, 0.1, 0.0), 0.7, 1.4, 22.0)
-	_place_ember(top + Vector3(-2.5, 1.3, 1.5))
-	_place_corpse(top + Vector3(2.5, 0.05, -2.0), _rng.randf() * TAU, 1.0)
-	_place_corpse(top + Vector3(-1.0, 0.05, -3.0), _rng.randf() * TAU, 0.9)
+	# v5.0: the rest piece is a hollow stone ring (its mesh AND its collision are a 0.6 m thick rim at
+	# 6.0 to 6.5 m from its centre, nothing inside), so the platform had no floor: whoever stood at the
+	# rest spot fell through into the shaft (a saved run continued at REST PLATFORM 2 ended up 14 m
+	# below it). A sand floor now fills the ring, a little under the rim's top; the fire, the ember and
+	# the corpses sit on it. The rng calls stay in the same order, so the shaft is built unchanged.
+	_place_rest_floor(n.position, top.y - REST_FLOOR_DROP, _biome(wall_y) == Biome.FROST)
+	var fl := top - Vector3(0.0, REST_FLOOR_DROP, 0.0)
+	_place_fire(fl + Vector3(1.5, 0.1, 0.0), 0.7, 1.4, 22.0)
+	_place_ember(fl + Vector3(-2.5, 1.3, 1.5))
+	_place_corpse(fl + Vector3(2.5, 0.05, -2.0), _rng.randf() * TAU, 1.0)
+	_place_corpse(fl + Vector3(-1.0, 0.05, -3.0), _rng.randf() * TAU, 0.9)
 	_add_checkpoint(top + Vector3(0.0, 2.0, 0.0), 5.5)
 	var depth_m := int(-wall_y)
 	if _biome(wall_y) == Biome.FROST:
 		_add_text_area(top + Vector3(0.0, 2.0, 0.0), 9.0, "A resting shelf, %d meters down. Someone lit a fire in the ice. It is still burning." % depth_m)
 	else:
 		_add_text_area(top + Vector3(0.0, 2.0, 0.0), 9.0, "A resting shelf, %d meters down. The walls are warm to the touch." % depth_m)
+
+
+func _place_rest_floor(ring_centre: Vector3, top_y: float, frost: bool) -> void:
+	# a sand plug inside the rest ring (collision layer 1, like every other static piece here)
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = REST_FLOOR_R
+	cm.bottom_radius = REST_FLOOR_R
+	cm.height = REST_FLOOR_H
+	cm.radial_segments = 24
+	cm.rings = 1
+	mi.mesh = cm
+	mi.material_override = _mat_ice if frost else _mat_floor
+	mi.position = Vector3(ring_centre.x, top_y - REST_FLOOR_H * 0.5, ring_centre.z)
+	add_child(mi)
+	var body := StaticBody3D.new()
+	body.physics_material_override = _phys_sand
+	var shape := CollisionShape3D.new()
+	var cyl := CylinderShape3D.new()
+	cyl.radius = REST_FLOOR_R
+	cyl.height = REST_FLOOR_H
+	shape.shape = cyl
+	body.add_child(shape)
+	mi.add_child(body)
 
 
 func _place_big_piece(wall_y: float, angle: float) -> void:
@@ -1092,6 +1200,7 @@ func _add_checkpoint(pos: Vector3, radius: float) -> void:
 	var a := _make_area(pos, radius, PLAYER_LAYER)
 	var id := _checkpoints_hit.size()
 	_checkpoints_hit[id] = false
+	_cp_spawn.append(pos - Vector3(0.0, 1.0, 0.0))     # a metre above the platform (the area sits 2 m up)
 	a.body_entered.connect(func(body: Node3D): _on_checkpoint_entered(id, body))
 	add_child(a)
 
@@ -1103,11 +1212,10 @@ func _on_checkpoint_entered(id: int, body: Node3D) -> void:
 	Game.audio.play_player_healed()
 	if is_instance_valid(Game.climber):
 		Game.climber.heal(50.0)
-	if CoopSync.in_session():
-		CoopSync.broadcast_checkpoint()
-		CoopSync.on_checkpoint_reached()
-	else:
-		CoopSync.show_banner("Checkpoint reached.", 3.0)
+	# v5.0: the team's furthest rest platform goes into the map state (what a saved run keeps); in a
+	# session this is still the "checkpoint" message that refreshes everyone's respawns, solo the
+	# same "Checkpoint reached." banner
+	CoopSync.map_checkpoint(id, scene_file_path)
 
 
 func _on_finish_entered(body: Node3D) -> void:
@@ -1115,7 +1223,8 @@ func _on_finish_entered(body: Node3D) -> void:
 	# Solo, map_event applies locally right away, exactly as before.
 	if body != Game.climber or _finish_done:
 		return
-	CoopSync.map_event("finish", {"by": CoopSync.local_name, "who": CoopSync.my_id()})
+	# R1: the Steam id as a String (a saved run keeps this event through JSON)
+	CoopSync.map_event("finish", {"by": CoopSync.local_name, "who": CoopSync.my_sid()})
 
 
 func _finish(data: Dictionary) -> void:
@@ -1124,7 +1233,7 @@ func _finish(data: Dictionary) -> void:
 	_finish_done = true
 	Game.audio.play_player_healed()
 	var by: String = CoopSync.sanitize_name(str(data.get("by", "")))
-	var mine: bool = not CoopSync.in_session() or int(data.get("who", -1)) == CoopSync.my_id()
+	var mine: bool = not CoopSync.in_session() or CoopSync.is_me(data.get("who", ""))
 	if mine:
 		CoopSync.show_banner("You reached the bottom of the Inferno.", 8.0)
 	else:
@@ -1156,6 +1265,9 @@ func coop_map_event(key: String, data: Dictionary, replay: bool = false) -> void
 		# a replay (death reload or late join inside the 8 s window) runs the ending again, so the
 		# host still leaves for the menu and nobody is left in a finished run
 		_finish(data)
+	elif key == "clock":
+		# the team run clock, set once by the authority (a continued save brings it back rewritten)
+		_clock_t0 = float(data.get("t0", 0.0))
 
 
 func _reapply_events() -> void:

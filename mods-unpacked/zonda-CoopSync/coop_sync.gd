@@ -5,7 +5,7 @@ const MOD_DIR := "res://mods-unpacked/zonda-CoopSync/"
 # check) can never find a 4.8 lobby. From 4.8 on, the "coop_ver" lobby data does the gating.
 const LOBBY_TAG := "ZondaCoopSync2"
 const LOBBY_TAG_OLD := "ZondaCoopSync1"
-const MOD_VERSION := "4.9"
+const MOD_VERSION := "5.0"
 const MAX_MEMBERS := 4
 const SYNC_HZ := 60.0
 const CH_FAST := 0
@@ -19,6 +19,9 @@ const LobbyUiScript := preload("res://mods-unpacked/zonda-CoopSync/lobby_ui.gd")
 
 const EXTENSIONS := [
 	["res://scripts/climber.gd", "ext/climber.gd"],
+	# v5.0 no-clip (creature no-clip spec A5): column and width rules, Rule N normals, safe targets;
+	# every change is gated on the no-clip helper being on (THE UNDERDARK), elsewhere the base runs
+	["res://scripts/centipede_3d_pathfinder.gd", "ext/centipede_3d_pathfinder.gd"],
 	["res://scripts/centipede.gd", "ext/centipede.gd"],
 	["res://scripts/ending_trigger_area.gd", "ext/ending_trigger_area.gd"],
 	["res://scripts/lore_point.gd", "ext/lore_point.gd"],
@@ -95,16 +98,47 @@ var _mev_argc := 2
 var gfx: Node = null
 var lantern: Node = null         # the hand lantern, every level (lantern.gd)
 var voice: Node = null           # voice chat capture + settings (voice.gd), v4.9
+var mic_menu: Node = null        # the voice microphone picker (mic_menu.gd): pause menu + F2 panel, v4.9.1
+
+# ---- v5.0 shared state (build contract 2.1). Other files reach these through get()/has_method().
+var light_field = null            # the map's LightField node (maps/underdark/light.gd), or null
+var hunt_pins: Dictionary = {}    # pin name -> Node3D; a centipede with meta "zonda_hunt_pin" hunts only that player
+var idol_holder_sid := ""         # the idol module writes it every 0.25 s ("" = nobody)
+var idol_weight := 0              # 0..98, the holder's own PC only (streamed in "idl")
+var loop_ghost_weight := 0        # loopback tests: the Ghost's streamed idol weight
+var omen_file := RELIC_FILE       # the file every trophy AND relic write goes to; tests point it elsewhere
+var omen_tier := 0                # 0..4, the best omen trophy tier over every map ([omen] section)
+var save_run: Node = null         # saved runs: file format, writes, players table (save_run.gd)
+var save_prompt: Node = null      # the CONTINUE / NEW RUN panel and the guests' hold panel (save_prompt.gd)
+var test_files := false           # use_test_files() ran in this launch
+var continue_load := false        # a SAVE continue is reloading the map: no relight top-up; cleared by map_loaded
+var guestsim := ""                # "", "record" or "play" (guestsim.flag, developer only)
+var map_loads := 0                # map_loaded calls this launch (tests wait on it)
+var last_map_loaded: Dictionary = {}   # {"scene", "fresh", "ms"} of the last map_loaded call
+var _my_sid_cache := ""
+var _oilrep_t := 0.0              # guest: the next oil report check (every 3 s)
+var _oilrep_last := -1.0          # guest: the oil level last reported (-1 = report on the next check)
+var _oilrep_taken := -1
+var _oilrep_due := false          # guest: report at the next frame (a checkpoint)
+var _oilrep_hold_ms := 0          # guest: after the host's CONTINUE, wait for "oilset" before reporting
+var _cont_guest := false          # guest: continue_load waits for the reload the host's restart "level" causes
+var _cont_level_seq := -1         # guest: _applied_level_seq when the continue release arrived
+var _cont_level_root := -1        # guest: the scene instance current when that restart began loading (-1 = not yet)
+var _cont_until_ms := 0           # guest: continue_load never outlives this (a restart that never came)
+var _hold_keepalive_t := 0.0      # host: the saved-run hold is re-sent every 4 s while the panel is open
 
 # ---- voice chat transport (v4.9). Capture is polled every 40 ms while in a session; each
 # non-empty chunk goes out unreliable on CH_VOICE as {"t": "v", "from", "q": seq, "d": bytes}.
-# A talker's voice data is capped at ~64 kbps (plus ~100 bytes of packet header per chunk);
-# chunks over the cap are dropped, never queued, so a voice can glitch but never lag behind.
-# Drops are printed to the log ("voice over the 64 kbps cap"). Steam does not publish its voice
-# bitrate (Opus speech is usually well under 32 kbps), so the real rate is logged every 10 s of
-# talking ("voice tx ... bytes/s"): the cap is only a safety net against a runaway stream.
+# A talker's voice data is capped at 10,000 bytes/s = 80 kbps (plus ~100 bytes of packet header
+# per chunk); chunks over the cap are dropped, never queued, so a voice can glitch but never lag
+# behind. Drops are printed to the log ("voice over the 80 kbps cap"). Steam does not publish its
+# voice bitrate (Opus speech is usually well under 32 kbps). A microphone picked in the pause menu
+# or the F2 panel (v4.9.1) goes out as the mod's own "ZVA1" IMA ADPCM at 16 kHz instead (voice.gd):
+# about 8,250 bytes/s with its headers, which is why the cap went from 8,000 to 10,000 in v4.9.1.
+# The real rate is logged every 10 s of talking ("voice tx ... bytes/s"): the cap is only a
+# safety net against a runaway stream.
 const VOICE_POLL_S := 0.04
-const VOICE_BYTES_PER_S := 8000.0
+const VOICE_BYTES_PER_S := 10000.0
 const VOICE_BURST := 6000.0
 var _voice_accum := 0.0
 var _voice_seq := 0
@@ -113,16 +147,46 @@ var _voice_dropped := 0
 var _voice_tx_bytes := 0             # measured voice rate, logged every 10 s of talking
 var _voice_tx_t := 0.0
 var _voice_seq_in: Dictionary = {}   # peer id -> last voice seq played
+# incoming "ZVA1" (decoded in GDScript) is budgeted per 1 s window: a real talker delivers about
+# 1 s of audio per second (a little more after a network hitch), so 1.5 s only stops a flood
+const VOICE_IN_MAX_S := 1.5
+var _voice_in_ms := -100000          # start of the current budget window
+var _voice_in_s: Dictionary = {}     # peer id -> seconds of "ZVA1" audio decoded in this window (0 = everyone)
+var _voice_in_dropped := 0
 # a peer with no knight in this scene (main menu, loading, another level) is heard flat
 var _flat_voice: Dictionary = {}     # peer id -> {"p": AudioStreamPlayer, "pb": playback, "ms": last push}
 
 # ---- developer loopback: every packet you send comes back 0.7 s later as a "Ghost" peer
 const LOOP_ID := 777
+const LOOP_GHOST_AT_HAND_M := 2.5    # while an idol is in play the Ghost stands this far ahead (not 3.5 m)
 var _loopback := false
 var _loop_queue: Array = []
 var _loop_t := -1.0
 var _loop_step := 0
 var _loop_pending := false
+
+# ---- v5.0 creature no-clip, test plumbing (creature no-clip spec 3.B B5, B7, B8). All of it is
+# developer-only: the noclip probe (maps/underdark/noclip_probe.gd) sets these and restores them.
+# B5 shadows: the host's own "c" stream, looped back, drives SHADOW puppets on the host (the guests'
+# interpolation, bite distance and head clearance code), with loss, jitter and reordering. A shadow
+# never damages, shoves or sounds (ext/centipede.gd), and nothing targets or streams it.
+var noclip_shadows := false          # mirror the host's own "c" stream into shadow puppets
+var noclip_shadow_loss := 0.0        # fraction of "c" messages the shadows drop
+var noclip_shadow_jitter_ms := 0     # each kept message waits an extra random 0..jitter ms
+var noclip_shadow_late := 0.0        # fraction of kept messages delayed a further 80..150 ms (they arrive after newer ones)
+var _shadow_q: Array = []            # [deliver_ms, seq, msg]
+var _shadow_seq := 0
+var _shadow_by_cid: Dictionary = {}  # cid -> shadow puppet
+var _shadow_seen_ms: Dictionary = {} # cid -> last update (ms)
+const SHADOW_HIDE_MS := 2000
+# B7: the loopback Ghost (often standing inside the wall you look at) is no creature's target
+var noclip_no_ghost := false
+# B8: jitter and loss for the guest simulation's "maps" entries (guestsim play)
+var noclip_gs_loss := 0.0
+var noclip_gs_jitter_ms := 0
+var noclip_gs_late := 0.0
+var _gs_pend: Array = []             # [deliver_ms, seq, entry]
+var _gs_pend_seq := 0
 
 
 func _init() -> void:
@@ -160,10 +224,41 @@ func _ready() -> void:
 		add_child(voice)
 	else:
 		push_error("[CoopSync] could not load voice.gd, voice chat is off")
+	# the microphone picker (pause menu + F2 panel, v4.9.1); it drives `voice`, so only with voice
+	if voice != null:
+		var mm = load(MOD_DIR + "mic_menu.gd")
+		if mm is Script and mm.can_instantiate():
+			mic_menu = mm.new()
+			add_child(mic_menu)
+		else:
+			push_error("[CoopSync] could not load mic_menu.gd, the microphone picker is off")
+	# saved runs (v5.0): loaded like voice.gd, so a broken file only turns the feature off
+	var srs = load(MOD_DIR + "save_run.gd")
+	if srs is Script and srs.can_instantiate():
+		save_run = srs.new()
+		save_run.name = "SaveRun"
+		add_child(save_run)
+	else:
+		push_error("[CoopSync] could not load save_run.gd, saved runs are off")
+	var sps = load(MOD_DIR + "save_prompt.gd")
+	if sps is Script and sps.can_instantiate():
+		save_prompt = sps.new()
+		save_prompt.name = "SavePrompt"
+		add_child(save_prompt)
+	else:
+		push_error("[CoopSync] could not load save_prompt.gd, the saved-run panel is off")
 	if FileAccess.file_exists(MOD_DIR + "loopback.flag"):
 		DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/loopback.flag")
 		_loop_pending = true                # Steam is not up yet at _ready: start on the first ticking frame
+	if FileAccess.file_exists(MOD_DIR + "guestsim.flag"):
+		# developer only (build contract 2.11): "record" a loopback host test, or "play" it back as a guest
+		var gs := FileAccess.get_file_as_string(MOD_DIR + "guestsim.flag").strip_edges().to_lower()
+		DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/guestsim.flag")
+		if gs == "record" or gs == "play":
+			guestsim = gs
+			print("[GUESTSIM] mode %s" % gs)
 	_load_relics()
+	_load_omen()
 	build_id = _compute_build_id()
 	print("[CoopSync] build ", build_id)
 	if FileAccess.file_exists(MOD_DIR + "probe.flag") and FileAccess.file_exists(MOD_DIR + "debug_probe.gd"):
@@ -227,6 +322,8 @@ func _process(delta: float) -> void:
 	# scene tracking runs without Steam too, so solo map events and checkpoints always
 	# know which scene they belong to
 	_track_scene_changes()
+	if guestsim != "":
+		_guestsim_tick(delta)
 	if not Game.is_steam_enabled():
 		return
 	var t0 := Time.get_ticks_usec()
@@ -296,6 +393,9 @@ func _process_inner(delta: float) -> void:
 	_voice_tick(delta)
 	if _loopback:
 		_loop_script(delta)
+	if noclip_shadows or not _shadow_q.is_empty() or not _shadow_by_cid.is_empty():
+		_noclip_shadow_pump()
+	_save_session_tick(delta)
 	if not is_host:
 		_sweep_puppets()
 	_update_souls(delta)
@@ -304,7 +404,7 @@ func _process_inner(delta: float) -> void:
 		_sync_accum = 0.0
 		_broadcast_state()
 
-	if not _pending_level.is_empty() and not SceneLoader.is_transitioning():
+	if not _pending_level.is_empty() and not SceneLoader.is_transitioning() and not SceneLoader.was_transitioning_recently():
 		var lvl: Dictionary = _pending_level
 		_pending_level = {}
 		_apply_level(lvl)
@@ -326,6 +426,8 @@ func _process_inner(delta: float) -> void:
 # ---------------------------------------------------------------- developer loopback
 
 func _loop_start() -> void:
+	# a developer harness never touches the player's real saved runs or trophies (build contract 1A.2)
+	use_test_files()
 	if not Game.is_steam_enabled():
 		print("[LOOP] Steam not running, loopback off")
 		return
@@ -344,12 +446,36 @@ func _loop_pump() -> void:
 	while _loop_queue.size() > 0 and int(_loop_queue[0][0]) <= now:
 		var msg: Dictionary = _loop_queue.pop_front()[1]
 		var t := str(msg.get("t", ""))
+		if t == "c" and noclip_shadows:
+			_noclip_shadow_queue(msg)       # no-clip test only: shadow puppets (still dropped below)
 		# "c": echoed centipedes would spawn as real hunting centipedes on the host (review #122)
 		if t in ["death", "ending", "mapev", "maps", "level", "mapsync", "mapsync_req", "checkpoint", "unhook", "c"]:
+			if guestsim == "record" and (t == "maps" or t == "mapev"):
+				_guestsim_record(t, msg)    # kept for the guest simulation, still never applied here
+			if t == "mapev":
+				_loop_ghost_mapev(msg)
 			continue                    # your own world events must not come back as a second player's
 		msg["from"] = LOOP_ID
+		if t == "savehold":
+			# the saved-run hold, as the Ghost (a guest) would see it: shown for 2 s, then released
+			if bool(msg.get("on", false)) and is_instance_valid(save_prompt):
+				save_prompt.show_hold(sanitize_name(str(msg.get("host", "the host"))), 2.0)
+				print("[SAVE] loop hold shown")
+			continue
+		if t == "oilset":
+			# the Ghost answers a restored oil level with its report, so both ends round-trip
+			if str(msg.get("to", "")) == str(LOOP_ID) and is_instance_valid(save_run):
+				var tk = msg.get("taken", [])
+				save_run.on_oil_report(str(LOOP_ID), "Ghost", float(msg.get("oil", 1.0)), tk if tk is Array else [])
+				print("[SAVE] loop oilset -> oilrep from the Ghost: %.2f, %d taken" % [float(msg.get("oil", 1.0)), (tk as Array).size() if tk is Array else 0])
+			continue
 		if t == "p":
 			msg["n"] = "Ghost"
+			# the Ghost carries the idol only when the idol module says it holds it (not a mirror of mine)
+			if idol_holder_sid == str(LOOP_ID):
+				msg["idl"] = 1 + clampi(loop_ghost_weight, 0, 98)
+			else:
+				msg.erase("idl")
 			var ghost = _peers.get(LOOP_ID)
 			var me = Game.climber
 			if is_instance_valid(me) and me.get("coop_spectating") and is_instance_valid(ghost):
@@ -361,7 +487,21 @@ func _loop_pump() -> void:
 				msg.erase("att")
 			else:
 				var yaw: float = float(msg.get("cam", 0.0))
-				msg["pos"] = msg["pos"] + Vector3(-sin(yaw), 0.0, -cos(yaw)) * 3.5
+				var at: Vector3 = msg["pos"]
+				var ahead := 3.5
+				if _loop_ghost_at_hand() and is_instance_valid(me) and me.is_inside_tree():
+					# an idol is being handed around (mine or the Ghost's): the pass rules measure the
+					# Ghost against where I stand NOW (4.5 m flat in loopback to hand it over, 6 m on the
+					# authority), and a knight the Nest keeps shoving (24 m/s body knockback) moves metres
+					# in the 0.7 s the echo takes. The Ghost therefore stands 2.5 m ahead of my CURRENT
+					# place and view (the remote knight still renders its usual 60 ms behind), so the
+					# A-IDOL pass never misses its teammate. It is still a real remote packet stream.
+					at = me.global_position
+					if me.get("Camera") != null and is_instance_valid(me.Camera):
+						yaw = me.Camera.global_rotation.y
+					msg["cam"] = yaw
+					ahead = LOOP_GHOST_AT_HAND_M
+				msg["pos"] = at + Vector3(-sin(yaw), 0.0, -cos(yaw)) * ahead
 			_on_player_state(LOOP_ID, msg)
 		elif t == "soul":
 			_spawn_soul(LOOP_ID, "Ghost", msg.get("p", Vector3.ZERO))
@@ -373,6 +513,23 @@ func _loop_pump() -> void:
 			# oil poured for the Ghost comes straight back, so both ends of a gift can be tested
 			if int(msg.get("to", 0)) == LOOP_ID and is_instance_valid(lantern) and lantern.has_method("receive_oil"):
 				lantern.receive_oil(float(msg.get("x", 0.0)), "Ghost")
+
+
+func _loop_ghost_at_hand() -> bool:
+	# the loopback Ghost stands at arm's reach of where I am now (not where I was 0.7 s ago) while an
+	# idol is in play between us: I carry it, or the idol module says the Ghost holds it
+	return idol_carrier or (idol_holder_sid != "" and idol_holder_sid == str(LOOP_ID))
+
+
+func _loop_ghost_mapev(msg: Dictionary) -> void:
+	# a request addressed to the Ghost ("to": "777") is answered by the map's loopback shim, since the
+	# Ghost has no machine of its own (build contract 2.1 edit 7)
+	var d = msg.get("d")
+	if not (d is Dictionary) or str((d as Dictionary).get("to", "")) != str(LOOP_ID):
+		return
+	var root := get_tree().current_scene
+	if root and root.has_method("coop_loop_ghost"):
+		root.call_deferred("coop_loop_ghost", str(msg.get("k", "")), d)
 
 
 func _loop_shot(name: String) -> void:
@@ -461,6 +618,336 @@ func current_scene_path() -> String:
 	return _last_scene_path
 
 
+# ---------------------------------------------------------------- v5.0: Steam ids are Strings (R1)
+# Every Steam id inside map_event data and new net messages is a String: a 17-digit int that goes
+# through JSON (the saved run) comes back as a float with lost digits.
+
+func my_sid() -> String:
+	# this player's id as a String; solo without Steam: "local"
+	if _my_steam_id != 0:
+		return str(_my_steam_id)
+	if _my_sid_cache.is_empty() and Game.is_steam_enabled():
+		var id := int(Steam.getSteamID())
+		if id != 0:
+			_my_sid_cache = str(id)
+	return _my_sid_cache if not _my_sid_cache.is_empty() else "local"
+
+
+func sid(v) -> String:
+	# String as is, int as its digits; a float (a JSON-mangled id) or anything else never matches: ""
+	if v is String or v is StringName:
+		return str(v)
+	if v is int:
+		return str(v)
+	return ""
+
+
+func is_me(v) -> bool:
+	var s := sid(v)
+	return s != "" and s == my_sid()
+
+
+func name_of(s: String) -> String:
+	if s == my_sid():
+		return local_name
+	if s.is_valid_int() and _peer_names.has(int(s)):
+		return str(_peer_names[int(s)])
+	return "A teammate"
+
+
+func host_id() -> int:
+	return _host_steam_id if in_session() else _my_steam_id
+
+
+func host_sid() -> String:
+	if in_session() and _host_steam_id != 0:
+		return str(_host_steam_id)
+	return my_sid()
+
+
+func session_ids() -> Array:
+	# me, plus every teammate whose knight is in this scene and was updated within STALE_MS
+	# (alive OR spectating)
+	var out: Array = [my_sid()]
+	var now := Time.get_ticks_msec()
+	for id in _peers.keys():
+		var rp = _peers[id]
+		if is_instance_valid(rp) and str(rp.scene_path) == _last_scene_path and now - int(rp.last_update_ms) < STALE_MS:
+			var s := str(id)
+			if not out.has(s):
+				out.append(s)
+	return out
+
+
+func _map_filter_spawn(p: Vector3) -> Vector3:
+	# a map can move a respawn or rescue point (the False Hearth never lets anyone respawn in its maw)
+	var root := get_tree().current_scene
+	if root and root.has_method("coop_filter_spawn"):
+		var r = root.call("coop_filter_spawn", p)
+		if r is Vector3:
+			return r
+	return p
+
+
+func _is_mod_map(scene: String) -> bool:
+	for m in MOD_MAPS:
+		if str(m[1]) == scene:
+			return true
+	return false
+
+
+# ---------------------------------------------------------------- v5.0: saved runs (save_run.gd, save_prompt.gd)
+
+func map_loaded(scene: String, fresh: bool) -> void:
+	# A mod map calls this once per load, deferred from its _ready. fresh = there was no map state
+	# for this scene (a new run: not a death reload, not a continue). On the authority's fresh load
+	# of a map with an unfinished saved run the CONTINUE / NEW RUN panel opens here, synchronously,
+	# so save_prompt_open() is already true when this returns (the map's clock waits for it).
+	_end_continue_load()
+	map_loads += 1
+	last_map_loaded = {"scene": scene, "fresh": fresh, "ms": Time.get_ticks_msec()}
+	if is_instance_valid(save_run):
+		save_run.on_map_loaded(scene, fresh)
+	if guestsim != "":
+		_guestsim_on_map_loaded(scene)
+	if not fresh or not map_is_authority() or guestsim == "play":
+		return
+	if not is_instance_valid(save_run) or not is_instance_valid(save_prompt):
+		return
+	var key: String = save_run.map_key(scene)
+	if key.is_empty():
+		return
+	var s: Dictionary = save_run.has_save(key)
+	if s.is_empty() or bool(s.get("finished", false)):
+		return
+	save_prompt.show_for(key, s)
+	_hold_keepalive_t = 0.0                  # the guests are held on the next frame (and every 4 s)
+	var auto: String = save_run.auto_answer()
+	if not auto.is_empty():
+		save_prompt.auto_answer(auto)
+
+
+func save_prompt_open() -> bool:
+	# the host's saved-run panel or a guest's hold panel is showing (the game is paused meanwhile)
+	return is_instance_valid(save_prompt) and bool(save_prompt.is_open())
+
+
+func save_continue(key: String) -> void:
+	# CONTINUE on the saved-run panel: restore the map state (checkpoint, events, the clock) and this
+	# player's oil, tell every guest to drop its map state, then reload the level through the same
+	# path as RESTART AT KILN. The guests follow the restart and get the saved state by mapsync,
+	# then their saved oil by "oilset".
+	if not is_instance_valid(save_run):
+		return
+	var scene := _scene_now()
+	if not save_run.load_into_state(key):
+		if is_instance_valid(save_prompt):
+			save_prompt.close()
+		show_banner("The saved run could not be read.", 5.0)
+		_save_hold_send(false, false, "")
+		return
+	if is_instance_valid(save_prompt):
+		save_prompt.close()
+	# reliable on CH_EVENT before the level message, so every guest resets before it reloads
+	_save_hold_send(false, true, str(map_state.get("scene", scene)))
+	print("[SAVE] continue: reloading at checkpoint %d" % int(map_state.get("checkpoint", -1)))
+	# the game's loading overlay only re-arms 0.5 s after the previous load ended: a reload asked for
+	# sooner fades to black and never swaps the scene. The map has only just loaded, so wait for it.
+	while SceneLoader.is_transitioning() or SceneLoader.was_transitioning_recently():
+		await get_tree().process_frame
+	SceneLoader.load_scene(Game.load_level_based_on_difficulty)
+
+
+func save_new_run(key: String) -> void:
+	# NEW RUN (confirmed): the saved run becomes <map>.old.json and this run plays on fresh
+	if is_instance_valid(save_run):
+		save_run.start_new_run(key)
+	if is_instance_valid(save_prompt):
+		save_prompt.close()
+	_save_hold_send(false, false, "")
+
+
+func _save_hold_send(on: bool, cont: bool, scene: String) -> void:
+	_send_all({"t": "savehold", "from": _my_steam_id, "on": on, "host": local_name, "cont": cont, "s": scene}, true)
+
+
+func _on_savehold(msg: Dictionary) -> void:
+	# guest: the host is choosing (on), or has chosen. After CONTINUE (cont) this guest's map state
+	# for the scene is emptied, so the mapsync after the reload REPLACES it instead of merging into it.
+	if bool(msg.get("on", false)):
+		if is_instance_valid(save_prompt):
+			save_prompt.show_hold(sanitize_name(str(msg.get("host", "the host"))), 15.0)
+		return
+	if is_instance_valid(save_prompt):
+		save_prompt.hide_hold()
+	if bool(msg.get("cont", false)):
+		var s := str(msg.get("s", ""))
+		if not s.is_empty():
+			map_state = {"scene": s, "checkpoint": -1, "events": {}}
+			continue_load = true
+			_oilrep_hold_ms = Time.get_ticks_msec() + 20000
+			if not map_is_authority():
+				# the flag belongs to the reload the host's restart "level" causes: a map instance that
+				# was still loading, or a death reload, when the host pressed CONTINUE must not use it up
+				# (the only "oilset" can land on that instance; the restart would then relight to 25%)
+				_cont_guest = true
+				_cont_level_seq = _applied_level_seq
+				_cont_level_root = -1
+				_cont_until_ms = Time.get_ticks_msec() + 60000
+			print("[SAVE] the host continues a saved run: map state cleared for the reload")
+
+
+func _end_continue_load() -> void:
+	# a map load is over: a SAVE continue's reload no longer holds back the relight floor. On a guest
+	# the flag lasts until the map instance loaded by the host's restart "level" (newer than the
+	# continue release) comes up, or 60 s at most.
+	if _cont_guest and Time.get_ticks_msec() < _cont_until_ms:
+		var cs := get_tree().current_scene if is_inside_tree() else null
+		if _cont_level_root < 0 or cs == null or cs.get_instance_id() == _cont_level_root:
+			return
+	continue_load = false
+	_cont_guest = false
+	_cont_level_root = -1
+
+
+func _on_oilset(msg: Dictionary) -> void:
+	# guest: the host's saved run restores this player's lamp oil and taken flasks, exactly
+	_oilrep_hold_ms = 0
+	if not is_instance_valid(lantern) or not lantern.has_method("import_oil"):
+		return
+	var tk = msg.get("taken", [])
+	lantern.import_oil({"oil": float(msg.get("oil", 1.0)), "taken": tk if tk is Array else []})
+	_oilrep_last = -1.0                     # report the restored level back, so the host's table matches
+	print("[SAVE] lamp oil restored from the saved run: %d%%" % int(round(float(msg.get("oil", 1.0)) * 100.0)))
+
+
+func _send_oilset(peer: int) -> void:
+	# host, after a CONTINUE: each guest gets its saved oil and taken flasks once (a guest with no
+	# saved entry gets a fresh full lantern), right after its mapsync answer
+	if not is_instance_valid(save_run):
+		return
+	var s := str(peer)
+	var e: Dictionary = save_run.saved_player(s)
+	var oil := 1.0
+	var taken: Array = []
+	if e.has("oil"):
+		oil = clampf(float(e["oil"]), 0.0, 1.0)
+		var t = e.get("taken", [])
+		if t is Array:
+			taken = (t as Array).duplicate()
+	save_run.mark_oilset_sent(s)
+	_send_to(peer, {"t": "oilset", "from": _my_steam_id, "to": s, "oil": oil, "taken": taken}, true)
+	print("[SAVE] oilset to %s: %d%%, %d flasks taken" % [name_of(s), int(round(oil * 100.0)), taken.size()])
+
+
+func _save_session_tick(delta: float) -> void:
+	# host: keep the guests held while the saved-run panel is open; guest: report the lamp oil
+	if is_host and is_instance_valid(save_prompt) and bool(save_prompt.host_open()):
+		_hold_keepalive_t -= delta
+		if _hold_keepalive_t <= 0.0:
+			_hold_keepalive_t = 4.0
+			_save_hold_send(true, false, "")
+	if _cont_guest and Time.get_ticks_msec() >= _cont_until_ms:
+		_end_continue_load()                    # the host's restart never came: the relight floor is back
+	if is_guest():
+		_guest_oil_tick(delta)
+
+
+func _guest_oil_tick(delta: float) -> void:
+	# a guest reports its lamp oil to the host, who keeps the saved run: when it changed by 2% or
+	# more (checked every 3 s) and at every checkpoint
+	if not is_instance_valid(lantern) or not bool(lantern.get("oil_enabled")) or not _is_mod_map(_last_scene_path):
+		return
+	if _oilrep_hold_ms > 0:
+		if Time.get_ticks_msec() < _oilrep_hold_ms:
+			return                          # a CONTINUE is restoring my oil: report the restored level
+		_oilrep_hold_ms = 0
+	_oilrep_t -= delta
+	if not _oilrep_due and _oilrep_t > 0.0:
+		return
+	_oilrep_t = 3.0
+	var ex: Dictionary = lantern.export_oil() if lantern.has_method("export_oil") else {"oil": float(lantern.get("oil")), "taken": []}
+	var oil := float(ex.get("oil", 1.0))
+	var taken: Array = ex.get("taken", []) if ex.get("taken", []) is Array else []
+	if not _oilrep_due and absf(oil - _oilrep_last) < 0.02 and taken.size() == _oilrep_taken:
+		return
+	_oilrep_due = false
+	_oilrep_last = oil
+	_oilrep_taken = taken.size()
+	_send_to(_host_steam_id, {"t": "oilrep", "from": _my_steam_id, "n": local_name, "oil": oil, "taken": taken}, true)
+
+
+func use_test_files() -> void:
+	# build contract 1A.2: every developer test and harness run uses the TEST save folder
+	# (user://zonda_saves_test/, emptied once per launch) and the test cosmetics file, so the player's
+	# real saved runs and trophies are never touched. Idempotent: later calls do nothing at all.
+	if test_files:
+		return
+	test_files = true
+	if is_instance_valid(save_run):
+		save_run.use_test_dir()
+	omen_file = "user://zonda_cosmetics_test.cfg"
+	if FileAccess.file_exists(omen_file):
+		DirAccess.remove_absolute(omen_file)
+	print("[CoopSync] test files on")
+
+
+# ---------------------------------------------------------------- v5.0: omen trophies ([omen] in the cosmetics file)
+
+func omen_tier_for(n: int) -> int:
+	# omens carried to the finish -> trophy tier: 1-2 I, 3-5 II, 6-7 III, 8 IV
+	if n <= 0:
+		return 0
+	if n <= 2:
+		return 1
+	if n <= 5:
+		return 2
+	if n <= 7:
+		return 3
+	return 4
+
+
+func omen_best(map_key: String) -> int:
+	# the most omens this player has carried out of that map (read from the file trophies go to)
+	var cf := ConfigFile.new()
+	if cf.load(omen_file) != OK:
+		return 0
+	return int(cf.get_value("omen", "%s_best" % map_key, 0))
+
+
+func omen_grant(map_key: String, n: int) -> Dictionary:
+	# the finish with n omens: keep the best per map in [omen] "<map>_best" of omen_file (never
+	# [relics]: its size drives the gold name, rope and crown), then recompute omen_tier from that file
+	var cf := ConfigFile.new()
+	cf.load(omen_file)                      # a missing file is an empty one
+	var k := "%s_best" % map_key
+	var prev := int(cf.get_value("omen", k, 0))
+	var best := maxi(prev, n)
+	if n > prev:
+		cf.set_value("omen", k, best)
+		var err := cf.save(omen_file)
+		if err != OK:
+			push_warning("[CoopSync] could not save the omen trophy to %s (error %d)" % [omen_file, err])
+	omen_tier = _omen_tier_in(cf)
+	return {"tier": omen_tier_for(n), "best": best, "new": omen_tier_for(n) > omen_tier_for(prev)}
+
+
+func _load_omen() -> void:
+	# the trophy tier shown on your lantern and knight: the best over every map, read from the real file
+	var cf := ConfigFile.new()
+	if cf.load(RELIC_FILE) == OK:
+		omen_tier = _omen_tier_in(cf)
+
+
+func _omen_tier_in(cf: ConfigFile) -> int:
+	var t := 0
+	if cf.has_section("omen"):
+		for key in cf.get_section_keys("omen"):
+			if str(key).ends_with("_best"):
+				t = maxi(t, omen_tier_for(int(cf.get_value("omen", key, 0))))
+	return t
+
+
 func register_puppet(c: Node) -> void:
 	_purge_puppets()
 	_puppets.append(c)
@@ -529,7 +1016,7 @@ func respawn_point_for(c: Node3D) -> Vector3:
 		candidates.append(c.get("_coop_last_ground_pos"))
 	candidates.append(here)
 	for cand in candidates:
-		var spot := _settle_on_ground(c, cand)
+		var spot := _settle_on_ground(c, _map_filter_spawn(cand))
 		if spot != Vector3.INF:
 			return spot
 	# Nothing solid near anyone (everyone mid-rope): a longer probe straight down from the nearest friend.
@@ -588,7 +1075,7 @@ func nearest_player_node(from: Vector3) -> Node3D:
 	if _local_alive():
 		best = Game.climber
 		best_d = from.distance_squared_to(Game.climber.global_position)
-	for rp in _active_remote_players():
+	for rp in _target_remote_players():
 		var d: float = from.distance_squared_to(rp.global_position)
 		if d < best_d:
 			best_d = d
@@ -603,8 +1090,17 @@ func _alive_player_nodes() -> Array:
 	var out: Array = []
 	if _local_alive():
 		out.append(Game.climber)
-	out.append_array(_active_remote_players())
+	out.append_array(_target_remote_players())
 	return out
+
+
+func _target_remote_players() -> Array:
+	# the remote players creatures may target: every active one, except the loopback Ghost while the
+	# no-clip test runs (B7: it stands 3.5 m ahead of the camera, often inside the wall looked at)
+	var list := _active_remote_players()
+	if not noclip_no_ghost:
+		return list
+	return list.filter(func(p): return int(p.get("peer_id")) != LOOP_ID)
 
 
 var _lure_node: Node3D = null
@@ -638,6 +1134,12 @@ func lure_active() -> bool:
 	return is_instance_valid(_lure_node) and Time.get_ticks_msec() < _lure_until_ms
 
 
+func lure_node() -> Node3D:
+	# v5.0 no-clip (A10): the bell pulling the centipedes right now, else null; CoopHunting never
+	# lunges at it (a centipede idles by the bell instead of biting into its collision cylinder)
+	return _lure_node if lure_active() else null
+
+
 func _lure_applies(c: Node) -> bool:
 	# a map marks centipedes the bell must not pull (the finale chasers once the idol is taken)
 	return lure_active() and not bool(c.get_meta("zonda_no_lure", false))
@@ -648,6 +1150,11 @@ func target_player_for(c: Node3D) -> Node3D:
 		return null
 	if _lure_applies(c):
 		return _lure_node
+	# v5.0: a pinned hunter (meta "zonda_hunt_pin", e.g. "idol") chases only the player that pin
+	# names in hunt_pins, while that player is alive here; otherwise it targets as usual
+	var pinned := _pin_target(c, [])
+	if pinned != null:
+		return pinned
 	# A map can pin a centipede to a band of depth: it hunts whoever is inside the band and
 	# ignores everyone else, so it stays in its biome after the team has moved on.
 	if c.has_meta("zonda_territory"):
@@ -689,11 +1196,23 @@ func _territory_target(c: Node3D) -> Node3D:
 	return best
 
 
+func _pin_target(c: Node, players: Array) -> Node3D:
+	# the player a pinned hunter must chase, or null (no pin, or its player is not alive here)
+	if not c.has_meta("zonda_hunt_pin") or hunt_pins.is_empty():
+		return null
+	var t = hunt_pins.get(str(c.get_meta("zonda_hunt_pin")))
+	if not is_instance_valid(t) or not (t is Node3D) or not (t as Node3D).is_inside_tree():
+		return null
+	var alive: Array = players if not players.is_empty() else _alive_player_nodes()
+	return t if alive.has(t) else null
+
+
 func _recompute_centipede_targets(players: Array) -> void:
 	_cent_assign.clear()
 	var cents: Array = []
 	for cent in Game.centipedes:
-		if is_instance_valid(cent) and cent.is_inside_tree() and not cent.has_meta("zonda_territory"):
+		# a pinned hunter already has its one target, so the others still spread over the rest
+		if is_instance_valid(cent) and cent.is_inside_tree() and not cent.has_meta("zonda_territory") and _pin_target(cent, players) == null:
 			cents.append(cent)
 	var pairs: Array = []
 	for cent in cents:
@@ -820,6 +1339,20 @@ func _track_scene_changes() -> void:
 	_last_scene_instance_id = id
 	_prev_scene_path = _last_scene_path
 	_last_scene_path = scene.scene_file_path
+	# saved runs: write the run the team just left (before a menu clears map_state below); a panel
+	# still open from the scene we left is closed and the guests are released
+	if is_instance_valid(save_run):
+		save_run.on_scene_change(_prev_scene_path, _last_scene_path)
+	if is_instance_valid(save_prompt) and bool(save_prompt.host_open()) and int(save_prompt.scene_id()) != id:
+		save_prompt.close()
+		_save_hold_send(false, false, "")
+	if guestsim == "record" and _prev_scene_path == _gs_scene and _gs_entries.size() > 0:
+		_guestsim_close("left the recorded map")   # one map instance per recording (a death reload is a new one)
+	_oilrep_last = -1.0
+	if _is_mod_map(_last_scene_path):
+		# the map's _ready (which reads it for the lantern) ran a frame ago: a continue is over even
+		# if the map never called map_loaded (on a guest: once the host's restart has loaded)
+		_end_continue_load()
 	if not (is_instance_valid(_local_player) and _local_player.is_inside_tree()):
 		_local_player = null
 	_purge_puppets()
@@ -853,10 +1386,19 @@ func _autostart() -> void:
 	# developer only: start a sandbox map straight from the menu, no clicks. The flag is
 	# removed as soon as it is read so it can never follow a player into a real session.
 	_autostarted = true
+	# every scripted run uses the test save folder and the test cosmetics file (build contract 1A.2)
+	use_test_files()
 	var want := FileAccess.get_file_as_string(MOD_DIR + "autostart.flag").strip_edges().to_upper()
 	var disk := OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/autostart.flag"
 	var err := DirAccess.remove_absolute(disk)
 	print("[CoopSync] autostart flag '%s' (removed: %s)" % [want, str(err == OK)])
+	if FileAccess.file_exists(MOD_DIR + "savetest.flag"):
+		# developer only: the saved-run test (save_run.gd), read before the map loads; it picks its own
+		# folder (user://zonda_saves_savetest/, kept between launches)
+		var st := FileAccess.get_file_as_string(MOD_DIR + "savetest.flag").strip_edges().to_lower()
+		DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/savetest.flag")
+		if is_instance_valid(save_run):
+			save_run.begin_savetest(st)
 	for m in MOD_MAPS:
 		if str(m[0]).to_upper() == want:
 			Game.active_balance_settings = Game.get_balance_settings_for_sandbox_difficulty_level(SandboxData.EDifficultyLevel.Normal)
@@ -935,8 +1477,8 @@ func _dict_to_balance(d: Dictionary, b) -> void:
 func _apply_level(msg: Dictionary) -> void:
 	if is_host:
 		return
-	if SceneLoader.is_transitioning():
-		_pending_level = msg
+	if SceneLoader.is_transitioning() or SceneLoader.was_transitioning_recently():
+		_pending_level = msg                   # retried once the loading overlay has re-armed (see save_continue)
 		return
 	var target: String = msg.get("scene", "")
 	if target.is_empty() or target.contains("you_died"):
@@ -951,6 +1493,10 @@ func _apply_level(msg: Dictionary) -> void:
 	if cur == target and not msg.get("restart", false):
 		return
 	print("[CoopSync] following host to ", target)
+	if _cont_guest and _cont_level_root < 0 and seq > _cont_level_seq:
+		# the host's restart after CONTINUE: the map instance this loads is the continued run
+		var cs := get_tree().current_scene
+		_cont_level_root = cs.get_instance_id() if cs != null else 0
 	_apply_game_settings(msg)
 	if msg.has("map_path") and msg["map_path"] == target:
 		SceneLoader.load_scene(func(): Game.load_level_based_on_difficulty(false))
@@ -1101,6 +1647,13 @@ func disconnect_session() -> void:
 	_applied_level_seq = -1
 	_join_stage = 0
 	_mapsync_scene = ""
+	_oilrep_hold_ms = 0
+	if _cont_guest:
+		_cont_guest = false                 # no restart is coming from a host who left
+		continue_load = false
+		_cont_level_root = -1
+	if is_instance_valid(save_prompt):
+		save_prompt.hide_hold()             # nobody left to wait for
 	_restore_own_settings()
 	var had_puppets := _drop_puppets()
 	if was_guest or had_puppets:
@@ -1204,6 +1757,9 @@ func _on_lobby_chat_update(lobby_id: int, changed_id: int, _making_change_id: in
 		_send_to(changed_id, {"t": "hello", "from": _my_steam_id, "n": local_name, "b": build_id}, true)
 		if is_host:
 			_welcome_queue.append([changed_id, 3, Time.get_ticks_msec() + 700])
+			if is_instance_valid(save_prompt) and bool(save_prompt.host_open()):
+				# joined while the host is choosing CONTINUE or NEW RUN: held too
+				_send_to(changed_id, {"t": "savehold", "from": _my_steam_id, "on": true, "host": local_name, "cont": false, "s": ""}, true)
 		_set_status("Player joined.\nPlayers: %d / %d" % [count, MAX_MEMBERS])
 	else:
 		_remove_remote_player(changed_id)
@@ -1312,7 +1868,12 @@ func _handle_message(data: PackedByteArray) -> void:
 		"mapev":
 			var evs := str(msg.get("s", ""))
 			if _scene_ok_for_state(evs):
-				_apply_map_event(evs, str(msg.get("k", "")), msg.get("d", {}), bool(msg.get("p", true)), false)
+				var d = msg.get("d", {})
+				var pers := bool(msg.get("p", true))
+				if not pers and d is Dictionary:
+					# R4: who asked, from the message's own "from" (a convenience, not a security check)
+					d["_from"] = str(from)
+				_apply_map_event(evs, str(msg.get("k", "")), d, pers, false)
 		"maps":
 			if str(msg.get("s", "")) == _last_scene_path and not SceneLoader.is_transitioning():
 				var root := get_tree().current_scene
@@ -1325,19 +1886,24 @@ func _handle_message(data: PackedByteArray) -> void:
 				_send_to(from, {"t": "mapsync", "from": _my_steam_id, "s": rs,
 						"cp": st["checkpoint"], "ev": st["events"]}, true)
 				print("[CoopSync] mapsync sent: checkpoint %d, %d events" % [int(st["checkpoint"]), st["events"].size()])
+				# after a CONTINUE, each guest's saved lamp oil follows its first mapsync answer
+				if is_instance_valid(save_run) and bool(save_run.wants_oilset(rs, str(from))):
+					_send_oilset(from)
 		"mapsync":
 			if from == _host_steam_id:
-				var sc := str(msg.get("s", ""))
-				if sc == _mapsync_scene:
-					_mapsync_scene = ""
-				# only for the map this player is actually in (or loading into): a stale reply
-				# must never wipe the state of the map they are in now
-				if _scene_ok_for_state(sc):
-					_note_checkpoint(sc, int(msg.get("cp", -1)))
-					var ev: Dictionary = msg.get("ev", {})
-					for k in ev.keys():
-						_apply_map_event(sc, str(k), ev[k], true, true)
-					print("[CoopSync] mapsync received: checkpoint %d, %d events" % [int(msg.get("cp", -1)), ev.size()])
+				var ev = msg.get("ev", {})
+				_on_mapsync(str(msg.get("s", "")), int(msg.get("cp", -1)), ev if ev is Dictionary else {})
+		"oilrep":
+			# a guest's lamp oil, for the saved run the host keeps
+			if map_is_authority() and is_instance_valid(save_run):
+				var tk = msg.get("taken", [])
+				save_run.on_oil_report(str(from), sanitize_name(str(msg.get("n", "Player"))), float(msg.get("oil", 1.0)), tk if tk is Array else [])
+		"oilset":
+			if from == _host_steam_id and not is_host:
+				_on_oilset(msg)
+		"savehold":
+			if from == _host_steam_id and not is_host:
+				_on_savehold(msg)
 
 
 # ---------------------------------------------------------------- outgoing state
@@ -1362,7 +1928,11 @@ func _broadcast_state() -> void:
 		"gnd": p.is_on_floor() and p.get_floor_normal().y > 0.8 and not (p.activeClimberState is ClimberState_Attached),
 	}
 	if idol_carrier:
-		msg["idl"] = true               # absent = false, so it costs nothing for everyone else
+		# absent = not the holder, so it costs nothing for everyone else; v5.0 sends 1 + the idol's
+		# weight % (0..98) instead of true (a build before 5.0 reads any value as true)
+		msg["idl"] = 1 + clampi(idol_weight, 0, 98)
+	if omen_tier > 0:
+		msg["om"] = omen_tier           # the omen trophy tier: the charm on your lantern (absent = 0)
 	if is_instance_valid(lantern) and bool(lantern.get("oil_enabled")):
 		msg["ol"] = int(round(float(lantern.get("oil")) * 100.0))   # lamp oil %, for sharing (G)
 	if p.Rope and p.Rope.is_setup and p.activeClimberState and p.activeClimberState.is_rope_active() and is_instance_valid(p.Rope._claw) and p.Rope._claw.visible:
@@ -1383,11 +1953,15 @@ func _broadcast_state() -> void:
 func _broadcast_centipedes() -> void:
 	# element 5 is a stable id (review #11): guests match puppets by it, not by list order.
 	# Sleepers (a map disables their processing) are left out, so guests hide them.
+	# v5.0 no-clip (B1): element 8 is the teleport counter (meta "zonda_tp"); a guest's puppet snaps and
+	# rebuilds its body once per change instead of gliding through the rock. Elements 6 and 7 are the
+	# cry and roar slots, -1 = "not sent" (the Underdark streams those in its own "cr").
 	var list: Array = []
 	for c in Game.centipedes:
 		if is_instance_valid(c) and c.is_inside_tree() and not bool(c.get("coop_puppet")) and c.process_mode != Node.PROCESS_MODE_DISABLED:
 			var cid: String = str(c.get_meta("zonda_cid")) if c.has_meta("zonda_cid") else str(c.get_instance_id())
-			list.append([c.global_position, c.global_basis.get_rotation_quaternion(), c._current_state is centipede_state_attack, c.stamina, int(c.get_meta("zonda_skin", 0)), cid])
+			list.append([c.global_position, c.global_basis.get_rotation_quaternion(), c._current_state is centipede_state_attack, c.stamina,
+					int(c.get_meta("zonda_skin", 0)), cid, -1, -1, int(c.get_meta("zonda_tp", 0))])
 	if list.is_empty():
 		return
 	_send_all({"t": "c", "ts": Time.get_ticks_msec(), "from": _my_steam_id, "s": _last_scene_path, "l": list}, false)
@@ -1420,8 +1994,9 @@ func _is_gameplay_scene(path: String) -> bool:
 	return false
 
 
-func _safe_spawn_near(host_pos: Vector3) -> Vector3:
+func _safe_spawn_near(host_pos_in: Vector3) -> Vector3:
 	# Never shove a player into geometry: only use the side offset if the path there is clear.
+	var host_pos := _map_filter_spawn(host_pos_in)
 	var target: Vector3 = host_pos + Vector3(0.8, 0.3, 0.8)
 	if not is_instance_valid(_local_player) or not _local_player.is_inside_tree():
 		return target
@@ -1489,12 +2064,19 @@ func _apply_centipedes(msg: Dictionary) -> void:
 			if pup == null:
 				break                       # centipedes are disabled on this PC
 			_puppet_by_cid[cid] = pup
+			pup.set_meta("zonda_puppet_cid", cid)      # the host's id (no-clip kind and test points)
+			# no-clip (B3): a puppet handed to a new id starts from that creature's first sample with a
+			# fresh body (no slide from the old creature's place); only while the no-clip guard is on
+			if pup.has_method("coop_nc_rebind"):
+				pup.call("coop_nc_rebind")
 		_puppet_seen_ms[cid] = now
 		if pup.process_mode == Node.PROCESS_MODE_DISABLED:
 			pup.process_mode = Node.PROCESS_MODE_INHERIT
 			var old_buf = pup.get("_coop_buf")
 			if old_buf != null:
 				old_buf.clear()             # hidden a while: start from the new state, no slide
+			if pup.has_method("coop_nc_rebind"):
+				pup.call("coop_nc_rebind")  # B3: and a fresh body and snap latches
 		if pup.has_method("coop_apply_state"):
 			pup.coop_apply_state(entry, sender_t)
 
@@ -1575,6 +2157,102 @@ func _sweep_puppets() -> void:
 			_hide_puppet(p)
 
 
+# ---------------------------------------------------------------- v5.0 no-clip: shadow puppets (test only)
+# The noclip probe (host run) sets noclip_shadows. Every "c" message the loopback drops is also queued
+# here (with loss, jitter and late delivery) and applied to SHADOW puppets: centipede.tscn instances
+# with meta "zonda_shadow", made on the host. They run exactly the guests' puppet code (interpolation,
+# snap latches, bite distance, head clearance) and can never hurt, shove or sound: ext/centipede.gd
+# returns before any damage, and no shadow is registered anywhere (targeting, streaming, LOD, unhooks).
+
+func noclip_shadows_clear() -> void:
+	# frees every shadow, empties the queue and switches the mirror off (the probe's cleanup)
+	for cid in _shadow_by_cid.keys():
+		var sh = _shadow_by_cid[cid]
+		if is_instance_valid(sh):
+			sh.queue_free()
+	_shadow_by_cid.clear()
+	_shadow_seen_ms.clear()
+	_shadow_q.clear()
+	noclip_shadows = false
+
+
+func _noclip_shadow_queue(msg: Dictionary) -> void:
+	# an unreliable channel, simulated: dropped with probability loss; the rest wait 0..jitter ms, and a
+	# fraction a further 80..150 ms, so they land after newer ones (the puppet's buffer drops them, as a
+	# real out-of-order packet is dropped)
+	if noclip_shadow_loss > 0.0 and randf() < noclip_shadow_loss:
+		return
+	var wait := 0
+	if noclip_shadow_jitter_ms > 0:
+		wait += randi_range(0, noclip_shadow_jitter_ms)
+	if noclip_shadow_late > 0.0 and randf() < noclip_shadow_late:
+		wait += randi_range(80, 150)
+	_shadow_seq += 1
+	_shadow_q.append([Time.get_ticks_msec() + wait, _shadow_seq, msg])
+
+
+func _noclip_shadow_pump() -> void:
+	var now := Time.get_ticks_msec()
+	if not _shadow_q.is_empty():
+		var due: Array = []
+		var keep: Array = []
+		for q in _shadow_q:
+			if int(q[0]) <= now:
+				due.append(q)
+			else:
+				keep.append(q)
+		_shadow_q = keep
+		due.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and int(a[1]) < int(b[1])))
+		for q in due:
+			_noclip_shadow_apply(q[2])
+	for cid in _shadow_by_cid.keys():
+		var sh = _shadow_by_cid[cid]
+		if not is_instance_valid(sh):
+			_shadow_by_cid.erase(cid)
+			_shadow_seen_ms.erase(cid)
+			continue
+		if sh.visible and now - int(_shadow_seen_ms.get(cid, now)) > SHADOW_HIDE_MS:
+			_hide_puppet(sh)
+
+
+func _noclip_shadow_apply(msg: Dictionary) -> void:
+	if str(msg.get("s", "")) != _last_scene_path or SceneLoader.is_transitioning():
+		return
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	var list = msg.get("l", [])
+	if not (list is Array):
+		return
+	var ts := int(msg.get("ts", Time.get_ticks_msec()))
+	var now := Time.get_ticks_msec()
+	for i in (list as Array).size():
+		var entry = list[i]
+		if not (entry is Array) or (entry as Array).size() < 4:
+			continue
+		var cid: String = str(entry[5]) if (entry as Array).size() > 5 else "idx:%d" % i
+		var sh = _shadow_by_cid.get(cid)
+		if not is_instance_valid(sh):
+			var ps = load("res://scenes/centipede.tscn")
+			if ps == null:
+				return
+			sh = ps.instantiate()
+			sh.set_meta("zonda_shadow", true)          # before add_child: its _ready reads it
+			sh.set_meta("zonda_puppet_cid", cid)       # the host's id: its kind (follower) and test points
+			sh.name = "NoclipShadow_%d" % _shadow_seq
+			scene.add_child(sh)
+			if not is_instance_valid(sh) or sh.is_queued_for_deletion():
+				return                                 # centipedes are disabled on this PC
+			_shadow_by_cid[cid] = sh
+		elif sh.process_mode == Node.PROCESS_MODE_DISABLED:
+			sh.process_mode = Node.PROCESS_MODE_INHERIT
+			if sh.has_method("coop_nc_rebind"):
+				sh.call("coop_nc_rebind")              # re-shown: a fresh buffer, body and latches
+		_shadow_seen_ms[cid] = now
+		if sh.has_method("coop_apply_state"):
+			sh.call("coop_apply_state", entry, ts)
+
+
 # ---------------------------------------------------------------- events
 
 func broadcast_death() -> void:
@@ -1615,6 +2293,10 @@ func _note_checkpoint(scene: String, id: int) -> void:
 	var st := _map_state_for(scene)
 	if id > int(st["checkpoint"]):
 		st["checkpoint"] = id
+		if is_instance_valid(save_run):
+			save_run.note_checkpoint()      # the saved run is written right away at a new checkpoint
+		if is_guest():
+			_oilrep_due = true              # and a guest reports its lamp oil
 
 
 func map_checkpoint_for(scene: String) -> int:
@@ -1682,6 +2364,10 @@ func _apply_map_event(scene: String, key: String, data, persist: bool, replay: b
 		if st["events"].has(key):
 			return
 		st["events"][key] = data
+		if is_instance_valid(save_run):
+			save_run.note_dirty()           # a new persistent event: the saved run is written within 5 s
+			if key == "finish":
+				save_run.mark_finished()    # a finished run never prompts again
 	if scene != _scene_now() or SceneLoader.is_transitioning():
 		return                         # stored: the map replays it from map_events_for() on load
 	var root := get_tree().current_scene
@@ -1712,6 +2398,8 @@ func map_stream(data: Dictionary) -> void:
 
 
 func map_is_authority() -> bool:
+	if guestsim == "play":
+		return false                        # the guest simulation plays the guest side for the whole launch
 	return not in_session() or is_host
 
 
@@ -1737,6 +2425,20 @@ func map_request_sync(scene: String = "") -> void:
 		_mapsync_scene = sc
 		_mapsync_tries = 0
 		_mapsync_next_ms = Time.get_ticks_msec() + 2500
+
+
+func _on_mapsync(sc: String, cp: int, ev: Dictionary) -> void:
+	# guest: the host's stored map state for a scene (a separate function so tests can feed it:
+	# the loopback never echoes mapsync)
+	if sc == _mapsync_scene:
+		_mapsync_scene = ""
+	# only for the map this player is actually in (or loading into): a stale reply
+	# must never wipe the state of the map they are in now
+	if _scene_ok_for_state(sc):
+		_note_checkpoint(sc, cp)
+		for k in ev.keys():
+			_apply_map_event(sc, str(k), ev[k], true, true)
+		print("[CoopSync] mapsync received: checkpoint %d, %d events" % [cp, ev.size()])
 
 
 func _retry_mapsync() -> void:
@@ -1877,8 +2579,8 @@ func soul_position(owner_id: int):
 
 
 func rescue_point_for(c: Node3D, soul_pos) -> Vector3:
-	if soul_pos != null:
-		var spot := _settle_on_ground(c, soul_pos)
+	if soul_pos is Vector3:
+		var spot := _settle_on_ground(c, _map_filter_spawn(soul_pos))
 		if spot != Vector3.INF:
 			return spot
 	return respawn_point_for(c)
@@ -1970,10 +2672,11 @@ func relic_grant(id: String) -> bool:
 		return false
 	_relics[id] = true
 	cosmetics = _relics.size()
+	# v5.0: written to omen_file, which tests point at a test file (the real one is only ever read)
 	var cf := ConfigFile.new()
-	cf.load(RELIC_FILE)
+	cf.load(omen_file)
 	cf.set_value("relics", id, true)
-	cf.save(RELIC_FILE)
+	cf.save(omen_file)
 	return true
 
 
@@ -2011,7 +2714,7 @@ func _voice_tick(delta: float) -> void:
 		if float(bytes.size()) > _voice_bucket:
 			_voice_dropped += 1
 			if _voice_dropped % 50 == 1:
-				print("[CoopSync] voice over the 64 kbps cap, %d chunks dropped" % _voice_dropped)
+				print("[CoopSync] voice over the %d kbps cap, %d chunks dropped" % [int(VOICE_BYTES_PER_S * 8.0 / 1000.0), _voice_dropped])
 			return
 		_voice_bucket -= float(bytes.size())
 		_voice_tx_bytes += bytes.size()
@@ -2044,9 +2747,20 @@ func _on_voice(from: int, msg: Dictionary) -> void:
 	if not (d is PackedByteArray):
 		return
 	var raw: PackedByteArray = d
-	if raw.size() >= 4 and raw[0] == 90 and raw[1] == 86 and raw[2] == 84 and raw[3] == 49 \
-			and from != LOOP_ID and not bool(voice.get("_test")):
-		return                              # raw "ZVT1" test audio is only played in a developer test
+	# raw "ZVT1" test audio is only played while this PC runs the test: voice.decode() checks that
+	# itself (a Steam talker whose account id spells "ZVT1" must still be heard)
+	if raw.size() > 10 and raw[0] == 90 and raw[1] == 86 and raw[2] == 65 and raw[3] == 49:
+		# "ZVA1" (a picked microphone) is decoded in GDScript, not natively like Steam voice: each
+		# talker gets at most VOICE_IN_MAX_S seconds of it per second, so a buggy or hostile
+		# lobby member can not stall everyone's frame. The rate check keeps a Steam packet that
+		# only looks like "ZVA1" (rate 1, see voice.decode) out of the count. A claimed rate over
+		# the 16 kHz this build sends is charged as 16 kHz, so a high rate buys no extra decoding.
+		var r: int = raw.decode_u16(4)
+		if r >= 8000 and not _voice_in_budget(from, float((raw.size() - 10) * 2) / float(mini(r, 16000))):
+			_voice_in_dropped += 1
+			if _voice_in_dropped % 50 == 1:
+				print("[CoopSync] voice in: a talker sent more than %.1f s of audio per second, %d chunks dropped" % [VOICE_IN_MAX_S, _voice_in_dropped])
+			return
 	var pcm: PackedFloat32Array = voice.decode(d)
 	if pcm.is_empty():
 		return
@@ -2059,6 +2773,23 @@ func _on_voice(from: int, msg: Dictionary) -> void:
 		rp.voice_push(pcm)                  # positional, echoing with the cave (voice_emitter.gd)
 	else:
 		_flat_voice_push(from, pcm)
+
+
+func _voice_in_budget(from: int, secs: float) -> bool:
+	# true = this much "ZVA1" audio from `from` may be decoded now (and it is counted). The window
+	# is shared and cleared every second, so ids that come and go never pile up. The total for
+	# everyone together is capped as well, because "from" is whatever the packet says.
+	var now := Time.get_ticks_msec()
+	if now - _voice_in_ms >= 1000:
+		_voice_in_ms = now
+		_voice_in_s.clear()
+	var used: float = float(_voice_in_s.get(from, 0.0))
+	var total: float = float(_voice_in_s.get(0, 0.0))
+	if used + secs > VOICE_IN_MAX_S or total + secs > VOICE_IN_MAX_S * float(MAX_MEMBERS - 1):
+		return false
+	_voice_in_s[from] = used + secs
+	_voice_in_s[0] = total + secs
+	return true
 
 
 func _flat_voice_push(from: int, pcm: PackedFloat32Array) -> void:
@@ -2169,3 +2900,446 @@ func get_roster() -> String:
 	for id in _peer_names.keys():
 		names.append(str(_peer_names[id]) + (" (host)" if id == _host_steam_id else ""))
 	return ", ".join(names)
+
+
+# ---------------------------------------------------------------- guest simulation (guestsim.flag, developer only)
+# The loopback never echoes "mapev", "maps" or "mapsync", so no host test runs a guest-side path.
+# "record" (with loopback.flag and one feature flag): every "maps" / "mapev" the loopback drops is
+# kept with its time since map_loaded, plus where I stand every 0.5 s, and written to
+# user://zonda_guestsim.rec every 10 s and on scene exit. "play" (solo, autostart, no feature flag):
+# map_is_authority() is false all launch, the recording is played back into the map as a guest
+# receives it, and every feature module reports what it saw live (its guestsim_report()). Then the
+# late-join pass: a real late joiner has a FRESH map instance (its once-gate and its modules hold
+# nothing yet), so this PC drops its map state, reloads the map through SceneLoader, stands where
+# the host stood last, and the recording's final state lands through _on_mapsync exactly as that
+# joiner's mapsync does. 3 s later the modules report again: the "late join ..." lines come from this
+# fresh map, every other line from the live pass. The run ends with "[GUESTSIM] test done P/N PASS".
+#
+# v5.0 acceptance fix: a recording is ONE map instance of ONE test. It closes (written, no more
+# entries) when the recorded map is left (a death reload or a reload_current_scene makes a new
+# instance), and 3 s after the recorded module calls guestsim_test_done("<TAG>") at its own
+# "test done" line. Before, the recording ran on until the harness killed the game (5 minutes of
+# idle streams, then a death reload's second map instance), and playing that back in real time
+# never reached the report within the play run's time limit ("playback started", then nothing).
+# Playback is also capped (guestsim_play_cap_s, 150 s): past it the remaining reliable events land at
+# once, in order, the remaining stream packets collapse to the newest per key, and the host's last
+# place is taken. No cap while the no-clip network knobs are set (noclip_gs_*: the noclip probe's guest
+# run replays its whole host run) or when a test sets guestsim_play_cap_s <= 0.
+
+const GUESTSIM_REC := "user://zonda_guestsim.rec"
+const GUESTSIM_CAP := 60000        # about 20 minutes of an Underdark test (the noclip host run is 14)
+const GS_DONE := 8
+const GS_END_GRACE_MS := 3000      # record: a test's trailing packets (a dive in flight) are kept this long
+const GS_WRITE_BIG := 3000         # record: past this many entries the file is rewritten every 30 s, not 10 s
+const GS_PROGRESS_MS := 30000      # play: a progress line this often
+var _gs_entries: Array = []
+var _gs_scene := ""
+var _gs_loaded_ms := -1           # record: the first map_loaded of the recorded scene (offsets count from it)
+var _gs_me_t := 0.0
+var _gs_write_t := 10.0
+var _gs_closed := false           # record: the recording is complete (no more entries)
+var _gs_end_at_ms := -1           # record: guestsim_test_done() closes it then
+var _gs_end_tag := ""
+var guestsim_play_cap_s := 150.0  # play: the longest real-time playback (<= 0: none; none while noclip_gs_* are set)
+var _gs_play: Dictionary = {}     # play: the recording
+var _gs_idx := 0
+# play: 0 idle, 1 waiting 3 s, 2 playing, 3 late-join pass due (live report, then the reload),
+# 4 waiting for the fresh map, 5 park due, 6 mapsync due, 7 report due, GS_DONE done
+var _gs_phase := 0
+var _gs_at_ms := 0
+var _gs_t0 := 0
+var _gs_prog_ms := 0
+var _gs_live_rep: Array = []      # [feature, line] from the live pass
+var _gs_late_rep: Array = []      # [feature, line] from the fresh map after the late-join mapsync
+var _gs_old_root := 0             # the map instance the recording was played into
+var _gs_fresh_ms := -1            # map_loaded of the fresh map (the late-join pass)
+var _gs_deadline := 0             # the fresh map must be up by then
+
+
+func guestsim_test_done(tag: String = "") -> void:
+	# A feature test that is being recorded calls this right after printing its "[<TAG>] test done"
+	# line: the recording closes GS_END_GRACE_MS later, so the playback holds that test and nothing
+	# after it. Any other launch: nothing happens.
+	if guestsim != "record" or _gs_closed or _gs_loaded_ms < 0 or _gs_end_at_ms >= 0:
+		return
+	_gs_end_at_ms = Time.get_ticks_msec() + GS_END_GRACE_MS
+	_gs_end_tag = tag
+	_guestsim_write()                     # at once too: a harness may stop the game at the done line
+	# never the words "test done" here: acceptance.sh takes a log's LAST such line as the test's result
+	print("[GUESTSIM] %s test finished: the recording closes in %d s" % [tag if tag != "" else "the recorded", GS_END_GRACE_MS / 1000])
+
+
+func _guestsim_close(why: String) -> void:
+	if _gs_closed or _gs_loaded_ms < 0:
+		return
+	var span := _guestsim_span(_gs_entries)
+	_guestsim_write()
+	_gs_closed = true
+	print("[GUESTSIM] recording closed (%s): %d entries over %d s" % [why, _gs_entries.size(), span / 1000])
+
+
+func _guestsim_on_map_loaded(scene: String) -> void:
+	if guestsim == "record":
+		if _gs_scene != scene and not _gs_closed:
+			_gs_scene = scene
+			_gs_entries.clear()
+			_gs_loaded_ms = Time.get_ticks_msec()
+			print("[GUESTSIM] recording %s" % scene)
+	elif guestsim == "play" and _gs_phase == 4:
+		if scene == _gs_scene:
+			_gs_fresh_ms = Time.get_ticks_msec()     # the late-join pass: the fresh map is up
+	elif guestsim == "play" and _gs_phase == 0:
+		var bytes := FileAccess.get_file_as_bytes(GUESTSIM_REC)
+		var d = bytes_to_var(bytes) if bytes.size() > 0 else null
+		if not (d is Dictionary) or not ((d as Dictionary).get("entries") is Array):
+			_gs_phase = GS_DONE
+			print("[GUESTSIM] no recording at %s" % GUESTSIM_REC)
+			print("[GUESTSIM] test done 0/1 FAIL: no recording")
+			return
+		if str((d as Dictionary).get("scene", "")) != scene:
+			_gs_phase = GS_DONE
+			print("[GUESTSIM] the recording is of %s, not %s" % [str((d as Dictionary).get("scene", "")), scene])
+			print("[GUESTSIM] test done 0/1 FAIL: wrong map")
+			return
+		_gs_play = d
+		_gs_scene = scene
+		_gs_idx = 0
+		_gs_phase = 1
+		_gs_at_ms = Time.get_ticks_msec() + 3000
+		print("[GUESTSIM] playing %d entries in 3 s (checkpoint %d, %d final events)" % [
+			(_gs_play["entries"] as Array).size(), int(_gs_play.get("cp", -1)), (_gs_play.get("final", {}) as Dictionary).size()])
+
+
+func _guestsim_record(t: String, msg: Dictionary) -> void:
+	if _gs_closed or _gs_loaded_ms < 0 or _gs_entries.size() >= GUESTSIM_CAP or str(msg.get("s", "")) != _gs_scene:
+		return
+	var ms := Time.get_ticks_msec() - _gs_loaded_ms
+	if t == "maps":
+		_gs_entries.append([ms, "maps", msg.get("d", {})])
+	else:
+		_gs_entries.append([ms, "mapev", str(msg.get("k", "")), msg.get("d", {}), bool(msg.get("p", true))])
+
+
+func _guestsim_write() -> void:
+	if _gs_closed:
+		return                            # complete: a later map state must never overwrite it
+	var fin: Dictionary = {}
+	var cp := -1
+	if str(map_state.get("scene", "")) == _gs_scene:
+		fin = (map_state["events"] as Dictionary).duplicate(true)
+		cp = int(map_state["checkpoint"])
+	var f := FileAccess.open(GUESTSIM_REC, FileAccess.WRITE)
+	if f == null:
+		print("[GUESTSIM] could not write %s" % GUESTSIM_REC)
+		return
+	f.store_buffer(var_to_bytes({"scene": _gs_scene, "entries": _gs_entries, "final": fin, "cp": cp}))
+	f.close()
+	print("[GUESTSIM] recorded %d entries" % _gs_entries.size())
+
+
+func _guestsim_span(entries: Array) -> int:
+	# the recording's length in ms (its last entry's offset)
+	if entries.is_empty() or not (entries[entries.size() - 1] is Array):
+		return 0
+	return int(entries[entries.size() - 1][0])
+
+
+func _guestsim_cap_ms() -> int:
+	# the real-time playback cap in ms (0 = none): none for the noclip guest run (its knobs are set)
+	if _guestsim_knobs_on() or guestsim_play_cap_s <= 0.0:
+		return 0
+	return int(guestsim_play_cap_s * 1000.0)
+
+
+func _guestsim_knobs_on() -> bool:
+	return noclip_gs_loss > 0.0 or noclip_gs_jitter_ms > 0 or noclip_gs_late > 0.0
+
+
+func _guestsim_queue_maps(e: Array) -> void:
+	# B8: a "maps" entry through a simulated unreliable channel (its recorded send time rides along)
+	if noclip_gs_loss > 0.0 and randf() < noclip_gs_loss:
+		return
+	var wait := 0
+	if noclip_gs_jitter_ms > 0:
+		wait += randi_range(0, noclip_gs_jitter_ms)
+	if noclip_gs_late > 0.0 and randf() < noclip_gs_late:
+		wait += randi_range(80, 150)
+	_gs_pend_seq += 1
+	_gs_pend.append([Time.get_ticks_msec() + wait, _gs_pend_seq, e])
+
+
+func _guestsim_deliver_pending(root: Node, all: bool) -> void:
+	if _gs_pend.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	var due: Array = []
+	var keep: Array = []
+	for q in _gs_pend:
+		if all or int(q[0]) <= now:
+			due.append(q)
+		else:
+			keep.append(q)
+	_gs_pend = keep
+	due.sort_custom(func(a, b): return int(a[0]) < int(b[0]) or (int(a[0]) == int(b[0]) and int(a[1]) < int(b[1])))
+	for q in due:
+		var e: Array = q[2]
+		if root.has_method("coop_map_stream") and e[2] is Dictionary:
+			root.coop_map_stream(e[2], _gs_t0 + int(e[0]))    # the recorded send time: a late one is older
+
+
+func _guestsim_fast_forward(root: Node, entries: Array) -> int:
+	# past the playback cap: every remaining reliable event lands now, in order; the remaining stream
+	# packets collapse to the newest per top-level key, and "cx" per creature stream inside it (v5.0:
+	# each module stream goes out in its own {"cx": {id: v}} message, so a per-key collapse would keep
+	# only the last module's packet); the host's last place is taken
+	var last_maps: Dictionary = {}
+	var last_me = null
+	var n := 0
+	while _gs_idx < entries.size():
+		var e = entries[_gs_idx]
+		_gs_idx += 1
+		n += 1
+		if not (e is Array) or (e as Array).size() < 3:
+			continue
+		var kind := str(e[1])
+		if kind == "mapev":
+			_guestsim_play_one(root, e)
+		elif kind == "maps" and e[2] is Dictionary:
+			var md: Dictionary = e[2]
+			for k in md.keys():
+				var v = md[k]
+				if str(k) == "cx" and v is Dictionary:
+					for k2 in (v as Dictionary).keys():
+						last_maps["cx." + str(k2)] = [int(e[0]), {k: {k2: (v as Dictionary)[k2]}}]
+				else:
+					last_maps[k] = [int(e[0]), {k: v}]
+		elif kind == "me":
+			last_me = e
+	if root.has_method("coop_map_stream"):
+		for k in last_maps.keys():
+			var ts: int = (_gs_t0 + int(last_maps[k][0])) if _guestsim_knobs_on() else Time.get_ticks_msec()
+			root.coop_map_stream(last_maps[k][1], ts)
+	if last_me != null:
+		_guestsim_play_one(root, last_me)
+	return n
+
+
+func _guestsim_tick(delta: float) -> void:
+	if guestsim == "record":
+		if _gs_closed or _gs_loaded_ms < 0 or _scene_now() != _gs_scene:
+			return
+		if _gs_end_at_ms >= 0 and Time.get_ticks_msec() >= _gs_end_at_ms:
+			_guestsim_close("after the %s test" % (_gs_end_tag if _gs_end_tag != "" else "recorded"))
+			return
+		_gs_me_t -= delta
+		if _gs_me_t <= 0.0:
+			_gs_me_t = 0.5
+			var c = Game.climber
+			if is_instance_valid(c) and c.is_inside_tree() and _gs_entries.size() < GUESTSIM_CAP:
+				var p: Vector3 = c.global_position
+				_gs_entries.append([Time.get_ticks_msec() - _gs_loaded_ms, "me", [p.x, p.y, p.z]])
+		_gs_write_t -= delta
+		if _gs_write_t <= 0.0:
+			# a big recording is rewritten less often (each write serializes all of it: a frame hitch)
+			_gs_write_t = 10.0 if _gs_entries.size() < GS_WRITE_BIG else 30.0
+			_guestsim_write()
+		return
+	if guestsim != "play" or _gs_phase == 0 or _gs_phase == GS_DONE:
+		return
+	var now := Time.get_ticks_msec()
+	if _gs_phase == 4 and now >= _gs_deadline:
+		_gs_phase = GS_DONE
+		print("[GUESTSIM] late-join pass: the map did not reload within 60 s")
+		_gs_late_rep = [["", "FAIL late join: the map did not reload"]]
+		_guestsim_report()
+		return
+	var root := get_tree().current_scene
+	if root == null or root.scene_file_path != _gs_scene or SceneLoader.is_transitioning():
+		return
+	match _gs_phase:
+		1:
+			if now >= _gs_at_ms:
+				_gs_phase = 2
+				_gs_t0 = now
+				_gs_prog_ms = now + GS_PROGRESS_MS
+				_gs_pend.clear()
+				var c = Game.climber
+				if is_instance_valid(c):
+					c.prevent_player_death = true
+				var span := _guestsim_span(_gs_play["entries"])
+				var extra := ""
+				var cap := _guestsim_cap_ms()
+				if cap > 0 and span > cap:
+					extra += ", real time capped at %d s" % (cap / 1000)
+				if _guestsim_knobs_on():
+					extra += ", loss %.2f jitter %d ms late %.2f" % [noclip_gs_loss, noclip_gs_jitter_ms, noclip_gs_late]
+				print("[GUESTSIM] playback started: %d s recorded%s" % [span / 1000, extra])
+		2:
+			var entries: Array = _gs_play["entries"]
+			var el := now - _gs_t0
+			var knobs := _guestsim_knobs_on()
+			var cap := _guestsim_cap_ms()
+			if cap > 0 and el >= cap and _gs_idx < entries.size():
+				_guestsim_deliver_pending(root, true)
+				var ff := _guestsim_fast_forward(root, entries)
+				print("[GUESTSIM] playback cap %d s reached: the last %d entries fast-forwarded" % [cap / 1000, ff])
+			while _gs_idx < entries.size() and int(entries[_gs_idx][0]) <= el:
+				var e: Array = entries[_gs_idx]
+				if knobs and str(e[1]) == "maps":
+					_guestsim_queue_maps(e)
+				else:
+					_guestsim_play_one(root, e)
+				_gs_idx += 1
+			if knobs:
+				_guestsim_deliver_pending(root, false)
+			if now >= _gs_prog_ms and _gs_idx < entries.size():
+				_gs_prog_ms = now + GS_PROGRESS_MS
+				print("[GUESTSIM] playing: %d of %d s, %d/%d entries" % [el / 1000, _guestsim_span(entries) / 1000, _gs_idx, entries.size()])
+			if _gs_idx >= entries.size():
+				_guestsim_deliver_pending(root, true)
+				_gs_phase = 3
+				_gs_at_ms = now + 3000
+				print("[GUESTSIM] playback done: %d entries" % entries.size())
+		3:
+			if now >= _gs_at_ms:
+				# the late-join pass (2.11 step 2). This map applied every event live, and its once-gate
+				# (and each module's own state) would drop or short-cut a second apply, so the pass runs
+				# on a FRESH map instance, as a real late joiner's does: the live report is kept, this
+				# PC's map state is dropped, and the map reloads.
+				_gs_live_rep = _guestsim_collect(root)
+				_gs_old_root = root.get_instance_id()
+				_gs_fresh_ms = -1
+				_gs_deadline = now + 60000
+				_gs_phase = 4
+				map_state = {"scene": "", "checkpoint": -1, "events": {}}
+				print("[GUESTSIM] late-join pass: %d live report lines kept, reloading the map fresh" % _gs_live_rep.size())
+				SceneLoader.load_scene(func(): Game.load_level_based_on_difficulty(false))
+		4:
+			if _gs_fresh_ms >= 0 and root.get_instance_id() != _gs_old_root:
+				_gs_phase = 5
+				_gs_at_ms = now + 1500
+		5:
+			if now >= _gs_at_ms:
+				# a late joiner spawns beside the host: stand where the host stood last
+				var c = Game.climber
+				if is_instance_valid(c):
+					c.prevent_player_death = true
+				var last := _guestsim_last_me()
+				if last != Vector3.INF:
+					_guestsim_play_one(root, [0, "me", [last.x, last.y, last.z]])
+				_gs_phase = 6
+				_gs_at_ms = now + 1500
+		6:
+			if now >= _gs_at_ms:
+				# the recording's final state, exactly as a late joiner's mapsync lands
+				var f0 = _gs_play.get("final", {})
+				var fin: Dictionary = (f0 as Dictionary).duplicate(true) if f0 is Dictionary else {}
+				_on_mapsync(_gs_scene, int(_gs_play.get("cp", -1)), fin)
+				print("[GUESTSIM] late-join pass: a fresh map got the mapsync of %d events" % fin.size())
+				_gs_phase = 7
+				_gs_at_ms = now + 3000
+		7:
+			if now >= _gs_at_ms:
+				_gs_phase = GS_DONE
+				_gs_late_rep = _guestsim_collect(root)
+				_guestsim_report()
+
+
+func _guestsim_play_one(root: Node, e: Array) -> void:
+	var kind := str(e[1])
+	if kind == "maps":
+		if root.has_method("coop_map_stream") and e[2] is Dictionary:
+			root.coop_map_stream(e[2], Time.get_ticks_msec())
+	elif kind == "mapev":
+		var d = e[3]
+		var pers := bool(e[4])
+		if not pers and d is Dictionary and not (d as Dictionary).has("_from"):
+			d["_from"] = my_sid()           # sent by the host, which was this PC when it was recorded
+		_apply_map_event(_gs_scene, str(e[2]), d, pers, false)
+	elif kind == "me":
+		var p: Array = e[2]
+		var pos := Vector3(float(p[0]), float(p[1]), float(p[2]))
+		if root.has_method("debug_park"):
+			root.call("debug_park", pos)
+		elif is_instance_valid(Game.climber):
+			Game.climber.teleport_to_location(pos)
+
+
+func _guestsim_last_me() -> Vector3:
+	# where the host stood last in the recording (INF when it has no "me" entry)
+	var entries = _gs_play.get("entries", [])
+	if not (entries is Array):
+		return Vector3.INF
+	for i in range((entries as Array).size() - 1, -1, -1):
+		var e = entries[i]
+		if e is Array and (e as Array).size() >= 3 and str(e[1]) == "me" and e[2] is Array and (e[2] as Array).size() >= 3:
+			return Vector3(float(e[2][0]), float(e[2][1]), float(e[2][2]))
+	return Vector3.INF
+
+
+func _guestsim_collect(root: Node) -> Array:
+	# every feature module's guestsim_report() lines as [feature, line], in load order, not printed:
+	# "PASS ...", "FAIL ..." or "SKIP ..." (not counted)
+	var out: Array = []
+	var feats = root.get("_features")
+	if feats is Dictionary:
+		for key in (feats as Dictionary).keys():
+			var f = feats[key]
+			if is_instance_valid(f) and f.has_method("guestsim_report"):
+				var rep = f.call("guestsim_report")
+				if rep is Array:
+					for ln in rep:
+						out.append([str(key), str(ln)])
+	elif root.has_method("coop_guestsim_done"):
+		var r = root.call("coop_guestsim_done")     # a map without _features prints its own lines
+		if r is Array:
+			for ln in r:
+				out.append(["", str(ln)])
+	return out
+
+
+func _guestsim_is_late_line(line: String) -> bool:
+	# "PASS late join: ...", "SKIP late join (...)": the lines about the late joiner's fresh map
+	var s := line.strip_edges()
+	for w in ["PASS", "FAIL", "SKIP"]:
+		var ws := str(w)
+		if s.begins_with(ws):
+			s = s.substr(ws.length()).strip_edges()
+			break
+	return s.begins_with("late join")
+
+
+func _guestsim_report() -> void:
+	# the live pass's lines, except its "late join" ones, plus the fresh map's "late join" lines
+	var merged: Array = []
+	for e in _gs_live_rep:
+		if not _guestsim_is_late_line(str(e[1])):
+			merged.append(e)
+	for e in _gs_late_rep:
+		if _guestsim_is_late_line(str(e[1])):
+			merged.append(e)
+	var lines: Array = []
+	for e in merged:
+		var feat := str(e[0])
+		print("[GUESTSIM] %s%s" % ["" if feat.is_empty() else feat + " ", str(e[1])])
+		lines.append(str(e[1]))
+	var p := 0
+	var n := 0
+	var fails: Array = []
+	for ln in lines:
+		var s := str(ln).strip_edges()
+		if s.begins_with("PASS"):
+			p += 1
+			n += 1
+		elif s.begins_with("FAIL"):
+			n += 1
+			fails.append(s.substr(5))
+	var c = Game.climber
+	if is_instance_valid(c):
+		c.prevent_player_death = false
+	if fails.is_empty() and n > 0:
+		print("[GUESTSIM] test done %d/%d PASS" % [p, n])
+	elif n == 0:
+		print("[GUESTSIM] test done 0/0 FAIL: no report lines")
+	else:
+		print("[GUESTSIM] test done %d/%d FAIL: %s" % [p, n, ", ".join(fails)])

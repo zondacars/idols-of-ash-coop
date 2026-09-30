@@ -13,6 +13,13 @@ by CC0 but is given as a courtesy.
 Entries in manifest.json that start with res://sfx/ are the game's own sounds
 (Idols of Ash). They are referenced at runtime only and are NOT copied here.
 
+Added in ZondaCoopSync v5.0 (2026-09-24): the omen, idol, Shade, hearth, harrier and stone oneshots
+(files named <kind>_<freesoundid>_<n>.ogg). Each licence was checked live on the sound's own page
+on 2026-09-24 (the page links to publicdomain/zero/1.0). Same processing: mono, 44.1 kHz, filtered,
+-18 LUFS with a -1 dBFS peak ceiling (short transients sit lower; their manifest db adds up to +6),
+Ogg Vorbis. The shade_shriek cuts are sped up over their 1.1 s (a rising pitch); stone_groan and
+one stone_boom are pitched down. Source audio: the Freesound HQ previews.
+
 bed_burrows_breath.ogg
     source: "DSGNDron_Underground Eerie Breathing Ambience 8_EM" by newlocknew (Freesound #789913)
     url: https://freesound.org/people/newlocknew/sounds/789913/
@@ -153,6 +160,78 @@ drip_792932.ogg
     source: "Slow Single Water Drop Splash" by qubodup (Freesound #792932)
     url: https://freesound.org/people/qubodup/sounds/792932/
     licence: CC0 1.0 (Creative Commons 0)
+fire_hiss_579098_1.ogg
+    source: "Drops on a fire.WAV" by jonsept (Freesound #579098)
+    url: https://freesound.org/people/jonsept/sounds/579098/
+    licence: CC0 1.0 (Creative Commons 0)
+fire_hiss_579098_2.ogg
+    source: "Drops on a fire.WAV" by jonsept (Freesound #579098)
+    url: https://freesound.org/people/jonsept/sounds/579098/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_dive_392404_1.ogg
+    source: "RavenWhoosh1a.wav" by AlanCat (Freesound #392404)
+    url: https://freesound.org/people/AlanCat/sounds/392404/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_dive_392404_2.ogg
+    source: "RavenWhoosh1a.wav" by AlanCat (Freesound #392404)
+    url: https://freesound.org/people/AlanCat/sounds/392404/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_shriek_436199_1.ogg
+    source: "Creature Screeching" by Dmgrinder (Freesound #436199)
+    url: https://freesound.org/people/Dmgrinder/sounds/436199/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_shriek_436199_2.ogg
+    source: "Creature Screeching" by Dmgrinder (Freesound #436199)
+    url: https://freesound.org/people/Dmgrinder/sounds/436199/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_shriek_518297_1.ogg
+    source: "High Quality Monster Screech" by NaturesTemper (Freesound #518297)
+    url: https://freesound.org/people/NaturesTemper/sounds/518297/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_shriek_518297_2.ogg
+    source: "High Quality Monster Screech" by NaturesTemper (Freesound #518297)
+    url: https://freesound.org/people/NaturesTemper/sounds/518297/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_shriek_518297_3.ogg
+    source: "High Quality Monster Screech" by NaturesTemper (Freesound #518297)
+    url: https://freesound.org/people/NaturesTemper/sounds/518297/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_572216_1.ogg
+    source: "Giant Wings Flapping.mp3" by shatterstars (Freesound #572216)
+    url: https://freesound.org/people/shatterstars/sounds/572216/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_572216_2.ogg
+    source: "Giant Wings Flapping.mp3" by shatterstars (Freesound #572216)
+    url: https://freesound.org/people/shatterstars/sounds/572216/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_572216_3.ogg
+    source: "Giant Wings Flapping.mp3" by shatterstars (Freesound #572216)
+    url: https://freesound.org/people/shatterstars/sounds/572216/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_670509_1.ogg
+    source: "Huge wing flaps for bird, dragon, dinosaur." by 2create (Freesound #670509)
+    url: https://freesound.org/people/2create/sounds/670509/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_670509_2.ogg
+    source: "Huge wing flaps for bird, dragon, dinosaur." by 2create (Freesound #670509)
+    url: https://freesound.org/people/2create/sounds/670509/
+    licence: CC0 1.0 (Creative Commons 0)
+harrier_wing_670509_3.ogg
+    source: "Huge wing flaps for bird, dragon, dinosaur." by 2create (Freesound #670509)
+    url: https://freesound.org/people/2create/sounds/670509/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_burn_123710_1.ogg
+    source: "burner-sizzle-ice.AIF" by alienistcog (Freesound #123710)
+    url: https://freesound.org/people/alienistcog/sounds/123710/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_burn_137262_1.ogg
+    source: "Water sizzle 1.wav" by xenognosis (Freesound #137262)
+    url: https://freesound.org/people/xenognosis/sounds/137262/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_burn_160350_1.ogg
+    source: "Hiss.flac" by qubodup (Freesound #160350)
+    url: https://freesound.org/people/qubodup/sounds/160350/
+    licence: CC0 1.0 (Creative Commons 0)
 oil_pickup_137028.ogg
     source: "Drain glug.wav" by majorasflask (Freesound #137028)
     url: https://freesound.org/people/majorasflask/sounds/137028/
@@ -168,6 +247,44 @@ oil_pickup_667272.ogg
 oil_pickup_667273.ogg
     source: "Bottle Slosh 2" by alegemaate (Freesound #667273)
     url: https://freesound.org/people/alegemaate/sounds/667273/
+    licence: CC0 1.0 (Creative Commons 0)
+omen_light_248236_1.ogg
+    source: "Match - Strike and Light 02.wav" by JarredGibb (Freesound #248236)
+    url: https://freesound.org/people/JarredGibb/sounds/248236/
+    licence: CC0 1.0 (Creative Commons 0)
+omen_light_370362_1.ogg
+    source: "Match Lighting Candle" by devilqube (Freesound #370362)
+    url: https://freesound.org/people/devilqube/sounds/370362/
+    licence: CC0 1.0 (Creative Commons 0)
+omen_light_398448_1.ogg
+    source: "Match Ignite (No Strike)" by brachern (Freesound #398448)
+    url: https://freesound.org/people/brachern/sounds/398448/
+    licence: CC0 1.0 (Creative Commons 0)
+omen_snuff_242867_1.ogg
+    source: "blowing out candle.wav" by Reitanna (Freesound #242867)
+    url: https://freesound.org/people/Reitanna/sounds/242867/
+    licence: CC0 1.0 (Creative Commons 0)
+omen_snuff_499020_1.ogg
+    source: "04_Extinguishing of candle.wav" by 16FThumaF (Freesound #499020)
+    url: https://freesound.org/people/16FThumaF/sounds/499020/
+    licence: CC0 1.0 (Creative Commons 0)
+pale_hiss_445983_1.ogg
+    source: "Zombie gargles" by Breviceps (Freesound #445983)
+    url: https://freesound.org/people/Breviceps/sounds/445983/
+    licence: CC0 1.0 (Creative Commons 0)
+pale_hiss_545484_1.ogg
+    source: "Alien Xenomorph Hissing and Growling (with and without FX)" by MSEpitaph (Freesound #545484)
+    url: https://freesound.org/people/MSEpitaph/sounds/545484/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: the dry (no-FX) second half of the file, 45-87 s
+pale_hiss_545484_2.ogg
+    source: "Alien Xenomorph Hissing and Growling (with and without FX)" by MSEpitaph (Freesound #545484)
+    url: https://freesound.org/people/MSEpitaph/sounds/545484/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: the dry (no-FX) second half of the file, 45-87 s
+pale_hiss_673425_1.ogg
+    source: "Monster Hiss" by courtneyeck (Freesound #673425)
+    url: https://freesound.org/people/courtneyeck/sounds/673425/
     licence: CC0 1.0 (Creative Commons 0)
 rift_wind_howl.ogg
     source: "AMBUndr_Subterranean Howling Wind Loop_KOLBYR_FREE SOUNDS" by KolbyRFX (Freesound #852822)
@@ -197,6 +314,76 @@ rockfall_567249.ogg
     source: "Bricks/Stones/Rocks/Gravel Falling" by iwanPlays (Freesound #567249)
     url: https://freesound.org/people/iwanPlays/sounds/567249/
     licence: CC0 1.0 (Creative Commons 0)
+shade_crack_621977_1.ogg
+    source: "Multiple Bones Cracking" by rydra_wong (Freesound #621977)
+    url: https://freesound.org/people/rydra_wong/sounds/621977/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_crack_621977_2.ogg
+    source: "Multiple Bones Cracking" by rydra_wong (Freesound #621977)
+    url: https://freesound.org/people/rydra_wong/sounds/621977/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_crack_621977_3.ogg
+    source: "Multiple Bones Cracking" by rydra_wong (Freesound #621977)
+    url: https://freesound.org/people/rydra_wong/sounds/621977/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_crack_621977_4.ogg
+    source: "Multiple Bones Cracking" by rydra_wong (Freesound #621977)
+    url: https://freesound.org/people/rydra_wong/sounds/621977/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_gargle_445983_1.ogg
+    source: "Zombie gargles" by Breviceps (Freesound #445983)
+    url: https://freesound.org/people/Breviceps/sounds/445983/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_gargle_445983_2.ogg
+    source: "Zombie gargles" by Breviceps (Freesound #445983)
+    url: https://freesound.org/people/Breviceps/sounds/445983/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_hiss_545484_1.ogg
+    source: "Alien Xenomorph Hissing and Growling (with and without FX)" by MSEpitaph (Freesound #545484)
+    url: https://freesound.org/people/MSEpitaph/sounds/545484/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: the dry (no-FX) second half of the file, 45-87 s
+shade_hiss_545484_2.ogg
+    source: "Alien Xenomorph Hissing and Growling (with and without FX)" by MSEpitaph (Freesound #545484)
+    url: https://freesound.org/people/MSEpitaph/sounds/545484/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: the dry (no-FX) second half of the file, 45-87 s
+shade_hiss_673425_1.ogg
+    source: "Monster Hiss" by courtneyeck (Freesound #673425)
+    url: https://freesound.org/people/courtneyeck/sounds/673425/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_hiss_673425_2.ogg
+    source: "Monster Hiss" by courtneyeck (Freesound #673425)
+    url: https://freesound.org/people/courtneyeck/sounds/673425/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_hiss_673425_3.ogg
+    source: "Monster Hiss" by courtneyeck (Freesound #673425)
+    url: https://freesound.org/people/courtneyeck/sounds/673425/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_shriek_442564_1.ogg
+    source: "monster shriek.ogg" by Darsycho (Freesound #442564)
+    url: https://freesound.org/people/Darsycho/sounds/442564/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_shriek_442564_2.ogg
+    source: "monster shriek.ogg" by Darsycho (Freesound #442564)
+    url: https://freesound.org/people/Darsycho/sounds/442564/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_shriek_467695_1.ogg
+    source: "Gibbering Mouther Shriek" by LucasDuff (Freesound #467695)
+    url: https://freesound.org/people/LucasDuff/sounds/467695/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_whisper_193818_1.ogg
+    source: "Four_Voices_Whispering_6_wEcho.wav" by geoneo0 (Freesound #193818)
+    url: https://freesound.org/people/geoneo0/sounds/193818/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_whisper_832739_1.ogg
+    source: "LongWhisper" by EvaMusik (Freesound #832739)
+    url: https://freesound.org/people/EvaMusik/sounds/832739/
+    licence: CC0 1.0 (Creative Commons 0)
+shade_whisper_832739_2.ogg
+    source: "LongWhisper" by EvaMusik (Freesound #832739)
+    url: https://freesound.org/people/EvaMusik/sounds/832739/
+    licence: CC0 1.0 (Creative Commons 0)
 spider_click_3376211.ogg
     source: "Weird Clicking" by dotY21 (Freesound #337621)
     url: https://freesound.org/people/dotY21/sounds/337621/
@@ -216,4 +403,38 @@ spider_click_4677002.ogg
 spider_click_4677003.ogg
     source: "insectoid monster clicking" by LucasDuff (Freesound #467700)
     url: https://freesound.org/people/LucasDuff/sounds/467700/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_boom_149966_1.ogg
+    source: "Muffled Distant Explosion" by NenadSimic (Freesound #149966)
+    url: https://freesound.org/people/NenadSimic/sounds/149966/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_boom_517747_1.ogg
+    source: "Distant Explosion" by danlucaz (Freesound #517747)
+    url: https://freesound.org/people/danlucaz/sounds/517747/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_boom_524312_1.ogg
+    source: "Rock destroy" by Bertsz (Freesound #524312)
+    url: https://freesound.org/people/Bertsz/sounds/524312/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_crack_222521_1.ogg
+    source: "Cracking Earthquake (cracking soil, cracking stone)" by uagadugu (Freesound #222521)
+    url: https://freesound.org/people/uagadugu/sounds/222521/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: its own sources, Freesound #203281 and #82722, are CC0 too (checked 2026-09-24)
+stone_crack_222521_2.ogg
+    source: "Cracking Earthquake (cracking soil, cracking stone)" by uagadugu (Freesound #222521)
+    url: https://freesound.org/people/uagadugu/sounds/222521/
+    licence: CC0 1.0 (Creative Commons 0)
+    note: its own sources, Freesound #203281 and #82722, are CC0 too (checked 2026-09-24)
+stone_crack_524312_1.ogg
+    source: "Rock destroy" by Bertsz (Freesound #524312)
+    url: https://freesound.org/people/Bertsz/sounds/524312/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_groan_578491_1.ogg
+    source: "Heavy stone door opens 2" by PostProdDog (Freesound #578491)
+    url: https://freesound.org/people/PostProdDog/sounds/578491/
+    licence: CC0 1.0 (Creative Commons 0)
+stone_groan_844329_1.ogg
+    source: "Stone Slab Door Grinding - Heavy Rock Scrape (Mono)" by NahuelMartinez (Freesound #844329)
+    url: https://freesound.org/people/NahuelMartinez/sounds/844329/
     licence: CC0 1.0 (Creative Commons 0)

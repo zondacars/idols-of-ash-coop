@@ -5,6 +5,34 @@ extends Node3D
 # builds collision, places every prop, light, trap, puzzle and creature from layout.json,
 # and runs them. Anything that changes the world goes through CoopSync.map_event so all
 # players see the same thing, and re-applies after a death reload.
+#
+# v5.0 FEATURE MODULES. Each feature lives in its own maps/underdark/<file>.gd (FEATURES below),
+# loaded at runtime with load() so a missing or broken module is skipped, never a parse error here.
+# A module is a Node: the map calls module.setup(map) BEFORE add_child, then these optional
+# methods when the module has them: hud_line(), hud_idol(), on_idol_taken(data, replay),
+# on_finish(by, data), finish_suffix(), carrier_name(), end_rows(), on_session_ended(),
+# spawn_filter(p), loop_ghost(key, data), guestsim_report(), on_exit().
+# Registration (call from setup):
+#   register_events(prefixes, handler(key, data, replay), repeatable)
+#   register_stream(key, send() -> v or null, recv(v))      cx key, 10 Hz, one message per key
+#   register_top_stream(key, recv(v))                        a top-level map_stream key
+#   register_bites(prefix, src)     src: bite_origin(id), play_bite(id), optional bite_opts(id),
+#                                   signal bit(who, damage, id) is connected here
+#   register_threats(src)           src.threat_positions(): the heartbeat only
+#   creature_bit(who, damage, id)   deal a bite without a "bit" signal (authority only)
+# Public map API for modules: fire_nodes, add_fire_parts, set_fire_lit, free_fire_light,
+# clear_foundry_heat, refresh_foundry_heat, add_light, manage_light, ext_instance, add_box_body,
+# place_bedroll, register_flask, coop_oil_imported, soft_dot, dev_flag, debug_park, debug_shot,
+# set_light_mode, load_announced, hint_once, add_text, biome_at, enclosed, nearest_threat,
+# checkpoint_label, run_secs, idol_is_taken, is_finished, idol_prey, set_idol_mine, feature,
+# new_brood, make_egg_cluster, hunt_pin_groups and the omen knobs (cp_heal, fol_*, follower_no_lure).
+# Lighting (surfaces.gd): rock_normal(file, soft) (cached gfx/ normal maps, meta zonda_own),
+# sheen_spec(r, ratio, a_lin), built_ms, ext_mip_ms; ext material copies carry meta "zonda_rel"
+# (ext/<pack>/<file>.glb) and their textures zonda_lum / zonda_mean_b.
+# Creature no-clip, map side (spec 2026-09-25-creature-noclip.md 3.C, "NO-CLIP" section below):
+# is_solid_at(p, r), noclip_keep_solid(p), noclip_test_wake(id), noclip_test_leash(n),
+# noclip_test_follower(); the Stalker and the bat swarms join group "zonda_nc" (noclip_points()).
+# Parts (owner decision 7A): squeezes(), part_of(p), in_squeeze(p), part_band(k), follower_part().
 
 const DIR := "res://mods-unpacked/zonda-CoopSync/maps/underdark/"
 const PYRELIGHT := "res://Art/Pyrelight.tscn"
@@ -212,6 +240,56 @@ var _oil_log_t := 0.0
 var _oil_before := 0.0
 var _oil_target: Node3D = null
 var _oil_phase_t := 0.0
+# ---- v5.0: feature modules and the map API
+const FEATURES := [["light", "light.gd"], ["omen", "omen.gd"], ["idol", "idol_host.gd"],
+		["shades", "shades.gd"], ["hearth", "hearth.gd"], ["harriers", "harriers.gd"],
+		["noclip", "noclip_probe.gd"], ["sfxaudit", "sfx_audit.gd"], ["darkaudit", "dark_audit.gd"], ["shadeaudit", "shade_audit.gd"],
+		["surfaces", "surfaces.gd"]]   # wave 2 inserts ["setpieces", "setpieces.gd"] before surfaces
+# surfaces.gd stays LAST: it tunes how every material takes the lantern, after the others built theirs
+# non-persistent event prefixes that must never be once-gated (every repeat is a new event)
+const REPEATABLE_CORE := ["crumble_", "drop_", "bell_", "stalkbite_", "cbite_", "cent_"]
+# the map's own event kinds: a module may not register a prefix that overlaps one of these
+const BUILTIN_PREFIXES := ["cent_", "crumble_", "drop_", "kiln_", "frag_", "gate_", "dying_", "stalkbite_",
+		"cbite_", "husk_", "pfdrop_", "bell_", "barsink_"]
+const BUILTIN_KEYS := ["idol", "clock", "finish"]
+const BEDROLL := "ext/nature/bed_floor.glb"
+const BEDROLL_SCALE := 2.5                 # the Kenney kits here are placed at about 2.4x
+var _features: Dictionary = {}             # key -> module Node
+var _ev_routes: Array = []                 # [prefix, handler Callable, repeatable]
+var _rep_prefixes: Array = []              # registered repeatable prefixes
+var _streams: Array = []                   # [cx key, send Callable, recv Callable]
+var _top_streams: Array = []               # [top-level key, recv Callable]
+var _bite_srcs: Array = []                 # [id prefix, Object]
+var _threat_srcs: Array = []               # Objects with threat_positions()
+var _hud_sub: Label
+var _hud_sub_t := 0.0
+var _hints: Dictionary = {}                # hint_once keys shown in this map load
+var _load_announced := false
+var _lights_collected := false
+var _late_lights: Array = []               # manage_light() calls made before _collect_lights
+var _bedrolls: Array = []                  # [node, unsnapped position]: floor snap deferred (place_bedroll)
+var _bed_t := 0.0
+var _bite_argc := -1                       # Creatures.bite_local argument count (3 in v4.9.1, 4 with push)
+var guestsim_lines: Array = []             # the last coop_guestsim_done() lines
+var fire_nodes: Array = []                 # L["fires"]: {"pos", "s", "biome", "flame", "flicker", "light", "base", "lit"}
+var hunt_pin_groups: Dictionary = {}       # centipede group ids pinned to the idol holder
+# omen knobs (defaults = the v4.9.1 behaviour; the omen module changes them)
+var cp_heal := 60.0
+var fol_far := 240.0
+var fol_stall := 36.0
+var fol_stall_d := 55.0
+var fol_min := 70.0
+var fol_max := 150.0
+var fol_aim := 100.0
+var follower_no_lure := false
+# perf.flag (C17)
+var _perf_mode := ""
+var _perf_phase := 0
+var _perf_t := 0.0
+var _perf_samples: Array = []
+var _perf_proc: Array = []
+var _perf_mod: Array = []
+const PERF_SPOT := Vector3(277.2, -830.7, -33.8)
 
 
 func _ready() -> void:
@@ -231,6 +309,22 @@ func _ready() -> void:
 	_debug_bright = FileAccess.file_exists(DIR + "bright.flag")
 	_debug_spider = FileAccess.file_exists(DIR + "spider.flag")
 	_debug_oil = FileAccess.file_exists(DIR + "oil.flag")
+	var perf_txt = dev_flag("perf.flag")
+	if perf_txt != null:
+		_perf_mode = "off" if str(perf_txt).to_lower() == "off" else "on"
+	_parts_test = dev_flag("parts.flag") != null        # 7A dev test (one-shot, see _update_parts_test)
+	# TEST SAFETY (1A.2): every gameplay test runs on the test save folder and the test cosmetics
+	# file, so the player's real save and trophies are never touched. Idempotent; B1's CoopSync.
+	if _debug_tour or _debug_finale or _debug_reload or _debug_bright or _debug_spider or _debug_oil or _perf_mode != "" or _parts_test:
+		_use_test_files()
+	for c0 in L.get("centipedes", []):
+		# the Nest's hunters: pinned to the idol holder once the idol is taken (C5)
+		if not (c0 is Dictionary):
+			continue
+		var sp0: Array = c0.get("spawn", [])
+		if str(c0.get("on", "")) == "idol" or (not sp0.is_empty() and _biome_at(_v(sp0[0])) == 8):
+			hunt_pin_groups[str(c0.get("id", ""))] = true
+	hunt_pin_groups["follower_finale"] = true
 	# a death reload keeps the team's map state for this scene (and so does a team checkpoint):
 	# then the lantern keeps its oil level. Anything else is a new run with a full lantern.
 	# (read before map_request_sync below, which creates this scene's state on a fresh start)
@@ -276,6 +370,8 @@ func _ready() -> void:
 		gfx.connect("mode_changed", _on_gfx_mode)
 	_setup_environment()
 	_load_cave()
+	_nc_setup()                            # no-clip C1: the solidity grid, and the helper learns the map
+	_parts_setup()                         # 7A: the squeezes and the parts between them
 	_place_start()
 	_place_barriers()
 	_place_props()
@@ -322,12 +418,13 @@ func _ready() -> void:
 	_place_eggs()
 	_place_v49_creatures()
 	_place_oil()
+	if _perf_mode == "off":
+		print("[Underdark] perf.flag off: feature modules skipped")
+	else:
+		_load_features()
 	_haze = HeatHaze.new()
 	add_child(_haze)
-	for fr in L.get("fires", []):
-		var fp := _v(fr["pos"])
-		if _biome_at(fp) == 7:
-			_foundry_fires.append(fp)
+	refresh_foundry_heat()
 	_build_hud()
 	call_deferred("_announce_light")
 	_music = MusicDirector.new()
@@ -343,7 +440,10 @@ func _ready() -> void:
 	if not ms.is_empty() and not ms.has("relics0"):
 		ms["relics0"] = CoopSync.cosmetics        # for the end card: relics found during this run
 	call_deferred("_reapply_events")
-	print("[Underdark] built in %d ms: %d chunks, %d props, %d external models" % [Time.get_ticks_msec() - t0, _chunks.size(), L.get("props", []).size(), _ext_placed])
+	# after the replay: CoopSync decides here whether a saved run is offered (C12)
+	call_deferred("_announce_load")
+	built_ms = Time.get_ticks_msec() - t0
+	print("[Underdark] built in %d ms: %d chunks, %d props, %d external models (texture mipmaps %d ms)" % [built_ms, _chunks.size(), L.get("props", []).size(), _ext_placed, ext_mip_ms])
 
 
 func _exit_tree() -> void:
@@ -357,6 +457,21 @@ func _exit_tree() -> void:
 	if is_instance_valid(gfx) and gfx.has_signal("mode_changed") and gfx.is_connected("mode_changed", _on_gfx_mode):
 		gfx.disconnect("mode_changed", _on_gfx_mode)
 	CoopSync.idol_carrier = false
+	# v5.0 (C11): nothing a feature set on the autoload outlives the map. set() on a var CoopSync
+	# does not have yet is a no-op, so this is safe while B1's additions are missing.
+	if CoopSync.get("light_field") != null:
+		CoopSync.set("light_field", null)
+	var hp = CoopSync.get("hunt_pins")
+	if hp is Dictionary:
+		(hp as Dictionary).clear()
+	if CoopSync.get("idol_holder_sid") != null:
+		CoopSync.set("idol_holder_sid", "")
+	if CoopSync.get("idol_weight") != null:
+		CoopSync.set("idol_weight", 0)
+	if is_instance_valid(CoopSync.lantern) and "burn_mult" in CoopSync.lantern:
+		CoopSync.lantern.set("burn_mult", 1.0)
+	_nc_teardown()
+	_call_features("on_exit")
 	# the external-model templates and dim variants are never in the tree: free them by hand
 	for v in _ext_tmpl.values():
 		if v != null and is_instance_valid(v):
@@ -374,6 +489,102 @@ func _run_state() -> Dictionary:
 
 # ------------------------------------------------------------------ world
 
+# How the rock takes the lantern (v5.0, lighting design 2026-09-25 section 2A): soft bump maps made
+# from the game's own textures (gfx/, the same maps ULTRA HD uses on the game's stone) and a sheen set
+# as a RATIO (how much brighter the flame's highlight is than the lit rock around it), so a moving
+# flame rakes across ridges and the rock glints where it is wet, equally in LANTERN and NORMAL (F5).
+# Colours and the palette are untouched. The maps are SOFT in NORMAL PIXELS (halved and scaled back:
+# neighbouring texels ~7 deg apart instead of ~20) and the lobes wide (roughness >= 0.72), so the
+# highlight lights whole patches of rock at 640x360 instead of shattering into one-pixel specks.
+# per biome [roughness, sheen ratio S0, normal scale]: 0 MOUTH, 1 OSSUARY, 2 FUNGAL, 3 ROOTWORKS,
+# 4 DROWNED, 5 VILLAGE, 6 CRYSTAL, 7 FOUNDRY, 8 NEST, 9 BURROWS, then 10 bone (smooth, waxy) and
+# 11 bark (grooved, dead matte). metallic_specular is solved from S0 (sheen_spec) in
+# _apply_material_brightness, so it follows F5.
+const ROCK_SHEEN := [[0.84, 0.30, 0.6], [0.86, 0.20, 0.6], [0.75, 0.50, 0.6], [0.82, 0.30, 0.6],
+		[0.72, 0.60, 0.6], [0.82, 0.28, 0.6], [0.72, 0.55, 0.6], [0.88, 0.25, 0.6], [0.74, 0.50, 0.6],
+		[0.86, 0.22, 0.6], [0.72, 0.12, 0.35], [0.92, 0.10, 0.6]]
+# The lantern on the floor (owner request 2026-09-30, "the lantern must reflect off the floor"; troubleshot in game
+# the same day). The flame meets a floor at a shallow angle, and in LANTERN light two things ate that light: the
+# game's screen-space AO held DIRECT light at full strength (ssao_light_affect 1.0; ULTRA HD already caps it at 0.3,
+# gfx.gd ULTRA_SSAO_LIGHT_MAX), and the plain diffuse gives a floor lit at a shallow angle little light. So in
+# LANTERN light only, the rock floors use wrap diffuse (the light reaches a little past the shallow side) and NORMAL
+# PIXELS caps the AO's hold on direct light like ULTRA HD. No colour, texture, albedo or ambient change: unlit rock
+# stays exactly as dark, and NORMAL light (F5) keeps its look. Same camera spots before / after: lit floors +59% on
+# average in NORMAL PIXELS (x2.4 to x4.9 on the darkest ones, +3 to +24% on the rest), +36% in ULTRA HD; specks
+# down, clipping unchanged except one ice tip that was already near white.
+const LANTERN_SSAO_LIGHT_MAX := 0.3
+var _ssao_la_base := -1.0            # the game's own ssao_light_affect, recorded when the map's environment is made
+const ROCK_TEX_WALL := 0.125         # mean linear luminance of the shipped wall texture (Rock.png with its detail)
+const ROCK_TEX_FLOOR := 0.147        # and of the floor (Wall_04.png with its Shell detail)
+var _rock_nrm: Dictionary = {}       # "file|soft" -> Texture2D (or null)
+var built_ms := 0                    # how long _ready took (the surfaces dev test logs it)
+var ext_mip_ms := 0                  # of which: mipmapping the external models' textures (_ext_mips), from ext_mip_us
+var ext_mip_us := 0
+var _ext_tex: Dictionary = {}        # source texture instance id -> mipmapped copy
+var _ultra_rough: Dictionary = {}    # "source id|target" -> remapped ULTRA HD photo roughness
+
+
+func rock_normal(file: String, soft: bool) -> Texture2D:
+	# a gfx/ normal map as a runtime texture with renormalised mipmaps (cached). soft = the NORMAL
+	# PIXELS version: halved and scaled back (bilinear), same 256 px texels, neighbours ~7 deg apart,
+	# not ~20. Tagged "zonda_own" so look_ultra and gfx can tell the map's own maps from theirs.
+	var key := "%s|%s" % [file, soft]
+	if _rock_nrm.has(key):
+		return _rock_nrm[key]
+	var t: Texture2D = null
+	var bytes := FileAccess.get_file_as_bytes("res://mods-unpacked/zonda-CoopSync/gfx/" + file)
+	var img := Image.new()
+	if not bytes.is_empty() and img.load_png_from_buffer(bytes) == OK:
+		if img.get_format() != Image.FORMAT_RGB8:
+			img.convert(Image.FORMAT_RGB8)
+		if soft:
+			var w := img.get_width()
+			var h := img.get_height()
+			img.resize(maxi(1, w / 2), maxi(1, h / 2), Image.INTERPOLATE_BILINEAR)
+			img.resize(w, h, Image.INTERPOLATE_BILINEAR)
+		img.generate_mipmaps(true)
+		t = ImageTexture.create_from_image(img)
+		t.set_meta("zonda_own", true)
+	_rock_nrm[key] = t
+	return t
+
+
+static func sheen_spec(r: float, ratio: float, a_lin: float) -> float:
+	# the metallic_specular that makes the lantern's face-on highlight `ratio` times the lit diffuse
+	# around it (Godot's GGX with L = V: S0 = 0.25 x F0 / (r^4 x A), F0 = 0.16 x spec^2; design 1.2)
+	return clampf(sqrt(maxf(0.0, ratio * a_lin * pow(r, 4.0) / 0.04)), 0.0, 1.0)
+
+
+func _give_sheen(m: StandardMaterial3D, i: int, is_floor: bool) -> void:
+	# roughness and the SOFT normal map of biome i (walls Rock_n, floors Wall_04_n; bone Rock_n on
+	# both, bark Bark_01_n on both). metallic_specular comes from _apply_material_brightness.
+	var bi := clampi(i, 0, ROCK_SHEEN.size() - 1)
+	var sh: Array = ROCK_SHEEN[bi]
+	var file := "Wall_04_n.png" if is_floor else "Rock_n.png"
+	if bi == 10:
+		file = "Rock_n.png"
+	elif bi == 11:
+		file = "Bark_01_n.png"
+	var nrm := rock_normal(file, true)
+	m.roughness = float(sh[0])
+	m.roughness_texture = null
+	m.normal_enabled = nrm != null
+	m.normal_texture = nrm
+	m.normal_scale = float(sh[2])
+	m.set_meta("zonda_surf", "rock_own")      # the map owns it: surfaces.gd and gfx.gd leave it alone
+
+
+func _regive_rock() -> void:
+	# NORMAL PIXELS again after ULTRA HD: look_ultra restores the textures it recorded at setup, which
+	# do not include the map's own soft normals (its snapshot takes a runtime normal map for gfx's),
+	# so the rock gets its sheen back here. Biomes 0-9 only: bone and bark are never dressed.
+	for i in mini(10, _wall_mat.size()):
+		_give_sheen(_wall_mat[i], i, false)
+		if i < _floor_mat.size():
+			_give_sheen(_floor_mat[i], i, true)
+	_apply_material_brightness()
+
+
 func _build_materials() -> void:
 	var rock: StandardMaterial3D = load("res://Art/Textures/Rock_01.tres")
 	var wall4: StandardMaterial3D = load("res://Art/Textures/Wall_04.tres")
@@ -382,12 +593,14 @@ func _build_materials() -> void:
 		w.vertex_color_use_as_albedo = true
 		w.cull_mode = BaseMaterial3D.CULL_DISABLED
 		w.uv1_scale = Vector3(0.11, 0.11, 0.11)
+		_give_sheen(w, i, false)
 		_wall_mat.append(w)
 		var fl: StandardMaterial3D = wall4.duplicate()
 		fl.vertex_color_use_as_albedo = true
 		fl.cull_mode = BaseMaterial3D.CULL_DISABLED
 		fl.metallic = 0.0                       # the game's sand is half metal, which reads as black with no sky to reflect
 		fl.uv1_scale = Vector3(0.09, 0.09, 0.09)
+		_give_sheen(fl, i, true)
 		_floor_mat.append(fl)
 		var dm: StandardMaterial3D = w.duplicate()
 		dm.vertex_color_use_as_albedo = false
@@ -490,9 +703,68 @@ func _sync_ultra(force: bool = false) -> void:
 		return
 	_ultra_on = want
 	_look_ultra.apply(want)
-	if not want:
+	if want:
+		_remap_ultra_rough()
+	else:
+		_regive_rock()                 # the soft normals and sheen roughness look_ultra does not restore
 		_pix_mode = -1
 		_apply_pixel_filter()          # the photos' smooth filter goes; the setting's own choice returns
+	_apply_lantern_shading()
+
+
+func _remap_ultra_rough() -> void:
+	# ULTRA HD photo roughness, remapped around the biome's own roughness (design 2A): the raw photo
+	# maps reach 0.0 (a pinpoint lobe on every wet texel). r' = clamp(r_biome + 0.5 x (r_photo - mean),
+	# 0.5, 1.0), material roughness 1.0 x that map. Cached per source map and target.
+	for i in mini(10, _wall_mat.size()):
+		for m in [_wall_mat[i], _floor_mat[i] if i < _floor_mat.size() else null]:
+			var sm := m as StandardMaterial3D
+			if sm == null or sm.roughness_texture == null or sm.roughness_texture.has_meta("zonda_rough"):
+				continue
+			var target := float(ROCK_SHEEN[i][0])
+			var src: Texture2D = sm.roughness_texture
+			var key := "%d|%.2f" % [src.get_instance_id(), target]
+			if not _ultra_rough.has(key):
+				_ultra_rough[key] = _remap_rough(src, target)
+			var out: Texture2D = _ultra_rough[key]
+			if out != null:
+				sm.roughness_texture = out
+				sm.roughness_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+				sm.roughness = 1.0
+
+
+func _remap_rough(src: Texture2D, target: float) -> Texture2D:
+	var img := src.get_image()                 # a fresh copy read back from the renderer
+	if img == null or img.is_empty():
+		return null
+	if img.is_compressed() and img.decompress() != OK:
+		return null
+	if img.has_mipmaps():
+		img.clear_mipmaps()
+	img.convert(Image.FORMAT_L8)
+	if img.get_width() > 256 or img.get_height() > 256:
+		# roughness detail at 256 px is plenty under a smooth filter, and the LUT pass is 4x cheaper
+		img.resize(mini(256, img.get_width()), mini(256, img.get_height()), Image.INTERPOLATE_BILINEAR)
+	var s := Image.new()
+	s.copy_from(img)
+	s.resize(64, 64, Image.INTERPOLATE_NEAREST)
+	var sd := s.get_data()
+	var sum := 0.0
+	for v in sd:
+		sum += float(v)
+	var mean := sum / maxf(1.0, float(sd.size())) / 255.0
+	var lut := PackedByteArray()
+	lut.resize(256)
+	for v in 256:
+		lut[v] = clampi(int(round(clampf(target + 0.5 * (float(v) / 255.0 - mean), 0.5, 1.0) * 255.0)), 0, 255)
+	var d := img.get_data()
+	for i in d.size():
+		d[i] = lut[d[i]]
+	img.set_data(img.get_width(), img.get_height(), false, Image.FORMAT_L8, d)
+	img.generate_mipmaps()
+	var t := ImageTexture.create_from_image(img)
+	t.set_meta("zonda_rough", true)
+	return t
 
 
 func _load_cave() -> void:
@@ -678,7 +950,10 @@ func _ext_template(rel: String) -> Node3D:
 		return null
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
-	if doc.append_from_buffer(bytes, "", state) != OK:
+	# 8 = GLTF_IMPORT_GENERATE_TANGENT_ARRAYS: the Poly Haven models carry normal maps but no tangents,
+	# so their relief was lit in the wrong direction (mikktspace, only where a normal map is used)
+	var flags := 8 if rel.begins_with("ext/ph/") else 0
+	if doc.append_from_buffer(bytes, "", state, flags) != OK:
 		push_warning("[Underdark] ext model unreadable: " + rel)
 		return null
 	var root: Node = doc.generate_scene(state)
@@ -710,11 +985,75 @@ func _ext_template(rel: String) -> Node3D:
 		for si in mesh.get_surface_count():
 			var m: Material = mesh.surface_get_material(si)
 			if m is StandardMaterial3D:
-				mi.set_surface_override_material(si, (m as StandardMaterial3D).duplicate())
+				var mc: StandardMaterial3D = (m as StandardMaterial3D).duplicate()
+				_ext_mips(mc)
+				# nothing may keep the glTF's own textures alive next to the mipmapped copies (both
+				# sets would sit in VRAM): every placed copy clears roughness and turns emission off
+				# (_ext_instance), and the mesh itself now holds the copy, not the original material
+				mc.roughness_texture = null
+				mc.emission_texture = null
+				mesh.surface_set_material(si, mc)
+				mi.set_surface_override_material(si, mc)
 		tmpl.add_child(mi)
 	root.free()
 	_ext_tmpl[rel] = tmpl
 	return tmpl
+
+
+func _ext_mips(m: StandardMaterial3D) -> void:
+	# runtime glTF textures have no mipmaps: far props aliased into bright specks. Albedo, normal and
+	# metallic get mipmapped copies (normals renormalised), cached per source texture (every instance
+	# shares them). The albedo copy carries meta zonda_lum (mean linear luminance) and the metallic
+	# copy zonda_mean_b (mean of the glTF metal mask, blue), which surfaces.gd's sheen solver reads.
+	# Ambient occlusion goes through the same cache (usually the metal/rough image: no new upload).
+	# Roughness and emission are skipped: _ext_template drops both (_ext_instance never uses them).
+	# A copy maps to itself, so a mesh shared by two nodes of one file is never copied twice.
+	var t0 := Time.get_ticks_usec()
+	for slot in [BaseMaterial3D.TEXTURE_ALBEDO, BaseMaterial3D.TEXTURE_NORMAL, BaseMaterial3D.TEXTURE_METALLIC,
+			BaseMaterial3D.TEXTURE_AMBIENT_OCCLUSION]:
+		var t: Texture2D = m.get_texture(slot)
+		if t == null:
+			continue
+		var id := t.get_instance_id()
+		if not _ext_tex.has(id):
+			var out: Texture2D = t
+			var img := t.get_image()
+			if img != null and not img.is_empty() and not img.is_compressed():
+				if not img.has_mipmaps():
+					img.generate_mipmaps(slot == BaseMaterial3D.TEXTURE_NORMAL)
+				out = ImageTexture.create_from_image(img)
+				out.resource_name = t.resource_name
+				if slot == BaseMaterial3D.TEXTURE_ALBEDO:
+					out.set_meta("zonda_lum", _img_stat(img, -1))
+				elif slot == BaseMaterial3D.TEXTURE_METALLIC:
+					out.set_meta("zonda_mean_b", _img_stat(img, 2))
+			_ext_tex[id] = out
+			_ext_tex[out.get_instance_id()] = out
+		m.set_texture(slot, _ext_tex[id])
+	# microseconds summed, milliseconds derived: per-call truncation lost up to 1 ms on every material
+	ext_mip_us += Time.get_ticks_usec() - t0
+	ext_mip_ms = int(ext_mip_us / 1000)
+
+
+static func _img_stat(img: Image, channel: int) -> float:
+	# channel -1: mean linear luminance; 0-3: mean of that channel (0..1). 32x32 point samples.
+	var s := Image.new()
+	s.copy_from(img)
+	if s.has_mipmaps():
+		s.clear_mipmaps()
+	if s.get_format() != Image.FORMAT_RGBA8:
+		s.convert(Image.FORMAT_RGBA8)
+	s.resize(32, 32, Image.INTERPOLATE_NEAREST)
+	var sum := 0.0
+	for y in 32:
+		for x in 32:
+			var c := s.get_pixel(x, y)
+			if channel < 0:
+				var l := c.srgb_to_linear()
+				sum += 0.2126 * l.r + 0.7152 * l.g + 0.0722 * l.b
+			else:
+				sum += c[channel]
+	return sum / 1024.0
 
 
 func _ext_instance(rel: String, dim: float) -> Node3D:
@@ -726,6 +1065,7 @@ func _ext_instance(rel: String, dim: float) -> Node3D:
 		_ext_tmpl[key] = null
 		return null
 	var n: Node3D = t.duplicate()
+	n.set_meta("zonda_rel", rel)
 	for mi in n.find_children("*", "MeshInstance3D", true, false):
 		var m := mi as MeshInstance3D
 		if m.mesh == null:
@@ -737,10 +1077,13 @@ func _ext_instance(rel: String, dim: float) -> Node3D:
 				d.albedo_color = Color(d.albedo_color.r * dim, d.albedo_color.g * dim, d.albedo_color.b * dim, d.albedo_color.a)
 				d.emission_enabled = false
 				# matte like the game's own rock: the photoscans' packed roughness maps and default
-				# specular threw cyan speckles at 640x360 (metallic is left alone: brass stays brass)
+				# specular threw cyan speckles at 640x360 (metallic is left alone: brass stays brass).
+				# This stays the default for anything surfaces.gd does not own; the pass finds these
+				# copies by their "zonda_rel" and gives each class its own tuned sheen.
 				d.metallic_specular = 0.0
 				d.roughness_texture = null
 				d.roughness = 1.0
+				d.set_meta("zonda_rel", rel)
 				m.set_surface_override_material(si, d)
 	_ext_tmpl[key] = n
 	return n.duplicate()
@@ -780,9 +1123,12 @@ func _ext_hull(n: Node3D, rel: String, sc: float) -> void:
 
 
 func _place_bats() -> void:
+	var bi := 0
 	for b in L.get("bats", []):
 		var s := BatSwarm.new()
 		s.setup(b)
+		s.nc_id = "bat%d" % bi                 # the no-clip probe's id: the roost's index in L.bats
+		bi += 1
 		add_child(s)
 
 
@@ -871,13 +1217,63 @@ func _brood_eggs() -> Array:
 
 
 func _bite_source(id: String):
-	# the creature a bite id belongs to: "brood:<i>" or a spider id (null if unknown here)
+	# the creature a bite id belongs to: a module's registered prefix first, then "brood:<i>" or a
+	# spider id (null if unknown here)
+	for e in _bite_srcs:
+		if id.begins_with(str(e[0])) and is_instance_valid(e[1]):
+			return e[1]
 	if id.begins_with("brood:"):
 		return _brood if is_instance_valid(_brood) else null
 	for sp in _spiders:
 		if is_instance_valid(sp) and str(sp.get("id")) == id:
 			return sp
 	return null
+
+
+func _bite_opts(src: Object, id: String) -> Dictionary:
+	# {"heavy", "push" (-1 = the default nudge), "r" (0 = no victim-side distance check), "nl"}
+	var o := {"heavy": Creatures.is_spider_id(id), "push": -1.0, "r": 0.0, "nl": false}
+	if src != null and src.has_method("bite_opts"):
+		var d = src.call("bite_opts", id)
+		if d is Dictionary:
+			o["heavy"] = bool(d.get("heavy", o["heavy"]))
+			o["push"] = float(d.get("push", -1.0))
+			o["r"] = float(d.get("r", 0.0))
+			o["nl"] = bool(d.get("nl", false))
+	return o
+
+
+func _bite_local(from: Vector3, damage: float, heavy: bool, push: float) -> void:
+	# Creatures.bite_local through callv (B4 adds the 4th "push" argument, 1A.1). With an older
+	# creatures.gd the push is left out rather than breaking the call. GDScript refuses callv()
+	# on a preloaded class constant ("non-static function on the class"), so the call goes
+	# through a Script-typed variable holding the same (cached) script.
+	var cs: Script = load(DIR + "creatures.gd")
+	if cs == null:
+		return
+	if _bite_argc < 0:
+		_bite_argc = 3
+		for m in cs.get_script_method_list():
+			if str(m.get("name", "")) == "bite_local":
+				_bite_argc = (m.get("args", []) as Array).size()
+				break
+	if _bite_argc >= 4:
+		cs.callv("bite_local", [from, damage, heavy, push])
+	else:
+		cs.callv("bite_local", [from, damage, heavy])
+
+
+func _lantern_shields_me() -> bool:
+	# C6 "nl": my own lantern is lit and not dry, or was lit in the last 0.3 s (the LightField, B4)
+	var lf = CoopSync.get("light_field")
+	if lf == null or not is_instance_valid(lf) or not lf.has_method("player_lit"):
+		return false
+	var c = Game.climber
+	if not is_instance_valid(c):
+		return false
+	if bool(lf.call("player_lit", c)):
+		return true
+	return lf.has_method("player_dark_ms") and int(lf.call("player_dark_ms", c)) < 300
 
 
 func _on_creature_bit(who: Node3D, damage: float, id: String) -> void:
@@ -890,12 +1286,30 @@ func _on_creature_bit(who: Node3D, damage: float, id: String) -> void:
 		return
 	if _debug_spider and Creatures.is_spider_id(id):
 		print("[SPIDER] bite %s -> %s, %.0f damage" % [id, str(who.name), damage])
+	var o := _bite_opts(src, id)
+	var origin: Vector3 = src.bite_origin(id)
 	if who == Game.climber:
-		Creatures.bite_local(src.bite_origin(id), damage, Creatures.is_spider_id(id))
+		if bool(o["nl"]) and _lantern_shields_me():
+			return                           # light stops it dead (same rule as a teammate's screen)
+		_bite_local(origin, damage, bool(o["heavy"]), float(o["push"]))
 	else:
 		var pid = who.get("peer_id")
 		if pid != null:
-			CoopSync.map_event("cbite_" + id, {"who": int(pid), "dmg": damage}, false)
+			var d := {"who": _sid(pid), "dmg": damage}
+			if float(o["push"]) >= 0.0:
+				d["push"] = float(o["push"])
+			if float(o["r"]) > 0.0:
+				d["at"] = [origin.x, origin.y, origin.z]
+				d["r"] = float(o["r"])
+			if bool(o["nl"]):
+				d["nl"] = true
+			CoopSync.map_event("cbite_" + id, d, false)
+
+
+func creature_bit(who: Node3D, damage: float, id: String) -> void:
+	# public: a module that deals damage without a "bit" signal (authority only; the id must start
+	# with a prefix it registered with register_bites)
+	_on_creature_bit(who, damage, id)
 
 
 func _on_husk_wake(pos: Vector3, yaw: float) -> void:
@@ -973,9 +1387,13 @@ func _spawn_husk_centipede(pos: Vector3, yaw: float, grace_centre, grace_r: floa
 			top = float(st["top"]) - 8.0          # the same band the layout gives this biome's centipedes
 			bottom = float(st["bottom"]) - 8.0
 	if top < 1e8:
-		n.set_meta("zonda_territory", [top, bottom])
-		_territorial.append([n, top, bottom, pos])
+		var tb := _part_clamp_band([top, bottom], pos)  # 7A: its hunting band stops at the squeezes
+		n.set_meta("zonda_territory", tb)
+		n.set_meta("zonda_home", pos)                  # where a sulking pale one slinks back to (C15)
+		n.set_meta("zonda_part", part_of(pos))
+		_territorial.append([n, float(tb[0]), float(tb[1]), pos])
 	add_child(n)
+	_nc_keep_at(pos)                                   # no-clip A7: its rock is solid from its first step
 	if n.has_method("coop_apply_skin"):
 		n.coop_apply_skin(1)
 	if grace_centre is Vector3 and pos.distance_to(grace_centre) < grace_r:
@@ -1016,11 +1434,41 @@ func _stream_creatures(delta: float) -> void:
 		cx["wh"] = _husk.state_packet()
 	if not cx.is_empty():
 		CoopSync.map_stream({"cx": cx})
+	# v5.0 (C7): each module stream in its own message, so no unreliable packet grows past one
+	# fragment. Omitted when it has nothing to say.
+	for e in _streams:
+		var send: Callable = e[1]
+		if not send.is_valid():
+			continue
+		var v = send.call()
+		if _stream_empty(v):
+			continue
+		CoopSync.map_stream({"cx": {str(e[0]): v}})
+
+
+func _stream_empty(v) -> bool:
+	# null, an empty Array or Dictionary, an empty packed array, or an Array of empty Arrays
+	if v == null:
+		return true
+	if v is Dictionary:
+		return (v as Dictionary).is_empty()
+	if v is Array:
+		for x in v:
+			if x is Array and (x as Array).is_empty():
+				continue
+			if typeof(x) >= TYPE_PACKED_BYTE_ARRAY and typeof(x) < TYPE_MAX and x.size() == 0:
+				continue
+			return false
+		return true
+	if typeof(v) >= TYPE_PACKED_BYTE_ARRAY and typeof(v) < TYPE_MAX:
+		return v.size() == 0
+	return false
 
 
 func _nearest_threat(p: Vector3) -> float:
 	# the nearest awake hostile, for the heartbeat: centipedes (real or puppet), the Stalkers,
-	# the brood, a spider off its perch, the husk while it shivers
+	# the brood, a spider off its perch, the husk while it shivers, and every module that
+	# registered threats (C8: the heartbeat only, never the far-rock centres)
 	var best := 1e9
 	for cent in Game.centipedes:
 		if not is_instance_valid(cent):
@@ -1040,6 +1488,11 @@ func _nearest_threat(p: Vector3) -> float:
 			lists.append(sp.threat_positions())
 	if is_instance_valid(_husk):
 		lists.append(_husk.threat_positions())
+	for src in _threat_srcs:
+		if is_instance_valid(src) and src.has_method("threat_positions"):
+			var tl = src.call("threat_positions")
+			if tl is Array:
+				lists.append(tl)
 	for l in lists:
 		for q in l:
 			if q is Vector3:
@@ -1271,40 +1724,23 @@ func _add_light(pos: Vector3, color: Color, energy: float, rng: float, fill: boo
 
 
 func _place_fires() -> void:
+	# every placed camp fire is kept in fire_nodes (the omen COLD HEARTH puts them out, the
+	# LightField reads them as flames while "lit")
+	fire_nodes.clear()
 	for f in L.get("fires", []):
-		_add_fire(_v(f["pos"]), float(f["scale"]), bool(f.get("beacon", false)))
+		var pos := _v(f["pos"])
+		var s := float(f["scale"])
+		if bool(f.get("beacon", false)):
+			_add_fire(pos, s, true)          # a kiln pillar, not a camp fire
+			continue
+		var e := add_fire_parts(pos, s)
+		if not e.is_empty():
+			fire_nodes.append(e)
 
 
-var _dot_tex: GradientTexture2D
-
-
-func _soft_dot() -> GradientTexture2D:
-	if _dot_tex == null:
-		var g := Gradient.new()
-		g.set_color(0, Color(1, 1, 1, 1))
-		g.set_color(1, Color(1, 1, 1, 0))
-		_dot_tex = GradientTexture2D.new()
-		_dot_tex.gradient = g
-		_dot_tex.fill = GradientTexture2D.FILL_RADIAL
-		_dot_tex.fill_from = Vector2(0.5, 0.5)
-		_dot_tex.fill_to = Vector2(0.5, 0.0)
-		_dot_tex.width = 64
-		_dot_tex.height = 64
-	return _dot_tex
-
-
-func _add_fire(pos: Vector3, s: float, beacon: bool = false) -> Node3D:
-	# The game's "Pyrelight" is the tall pillar the campaign puts over its kiln shrines,
-	# so it only belongs at checkpoints. Everything else gets an actual flame.
-	if beacon:
-		var ps: PackedScene = load(PYRELIGHT)
-		if ps == null:
-			return null
-		var n: Node3D = ps.instantiate()
-		n.position = pos
-		n.scale = Vector3(s, s, s)
-		add_child(n)
-		return n
+func add_fire_parts(pos: Vector3, s: float) -> Dictionary:
+	# the same flame + Flicker + light as a placed fire, returned (NOT added to fire_nodes):
+	# {"pos", "s", "biome", "flame": CPUParticles3D, "flicker": Flicker, "light": OmniLight3D, "base", "lit"}
 	var flame := CPUParticles3D.new()
 	flame.amount = 12
 	flame.lifetime = 0.9
@@ -1341,10 +1777,116 @@ func _add_fire(pos: Vector3, s: float, beacon: bool = false) -> Node3D:
 	flame.position = pos + Vector3(0, 0.25 * s, 0)
 	flame.visibility_range_end = 140.0
 	add_child(flame)
+	var light := _add_light(pos + Vector3(0, 0.9 * s, 0), Color(1.0, 0.6, 0.25), 1.1 * s, 13.0 * s)
+	if _lights_collected:
+		manage_light(light)
 	var fl := Flicker.new()
-	fl.setup(_add_light(pos + Vector3(0, 0.9 * s, 0), Color(1.0, 0.6, 0.25), 1.1 * s, 13.0 * s))
+	fl.setup(light)
 	add_child(fl)
-	return flame
+	return {"pos": pos, "s": s, "biome": _biome_at(pos), "flame": flame, "flicker": fl, "light": light,
+			"base": fl.base, "lit": true}
+
+
+func set_fire_lit(e: Dictionary, on: bool, secs: float = 1.2) -> void:
+	# gutter a fire out (flame stops emitting, then hides; the light's flicker base eases to 0)
+	# or relight it (the reverse). secs <= 0: at once (a replay). e.lit is the data flag the
+	# LightField reads.
+	if e.is_empty():
+		return
+	e["lit"] = on
+	var old = e.get("tw")
+	if old is Tween and (old as Tween).is_valid():
+		(old as Tween).kill()
+	e.erase("tw")
+	var flame = e.get("flame")
+	var fl = e.get("flicker")
+	var base := float(e.get("base", 1.0))
+	if on:
+		if is_instance_valid(flame):
+			flame.visible = true
+			flame.emitting = true
+		if is_instance_valid(fl):
+			if secs <= 0.0:
+				fl.base = base
+			else:
+				var tw := create_tween()
+				tw.tween_property(fl, "base", base, secs)
+				e["tw"] = tw
+		return
+	if is_instance_valid(flame):
+		flame.emitting = false
+		if secs <= 0.0:
+			flame.visible = false
+	if secs <= 0.0:
+		if is_instance_valid(fl):
+			fl.base = 0.0
+		return
+	var tw2 := create_tween()
+	if is_instance_valid(fl):
+		tw2.tween_property(fl, "base", 0.0, secs)
+	else:
+		tw2.tween_interval(secs)
+	tw2.tween_callback(func():
+		if not bool(e.get("lit", false)) and is_instance_valid(flame):
+			flame.visible = false)
+	e["tw"] = tw2
+
+
+func free_fire_light(e: Dictionary) -> void:
+	# the light and its flicker go for good (the light budget drops invalid lights by itself)
+	var l = e.get("light")
+	if is_instance_valid(l):
+		(l as Node).queue_free()
+	var fl = e.get("flicker")
+	if is_instance_valid(fl):
+		(fl as Node).queue_free()
+	e["light"] = null
+	e["flicker"] = null
+
+
+func clear_foundry_heat() -> void:
+	# no fire, no shimmer: the Foundry's heat haze keeps only the lava lake
+	_foundry_fires.clear()
+
+
+func refresh_foundry_heat() -> void:
+	_foundry_fires.clear()
+	for e in fire_nodes:
+		if bool(e.get("lit", false)) and int(e.get("biome", -1)) == 7:
+			_foundry_fires.append(e["pos"])
+
+
+var _dot_tex: GradientTexture2D
+
+
+func _soft_dot() -> GradientTexture2D:
+	if _dot_tex == null:
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 1))
+		g.set_color(1, Color(1, 1, 1, 0))
+		_dot_tex = GradientTexture2D.new()
+		_dot_tex.gradient = g
+		_dot_tex.fill = GradientTexture2D.FILL_RADIAL
+		_dot_tex.fill_from = Vector2(0.5, 0.5)
+		_dot_tex.fill_to = Vector2(0.5, 0.0)
+		_dot_tex.width = 64
+		_dot_tex.height = 64
+	return _dot_tex
+
+
+func _add_fire(pos: Vector3, s: float, beacon: bool = false) -> Node3D:
+	# The game's "Pyrelight" is the tall pillar the campaign puts over its kiln shrines,
+	# so it only belongs at checkpoints. Everything else gets an actual flame.
+	if beacon:
+		var ps: PackedScene = load(PYRELIGHT)
+		if ps == null:
+			return null
+		var n: Node3D = ps.instantiate()
+		n.position = pos
+		n.scale = Vector3(s, s, s)
+		add_child(n)
+		return n
+	return add_fire_parts(pos, s).get("flame")
 
 
 func _place_embers() -> void:
@@ -1391,6 +1933,7 @@ func _place_checkpoints() -> void:
 		var id := int(c["id"])
 		a.body_entered.connect(func(body: Node3D): _on_checkpoint(id, body))
 		add_child(a)
+		_camp_bedroll(_v(c["pos"]))
 	# a death reloads the map: put the player at the team's furthest checkpoint
 	var cp := CoopSync.map_checkpoint_for(scene_file_path)
 	if cp >= 0:
@@ -1407,6 +1950,29 @@ func _place_checkpoints() -> void:
 					# the same short grace a co-op respawn gets (counted from the end of the build)
 					call_deferred("_reload_grace")
 				break
+
+
+func _camp_bedroll(cp_pos: Vector3) -> void:
+	# C13: every camp is fire, bedroll and glow. The checkpoint point sits 1.2 m over the floor and
+	# its fire at +(2.5, 0, 1.0); the bedroll lies at +(1.0, 0, -0.6), turned toward the fire. Where
+	# a camp's fire sits closer (THE RIFT: 0.8 m from that spot) the bedroll is moved out to 2.2 m.
+	var spot := cp_pos - Vector3(0, 1.2, 0) + Vector3(1.0, 0, -0.6)
+	var fire := Vector3.INF
+	var fd := 1e9
+	for e in fire_nodes:
+		var d: float = (e["pos"] as Vector3).distance_to(spot)
+		if d < fd:
+			fd = d
+			fire = e["pos"]
+	if fire == Vector3.INF or fd > 12.0:
+		fire = cp_pos + Vector3(2.5, -1.2, 1.0)
+	var flat := Vector3(spot.x - fire.x, 0.0, spot.z - fire.z)
+	if flat.length() < 1.6:
+		var away := flat.normalized() if flat.length() > 0.05 else Vector3(-0.6, 0.0, -0.8)
+		spot = Vector3(fire.x, spot.y, fire.z) + away * 2.2
+		flat = Vector3(spot.x - fire.x, 0.0, spot.z - fire.z)
+	# the mat's long side points at the fire (its model is long along Z)
+	place_bedroll(spot, atan2(flat.x, flat.z))
 
 
 func _reload_grace() -> void:
@@ -1430,7 +1996,7 @@ func _on_checkpoint(id: int, body: Node3D) -> void:
 		healed_now = true
 		Game.audio.play_player_healed()
 		if is_instance_valid(Game.climber):
-			Game.climber.heal(60.0)
+			Game.climber.heal(cp_heal)               # 60, or 20 under THE HOLLOW SHRINE
 	if id <= CoopSync.map_checkpoint_for(scene_file_path):
 		if healed_now:
 			CoopSync.show_banner("Checkpoint: %s" % label, 3.0)
@@ -1672,17 +2238,42 @@ func _place_altar() -> void:
 
 
 func _on_idol_touch(body: Node3D) -> void:
+	# local-first: the pickup feels instant; the idol module's authority confirm settles a touch
+	# race (C19, 3.3 A)
 	if body != Game.climber or _idol_taken:
 		return
-	CoopSync.map_event("idol", {"by": CoopSync.local_name, "id": CoopSync.my_id()})
+	CoopSync.map_event("idol", {"by": CoopSync.local_name, "id": _my_sid()})
 
 
 func _is_me(data: Dictionary) -> bool:
-	# who an event names: by Steam id when both sides have one, else by name (solo)
-	var who := int(data.get("id", 0))
-	if who != 0 and CoopSync.my_id() != 0:
-		return who == CoopSync.my_id()
+	# who an event names: by Steam id String (R1), else by name
+	var s := _sid(data.get("id", ""))
+	if s != "":
+		return _is_me_sid(s)
 	return str(data.get("by", "")) == CoopSync.local_name
+
+
+# ---- Steam ids as Strings (R1). CoopSync.my_sid / sid / is_me are B1's; these fall back to the
+# same rules while they are missing, so the map never depends on B1's file parsing first.
+
+func _my_sid() -> String:
+	if CoopSync.has_method("my_sid"):
+		return str(CoopSync.call("my_sid"))
+	var i: int = CoopSync.my_id()
+	return str(i) if i != 0 else "local"
+
+
+func _sid(v) -> String:
+	if CoopSync.has_method("sid"):
+		return str(CoopSync.call("sid", v))
+	return U.sid(v)
+
+
+func _is_me_sid(v) -> bool:
+	if CoopSync.has_method("is_me"):
+		return bool(CoopSync.call("is_me", v))
+	var s := _sid(v)
+	return s != "" and s == _my_sid()
 
 
 func _finale(by: String, replay: bool = false) -> void:
@@ -1692,6 +2283,7 @@ func _finale(by: String, replay: bool = false) -> void:
 	_idol_by = by
 	if is_instance_valid(_follower):
 		_follower.set_meta("zonda_no_lure", true)     # once the idol is taken the bell cannot hold it
+	_pinned_no_lure()
 	if is_instance_valid(_idol_node):
 		_idol_node.visible = false
 	_nest_lights.clear()
@@ -1791,14 +2383,15 @@ func _collect_lights() -> void:
 		var l: OmniLight3D = n
 		if l.has_meta("zonda_keep"):
 			continue
-		l.set_meta("zonda_managed", true)
-		l.light_volumetric_fog_energy = 0.0
-		# every managed light is fully faded by LIGHT_FAR, so the 175 m cut never pops
-		var fl: float = 55.0 if l.omni_range >= 60.0 else 40.0
-		l.distance_fade_enabled = true
-		l.distance_fade_begin = LIGHT_FAR - fl
-		l.distance_fade_length = fl
+		_prep_managed(l)
 		_managed_lights.append(l)
+	# lights a module handed to manage_light() before now that live outside the map's own subtree
+	for l3 in _late_lights:
+		if is_instance_valid(l3) and not _managed_lights.has(l3):
+			_prep_managed(l3)
+			_managed_lights.append(l3)
+	_late_lights.clear()
+	_lights_collected = true
 	var we = IOAWorldEnvironment.current
 	if we != null:
 		var keep: Array[OmniLight3D] = []
@@ -1807,6 +2400,16 @@ func _collect_lights() -> void:
 				keep.append(l2)
 		we._all_omnilights_in_level = keep
 	print("[Underdark] light budget: %d of ours managed, %d left to the game" % [_managed_lights.size(), we._all_omnilights_in_level.size() if we else -1])
+
+
+func _prep_managed(l: OmniLight3D) -> void:
+	l.set_meta("zonda_managed", true)
+	l.light_volumetric_fog_energy = 0.0
+	# every managed light is fully faded by LIGHT_FAR, so the 175 m cut never pops
+	var fl: float = 55.0 if l.omni_range >= 60.0 else 40.0
+	l.distance_fade_enabled = true
+	l.distance_fade_begin = LIGHT_FAR - fl
+	l.distance_fade_length = fl
 
 
 func _update_light_budget(delta: float) -> void:
@@ -2056,6 +2659,9 @@ func _release_warning(id: String) -> void:
 			return
 	if id == "follower":
 		CoopSync.show_banner("Something followed you in. It will not stop.", 4.0)
+	elif id.begins_with("follower_p"):
+		# 7A: past a squeeze the old one stays behind, and something down here takes up the trail
+		CoopSync.show_banner("What followed you could not squeeze through. Something down here has your scent now.", 5.0)
 	else:
 		CoopSync.show_banner("Something lives here.", 3.0)
 	Game.audio.play_dark_transition()
@@ -2064,6 +2670,9 @@ func _release_warning(id: String) -> void:
 func _spawn_zone(id: String, grace_centre, grace_r: float) -> void:
 	# the authority's real creatures for one centipede group, at their layout spawn points.
 	# grace_centre (a Vector3 or null): a spawn within grace_r of it starts asleep (see _update_grace)
+	if id.begins_with("follower_p"):
+		_nc_part_release(id)                # 7A: a later part's own Follower (it wakes behind the team)
+		return
 	var ps: PackedScene = load(CENTIPEDE)
 	if ps == null:
 		return
@@ -2072,16 +2681,25 @@ func _spawn_zone(id: String, grace_centre, grace_r: float) -> void:
 		return
 	_real_spawned[id] = true
 	var idol_group: bool = str(c.get("on", "")) == "idol"
+	var pinned: bool = hunt_pin_groups.has(id)
 	var spawns: Array = c["spawn"]
 	for si in spawns.size():
 		var sp := _v(spawns[si])
 		var n: Node3D = ps.instantiate()
 		n.position = sp
 		n.set_meta("zonda_cid", "%s:%d" % [id, si])        # stable id for the guests' puppets
+		if pinned:
+			n.set_meta("zonda_hunt_pin", "idol")            # hunts only the idol holder (C5)
+			if _idol_taken:
+				n.set_meta("zonda_no_lure", true)
+		if bool(c.get("follower", false)) and follower_no_lure:
+			n.set_meta("zonda_no_lure", true)               # THE PATIENT ONE: no bell turns it
 		if c.has("territory"):
 			# it belongs to this biome and stays here after you leave
-			var t: Array = c["territory"]
+			var t: Array = _part_clamp_band(c["territory"], sp)   # 7A: strict at the squeezes
 			n.set_meta("zonda_territory", [float(t[0]), float(t[1])])
+			n.set_meta("zonda_home", sp)                     # C15: where a sulking pale one goes back to
+			n.set_meta("zonda_part", part_of(sp))
 			_territorial.append([n, float(t[0]), float(t[1]), sp])
 		elif idol_group:
 			n.set_meta("zonda_no_lure", true)                 # the bell cannot hold the Nest's chasers
@@ -2090,15 +2708,27 @@ func _spawn_zone(id: String, grace_centre, grace_r: float) -> void:
 				# within reach, instead of hunting a respawn 300 m away
 				_territorial.append([n, 1e9, -1e9, sp])
 		add_child(n)
+		_nc_keep_at(sp)                                     # no-clip A7: its rock is solid from its first step
 		if c.has("skin") and n.has_method("coop_apply_skin"):
 			n.coop_apply_skin(1 if str(c["skin"]) == "pale" else 0)
 		if bool(c.get("follower", false)):
-			_follower = n
 			n.set_meta("zonda_cid", "follower:0")
+			_nc_adopt_follower(n)                           # 7A: part 0's; left behind if the team is past
 		if grace_centre is Vector3 and sp.distance_to(grace_centre) < grace_r:
 			n.process_mode = Node.PROCESS_MODE_DISABLED
 			n.visible = false
 			_grace.append([n, Time.get_ticks_msec() + 10000, sp])
+
+
+func _pinned_no_lure() -> void:
+	# C5: once the idol is taken, every hunter pinned to its holder ignores the bell, live and on a
+	# replay (a group spawned later gets it in _spawn_zone)
+	for cent in Game.centipedes:
+		if is_instance_valid(cent) and (cent as Node).has_meta("zonda_hunt_pin"):
+			(cent as Node).set_meta("zonda_no_lure", true)
+	for n in get_children():
+		if n is Node3D and n.has_meta("zonda_hunt_pin"):
+			n.set_meta("zonda_no_lure", true)
 
 
 func _update_grace() -> void:
@@ -2139,8 +2769,13 @@ func coop_session_ended() -> void:
 	# only ever had puppets (CoopSync just freed them), so every group the team woke gets real
 	# creatures again, fresh at their own spawn points; a spawn too close to the player starts
 	# asleep. The stalkers and the plates switch to local rule on their own (map_is_authority).
-	if not CoopSync.map_is_authority():
-		return
+	_nc_last_ts.clear()                  # no-clip C7: a new sender, new stream stamps
+	if CoopSync.map_is_authority():
+		_session_ended_authority()
+	_call_features("on_session_ended")
+
+
+func _session_ended_authority() -> void:
 	var me = Game.climber
 	var here = null
 	if is_instance_valid(me) and me.is_inside_tree():
@@ -2160,12 +2795,14 @@ func coop_session_ended() -> void:
 		_spawn_husk_centipede(_v(wh["head"]), float(wh.get("yaw", 0.0)), here, 25.0)
 	for s in _stalkers:
 		s.rp_pos = s.body.position
+		s.nc_reseed()                    # no-clip C2: its foot from where this screen drew it
 	print("[Underdark] session ended: now the authority, %d creature groups respawned" % _real_spawned.size())
 
 
-# One centipede follows the team for the whole descent. It cannot squeeze through the Burrows
-# or path around the Lid, so when it falls far behind (or is walled off) the host puts it back
-# on the rift wall above and behind the team, out of sight. It never appears ahead of you.
+# One centipede follows the team through each part of the descent (owner decision 7A: the one that
+# followed you in stays behind at the Lid, and the part below wakes its own; see PARTS). When it
+# falls far behind (or is walled off) the host puts it back on the rift wall above and behind the
+# team, out of sight and in its own part. It never appears ahead of you.
 func _update_centipedes(delta: float) -> void:
 	if not CoopSync.map_is_authority():
 		return
@@ -2184,39 +2821,7 @@ func _update_centipedes(delta: float) -> void:
 			in_burrows = true
 			break
 	if _spawned_cents.has("follower") and not _idol_taken:
-		var need := false
-		# It cannot squeeze into the Burrows: while anyone is inside, it waits outside, asleep and
-		# hidden. Once everyone is out it comes back behind and above the team.
-		if in_burrows and not _burrow_parked and is_instance_valid(_follower):
-			_burrow_parked = true
-			_follower.process_mode = Node.PROCESS_MODE_DISABLED
-			_follower.visible = false
-		elif _burrow_parked and not in_burrows:
-			_burrow_parked = false
-			if is_instance_valid(_follower):
-				_follower.process_mode = Node.PROCESS_MODE_INHERIT
-				_follower.visible = true
-			need = true
-		if not _burrow_parked and not in_burrows:
-			if not is_instance_valid(_follower) or not _follower.is_inside_tree():
-				need = true
-			elif not _in_grace(_follower):
-				var d := 1e9
-				for p in players:
-					d = minf(d, (p as Node3D).global_position.distance_to(_follower.global_position))
-				if d < _follow_best - 6.0:
-					_follow_best = d
-					_follow_stall = 0.0
-				else:
-					_follow_stall += 2.0
-				if d > 240.0 or (_follow_stall >= 36.0 and d > 55.0):
-					need = true
-				elif _in_burrows(_follower.global_position, true):
-					need = true                  # it got into a tube after all: put it back outside
-			if need:
-				var spot = _follower_spot(players)
-				if spot != null:
-					_replace_follower(spot)
+		_follower_tick(players, in_burrows)      # the v4.9.1 rules, per part (7A) and out of sight (C8)
 	# the ones that live in a biome: idle when nobody is in it, and never wander out of it
 	for e in _territorial:
 		var n2 = e[0]
@@ -2238,15 +2843,19 @@ func _update_centipedes(delta: float) -> void:
 		if awake == (n2.process_mode == Node.PROCESS_MODE_DISABLED):
 			n2.process_mode = Node.PROCESS_MODE_INHERIT if awake else Node.PROCESS_MODE_DISABLED
 			n2.visible = awake
+			if awake:
+				_nc_keep_at(n2.global_position)   # no-clip A7: its rock is solid before it moves
 		if not awake:
 			var isf = n2.get("idle_sfx")
 			if is_instance_valid(isf) and isf.playing:
 				isf.stop()
 			continue
 		if _in_burrows(n2.global_position, true):
-			# it crawled into a Burrows tube: back to its den
-			n2.global_position = e[3]
-			n2.set_state(centipede_state_wander.new())
+			# it crawled into a Burrows tube: back to its den (no-clip A11: only while nobody sees it)
+			_nc_cent_home(n2, e[3], true)
+			continue
+		if _nc_part_strayed(n2):
+			_nc_cent_home(n2, e[3], true, false)   # 7A: past its part's squeeze: home, strictly
 			continue
 		var target = CoopSync.target_player_for(n2)
 		if target == null and (n2._current_state is centipede_state_hunting or n2._current_state is centipede_state_attack):
@@ -2257,8 +2866,7 @@ func _update_centipedes(delta: float) -> void:
 			for p in players:
 				near = minf(near, (p as Node3D).global_position.distance_to(n2.global_position))
 			if near > 120.0:
-				n2.global_position = e[3]
-				n2.set_state(centipede_state_wander.new())
+				_nc_cent_home(n2, e[3], false)
 
 
 func _follower_join_finale(quiet: bool = false) -> void:
@@ -2269,7 +2877,8 @@ func _follower_join_finale(quiet: bool = false) -> void:
 	var fin = L.get("follower_finale", null)
 	if fin == null:
 		return
-	_replace_follower(_v(fin["spawn"]), "follower_finale:0")
+	_nc_finale_prep(_v(fin["spawn"]))          # 7A: a Follower of another part stays in its part
+	_replace_follower(_v(fin["spawn"]), "follower_finale:0", _v(fin["spawn"]))
 	var n: Node3D = _follower
 	n.set_meta("zonda_no_lure", true)        # the bell cannot hold it in the finale
 	_spawned_cents["follower"] = true
@@ -2281,11 +2890,15 @@ func _follower_join_finale(quiet: bool = false) -> void:
 	print("[Underdark] the follower joined the finale at %s" % str(n.position))
 
 
-func _replace_follower(spot: Vector3, cid: String = "follower:0") -> void:
+func _replace_follower(spot: Vector3, cid: String = "follower:0", anchor = null) -> void:
 	# a fresh Follower at spot. It keeps the old one's slot in Game.centipedes, so no other
 	# centipede shifts in the host's stream when it is swapped.
+	# no-clip C8: anchor is a known-air point for its first placement (meta zonda_anchor), and the
+	# old one's teleport counter + 1 rides along (meta zonda_tp), so a guest's puppet snaps once.
 	var idx := -1
+	var old_tp := 0
 	if is_instance_valid(_follower):
+		old_tp = int(_follower.get_meta("zonda_tp", 0))
 		idx = Game.centipedes.find(_follower)
 		Game.centipedes.erase(_follower)
 		_follower.queue_free()
@@ -2293,9 +2906,16 @@ func _replace_follower(spot: Vector3, cid: String = "follower:0") -> void:
 	var n: Node3D = ps.instantiate()
 	n.position = spot
 	n.set_meta("zonda_cid", cid)
+	n.set_meta("zonda_anchor", anchor if anchor is Vector3 else spot)
+	n.set_meta("zonda_tp", old_tp + 1)
+	n.set_meta("zonda_part", _fol_part if not cid.begins_with("follower_finale") else part_of(spot))
 	if _idol_taken:
 		n.set_meta("zonda_no_lure", true)
+		n.set_meta("zonda_hunt_pin", "idol")        # the follower_finale hunts the holder (C5)
+	elif follower_no_lure:
+		n.set_meta("zonda_no_lure", true)           # THE PATIENT ONE
 	add_child(n)
+	_nc_keep_at(spot)                               # no-clip A7: its rock is solid from its first step
 	_follower = n
 	_follow_best = 1e9
 	_follow_stall = 0.0
@@ -2343,6 +2963,776 @@ func _update_creature_centres() -> void:
 	for s in _stalkers:
 		if is_instance_valid(s.body):
 			_creature_centres.append(s.body.global_position)
+
+
+# ================================================================== v5.0 NO-CLIP, map side (NC-3)
+# Creature no-clip spec (docs/specs/2026-09-25-creature-noclip.md) 3.C. The helper noclip.gd is
+# another group's file, reached only at runtime (class NCX below): a missing helper, or its guard
+# switched off (the probe's baseline), means the v4.9.1 code everywhere (Rule K).
+#   C1  is_solid_at(p, r): the rock around p collides. A 128 m grid files every cave chunk in each
+#       cell its bounding sphere (grown 10 m) touches; a chunk switched solid counts 2 physics frames
+#       later. noclip_keep_solid(p) (host) keeps the rock around p solid for 4 s, from this frame.
+#   A7  every spawn, Follower re-seat and territorial wake keeps its rock solid (_nc_keep_at).
+#   A11 _nc_cent_home: a leash or tube return teleports only while nobody sees the creature and
+#       nobody is near its den; else it walks home (meta zonda_leash_until, read by CoopWander).
+#   C7  coop_map_stream drops an unreliable packet older than one already applied for its key.
+#   C8  a Follower re-seat waits until neither the old one nor the new spot is seen.
+#   C6  the probe's hooks: noclip_test_wake(id), noclip_test_leash(n), noclip_test_follower().
+
+const NC_CELL := 128.0
+const NC_KEEP_MS := 4000
+var _nc_grid: Dictionary = {}          # Vector3i cell -> PackedInt32Array of chunk indices
+var _nc_stamp: Dictionary = {}         # chunk index -> the physics frame it last turned solid
+var _nc_centres: Array = []            # host: extra solid centres (Stalker bodies + keep points)
+var _nc_keep: Array = []               # [Vector3, until_ms]
+var _nc_t := 0.0
+var _nc_last_ts: Dictionary = {}       # C7: stream key -> the newest stamp applied
+
+
+func _nc_setup() -> void:
+	var cells: Dictionary = {}
+	var filed := 0
+	for i in _chunks.size():
+		var e: Array = _chunks[i]
+		var mi: MeshInstance3D = e[0]
+		if mi.get_child_count() == 0 or not (mi.get_child(0) is StaticBody3D):
+			continue                         # a sliver with no collision is never rock
+		var c: Vector3 = e[1]
+		var r: float = float(e[2]) + 10.0
+		var lo := _nc_cell(c - Vector3.ONE * r)
+		var hi := _nc_cell(c + Vector3.ONE * r)
+		for x in range(lo.x, hi.x + 1):
+			for y in range(lo.y, hi.y + 1):
+				for z in range(lo.z, hi.z + 1):
+					var k := Vector3i(x, y, z)
+					if not cells.has(k):
+						cells[k] = []
+					(cells[k] as Array).append(i)
+		filed += 1
+	_nc_grid.clear()
+	for k2 in cells.keys():
+		_nc_grid[k2] = PackedInt32Array(cells[k2])
+	var s = NCX.nc()
+	if s != null:
+		s.call("set_map", self)
+	print("[CLIP] map: solidity grid %d cells over %d chunks with collision; helper %s" % [_nc_grid.size(), filed,
+			"loaded" if s != null else "missing (creatures move as before)"])
+
+
+func _nc_teardown() -> void:
+	var s = NCX.nc()
+	if s != null and s.call("map_node") == self:
+		s.call("set_map", null)
+
+
+static func _nc_cell(p: Vector3) -> Vector3i:
+	return Vector3i(floori(p.x / NC_CELL), floori(p.y / NC_CELL), floori(p.z / NC_CELL))
+
+
+func is_solid_at(p: Vector3, r: float = 6.0) -> bool:
+	# C1 (every machine): every cave chunk whose bounding sphere comes within r of p collides now
+	# (layer 1) and has for at least 2 physics frames (a layer toggle may not reach queries in the
+	# same step). No rock near p at all counts as solid (there is nothing there to pass through).
+	var a = _nc_grid.get(_nc_cell(p))
+	if a == null:
+		return true
+	var fr := Engine.get_physics_frames()
+	for i in (a as PackedInt32Array):
+		var e: Array = _chunks[i]
+		if (p - (e[1] as Vector3)).length() - float(e[2]) > r:
+			continue
+		var body := (e[0] as MeshInstance3D).get_child(0) as StaticBody3D
+		if body == null:
+			continue
+		if (body.collision_layer & 1) == 0 or fr - int(_nc_stamp.get(i, 0)) < 2:
+			return false
+	return true
+
+
+func noclip_keep_solid(p: Vector3) -> void:
+	# C1 (host): the rock within 60 m of p stays solid for 4 s, from this frame on (a spawn, a wake,
+	# a held mover). One point per 20 m: a second call there renews it.
+	if not CoopSync.map_is_authority():
+		return
+	var until := Time.get_ticks_msec() + NC_KEEP_MS
+	for e in _nc_keep:
+		if (e[0] as Vector3).distance_to(p) < 20.0:
+			e[1] = until
+			return
+	_nc_keep.append([p, until])
+	_nc_centres.append(p)
+
+
+func _nc_keep_at(p: Vector3) -> void:
+	# the A7 call sites: only while the guard is on (Rule K)
+	if NCX.on():
+		noclip_keep_solid(p)
+
+
+func _nc_tick(delta: float) -> void:
+	# C1 (host), every 0.25 s: the extra solid centres are the Stalkers (guard on) and up to 12 live
+	# keep points, newest first. Guests keep none: their rock is solid around every player anyway.
+	_nc_t -= delta
+	if _nc_t > 0.0:
+		return
+	_nc_t = 0.25
+	_nc_centres.clear()
+	if not CoopSync.map_is_authority():
+		_nc_keep.clear()
+		return
+	var now := Time.get_ticks_msec()
+	var live: Array = []
+	for e in _nc_keep:
+		if int(e[1]) > now:
+			live.append(e)
+	_nc_keep = live
+	if NCX.on():
+		for s in _stalkers:
+			if is_instance_valid(s) and is_instance_valid(s.body):
+				_nc_centres.append(s.body.global_position)
+	for i in mini(12, _nc_keep.size()):
+		_nc_centres.append(_nc_keep[_nc_keep.size() - 1 - i][0])
+
+
+func _nc_near_centre(entry: Array) -> bool:
+	# _update_lod: the same 60 m rule as _creature_centres
+	for q in _nc_centres:
+		if ((q as Vector3) - (entry[1] as Vector3)).length() - float(entry[2]) < 60.0:
+			return true
+	return false
+
+
+func _nc_stream_fresh(d: Dictionary, ts: int) -> bool:
+	# C7: an unreliable map stream packet older than one already applied for any of its keys is a
+	# reordered one and is dropped whole ("cx" counts per creature stream). A stamp over 10 s older is
+	# a restarted sender, not a late packet. ts 0 (an old caller) is always fresh. Guard on only.
+	if ts <= 0 or not NCX.on():
+		return true
+	var keys: Array = []
+	for k in d.keys():
+		var v = d[k]
+		if str(k) == "cx" and v is Dictionary:
+			for k2 in (v as Dictionary).keys():
+				keys.append("cx." + str(k2))
+		else:
+			keys.append(str(k))
+	for k3 in keys:
+		var last := int(_nc_last_ts.get(k3, -1))
+		if last > ts and last - ts < 10000:
+			NCX.note("stream", "late_dropped")
+			return false
+	for k4 in keys:
+		_nc_last_ts[k4] = ts
+	return true
+
+
+func _nc_cent_vis(n) -> Array:
+	# a centipede's own visible points for the sight rules: the head pivot and sections 3 and 7 (the
+	# centipede's _nc_vis_points when it has them)
+	if n.has_method("_nc_vis_points"):
+		var v = n.call("_nc_vis_points")
+		if v is Array and not (v as Array).is_empty():
+			return v
+	var out: Array = [n.global_position]
+	var secs = n.get("_body_sections")
+	if secs is Array:
+		for i in [3, 7]:
+			if i < (secs as Array).size() and secs[i] is Object:
+				var r = (secs[i] as Object).get("root")
+				if r is Node3D and is_instance_valid(r) and (r as Node3D).is_visible_in_tree():
+					out.append((r as Node3D).global_position)
+	return out
+
+
+func _nc_cent_kind(n) -> String:
+	if n.has_method("_nc_kind"):
+		return str(n.call("_nc_kind"))
+	if str(n.get_meta("zonda_cid", "")).begins_with("follower"):
+		return "follower"
+	return "pale" if int(n.get_meta("zonda_skin", 0)) == 1 else "centipede"
+
+
+func _nc_cent_home(n2, home: Vector3, tube: bool, blind_ok: bool = true) -> void:
+	# A11: a territorial centipede goes back to its den. v4.9.1 (guard off) put it there at once. Now
+	# only while nobody sees it (head, sections 3 and 7), nobody is within 25 m of the den and the den
+	# is not seen: a declared teleport (coop_teleport). Otherwise it walks home (meta zonda_leash_until,
+	# read only by CoopWander, so hunting and light-fear stay on) and the next 2 s tick tries again.
+	# blind_ok false (the 7A part leash): with the guard off it only walks, never pops.
+	# Only CoopWander reads the leash (ext/state_wander.gd _leashed); the game's own wander re-hunts the
+	# climber at once, so a creature that set_state leaves on it cannot walk home, and switching it to
+	# wander every 2 s would only knock it out of its hunt. Guard on: home at once, as v4.9.1 did (a
+	# declared teleport). Guard off with blind_ok false: left alone, as v4.9.1 had no part leash.
+	var nc := NCX.on()
+	if not nc:
+		if blind_ok:
+			n2.global_position = home
+			n2.set_state(centipede_state_wander.new())
+			return
+		if not _nc_leash_walks(n2):
+			return
+	else:
+		var near_home := false
+		for p in CoopSync.alive_player_nodes():
+			if (p as Node3D).global_position.distance_to(home) < 25.0:
+				near_home = true
+				break
+		if not near_home and not NCX.seen(_nc_cent_vis(n2)) and not NCX.seen([home, home + Vector3.UP * 2.0]):
+			if n2.has_method("coop_teleport"):
+				n2.call("coop_teleport", home, home)
+			else:
+				n2.global_position = home
+			n2.set_meta("zonda_leash_until", 0)
+			n2.set_state(centipede_state_wander.new())
+			NCX.note(_nc_cent_kind(n2), "leash_tube" if tube else "leash_home")
+			return
+	var now := Time.get_ticks_msec()
+	var cur = n2.get("_current_state")
+	var walking: bool = now < int(n2.get_meta("zonda_leash_until", 0)) and cur is centipede_state_wander
+	n2.set_meta("zonda_leash_until", now + 15000)
+	if not walking:
+		n2.set_state(centipede_state_wander.new())
+		cur = n2.get("_current_state")
+	if nc and not (cur is Object and (cur as Object).has_method("_leashed")):
+		# its wander ignores the leash: it would hunt on where it strayed. Home at once (declared)
+		n2.set_meta("zonda_leash_until", 0)
+		if n2.has_method("coop_teleport"):
+			n2.call("coop_teleport", home, home)
+		else:
+			n2.global_position = home
+		n2.set_state(centipede_state_wander.new())
+		NCX.note(_nc_cent_kind(n2), "leash_blind")
+
+
+func _nc_leash_walks(n2) -> bool:
+	# guard off: does this creature's wander read the leash? ext/centipede.gd set_state swaps the game's
+	# wander for CoopWander in a session and for the pale skin (and for every skin with the guard on)
+	var cur = n2.get("_current_state")
+	if cur is Object and (cur as Object).has_method("_leashed"):
+		return true
+	var sk = n2.get("coop_skin")
+	return CoopSync.in_session() or (sk != null and int(sk) == 1)
+
+
+func _nc_follower_swap_ok(spot: Vector3) -> bool:
+	# C8: a Follower re-seat happens only while neither the old one nor the new spot is seen
+	if not NCX.on():
+		return true
+	if is_instance_valid(_follower) and _follower.is_inside_tree() and _follower.is_visible_in_tree():
+		if NCX.seen(_nc_cent_vis(_follower)):
+			NCX.note("follower", "swap_wait")
+			return false
+	if NCX.seen([spot, spot + Vector3.UP * 2.0]):
+		NCX.note("follower", "swap_wait")
+		return false
+	return true
+
+
+func noclip_test_wake(id: String) -> bool:
+	# C6 (host): the probe wakes a centipede group now, as its trigger would (quiet, not stored)
+	if not CoopSync.map_is_authority():
+		return false
+	if not _spawned_cents.has(id):
+		_release_centipedes(id, true)
+	print("[CLIP] hook wake %s -> %s" % [id, str(_real_spawned.has(id))])
+	return _real_spawned.has(id)
+
+
+func noclip_test_leash(n: Node3D) -> void:
+	# C6 (host): a forced return home, a scripted teleport the probe declares
+	if not CoopSync.map_is_authority() or not is_instance_valid(n):
+		return
+	var home = n.get_meta("zonda_home", null)
+	if not (home is Vector3):
+		for e in _territorial:
+			if e[0] == n:
+				home = e[3]
+				break
+	if not (home is Vector3):
+		return
+	if n.has_method("coop_teleport"):
+		n.call("coop_teleport", home, home)
+	else:
+		n.global_position = home
+	if n.has_method("set_state"):
+		n.call("set_state", centipede_state_wander.new())
+	print("[CLIP] hook leash %s -> home %s" % [str(n.get_meta("zonda_cid", n.name)), str(home)])
+
+
+func noclip_test_follower() -> bool:
+	# C6 (host): re-seat the Follower now, out of the C8 sight rule (a scripted teleport). Where the
+	# game's own rule finds no spot (it wants a station 25 m above everyone, 70 to 150 m away, and
+	# near the top of the rift there is none), a relaxed test spot: a station of the Follower's part,
+	# outside every squeeze, 40 to 150 m from every player, nearest 90 m, higher preferred.
+	if not CoopSync.map_is_authority():
+		return false
+	var players: Array = CoopSync.alive_player_nodes()
+	var spot = _follower_spot(players)
+	var how := "rule"
+	if not (spot is Vector3):
+		spot = _nc_test_spot(players)
+		how = "relaxed"
+	if not (spot is Vector3):
+		print("[CLIP] hook follower -> no spot")
+		return false
+	_replace_follower(spot, _fol_cid(), spot - Vector3(0.0, 2.0, 0.0))
+	print("[CLIP] hook follower -> %s at %s (%s spot)" % [_fol_cid(), str(spot), how])
+	return true
+
+
+func _nc_test_spot(players: Array):
+	var top_y := -1e9
+	for p in players:
+		top_y = maxf(top_y, (p as Node3D).global_position.y)
+	var best = null
+	var best_s := 1e9
+	for st in L.get("stations", []):
+		var pos := _v(st["pos"])
+		if not _nc_spot_in_part(pos + Vector3(0, 3.0, 0)):
+			continue
+		var dmin := 1e9
+		for p in players:
+			dmin = minf(dmin, (p as Node3D).global_position.distance_to(pos))
+		if dmin < 40.0 or dmin > 150.0:
+			continue
+		var s := absf(dmin - 90.0) - (pos.y - top_y) * 0.1
+		if s < best_s:
+			best_s = s
+			best = pos + Vector3(0, 3.0, 0)
+	return best
+
+
+# ================================================================== PARTS (owner decision 7A)
+# "Make sure that they can't follow me in but play that into the map. Each part/phase leaves their
+# big creatures along with it." A part is the stretch of the rift between two squeezes.
+#   Built in: the Lid (the plug that seals the rift: rift-wide, a part boundary) and the Burrows'
+#   two exits, the Burrow Mouth above the Lid and the Breathing Room below it (openings: a creature
+#   may come up to them). The Burrows' tubes keep their own test (_in_burrows).
+#   Wave 2 appends L["squeezes"] = [{"name", "pos": [x, y, z], "top": y, "bottom": y, "r": m,
+#   "layer": bool, "open": bool}] (defaults top/bottom pos.y +- 4, r 12, layer true, open false):
+#   layer true = a part boundary at that depth (above top is one part, below bottom the next);
+#   r = the passage's own region; open false = no big creature may be inside it.
+# part_of(p): 0 at the top, +1 past each boundary (a point inside a boundary counts as the part above).
+# Big creatures keep to their part: a territorial band stops at the squeezes (_part_clamp_band), and
+# one found past its part's squeeze goes home (_nc_part_strayed, strict). The Follower is per part:
+# once the whole team is past a squeeze, the old one stays behind as a territorial hunter of its own
+# part, and the team's new part wakes its own (the stored event cent_follower_p<k>, cid
+# follower_p<k>:0) behind the team at a station of that part. A part that is only the Nest has no
+# Follower of its own: the finale's chasers are its hunters.
+
+const LID_TOP := -1003.6               # the Lid's plug (generator: LID = (-772, -792) x Z 1.3)
+const LID_BOTTOM := -1029.6
+var _squeezes: Array = []              # [{"name", "pos": Vector3, "top", "bottom", "r", "layer", "open"}]
+var _bounds: Array = []                # part boundaries, top first: [{"top": y, "bottom": y, "names": Array}]
+var _nest_top := -1e9                  # the Nest's highest zone top (-1e9: no Nest)
+var _fol_part := 0                     # the part _follower belongs to
+var _left_behind: Array = []           # Followers left behind at a squeeze
+
+
+func _parts_setup() -> void:
+	_squeezes.clear()
+	var has_lid := false
+	for st in L.get("stations", []):
+		if st is Dictionary and str(st.get("label", "")) == "THE LID":
+			has_lid = true
+			break
+	if has_lid:
+		var mid := (LID_TOP + LID_BOTTOM) * 0.5
+		var rc := _rift_centre(mid)
+		_squeezes.append({"name": "the Lid", "pos": Vector3(rc.x, mid, rc.y), "top": LID_TOP, "bottom": LID_BOTTOM,
+				"r": 0.0, "layer": true, "open": false})
+	for z in _burrow_zones:
+		var nm := str(z.get("name", ""))
+		if nm == "Burrow Mouth" or nm == "Breathing Room":
+			_squeezes.append({"name": "the " + nm, "pos": _v(z["center"]), "top": float(z["top"]),
+					"bottom": float(z["floor"]), "r": float(z["radius"]), "layer": false, "open": true})
+	for s in L.get("squeezes", []):
+		var e := _nc_squeeze_entry(s)
+		if not e.is_empty():
+			_squeezes.append(e)
+	# the part boundaries: the rift-wide layers, merged where they overlap or lie within 30 m
+	var layers: Array = []
+	for q in _squeezes:
+		if bool(q["layer"]):
+			layers.append([float(q["top"]), float(q["bottom"]), str(q["name"])])
+	layers.sort_custom(func(a, b): return float(a[0]) > float(b[0]))
+	_bounds.clear()
+	for ly in layers:
+		if not _bounds.is_empty() and float(ly[0]) >= float(_bounds[-1]["bottom"]) - 30.0:
+			var b: Dictionary = _bounds[-1]
+			b["bottom"] = minf(float(b["bottom"]), float(ly[1]))
+			b["top"] = maxf(float(b["top"]), float(ly[0]))
+			(b["names"] as Array).append(ly[2])
+		else:
+			_bounds.append({"top": float(ly[0]), "bottom": float(ly[1]), "names": [ly[2]]})
+	_nest_top = -1e9
+	for z2 in L.get("zones", []):
+		if z2 is Dictionary and int(z2.get("biome", -1)) == 8:
+			_nest_top = maxf(_nest_top, float(z2.get("top", -1e9)))
+	var sq: PackedStringArray = []
+	for q2 in _squeezes:
+		sq.append(str(q2["name"]))
+	var bl: PackedStringArray = []
+	for b2 in _bounds:
+		var bn: PackedStringArray = []
+		for x in b2["names"]:
+			bn.append(str(x))
+		bl.append("%s [%.1f, %.1f]" % [" + ".join(bn), float(b2["bottom"]), float(b2["top"])])
+	print("[Underdark] parts: %d (boundaries: %s; squeezes: %s)" % [_bounds.size() + 1,
+			", ".join(bl) if not bl.is_empty() else "none", ", ".join(sq) if not sq.is_empty() else "none"])
+
+
+func _nc_squeeze_entry(s) -> Dictionary:
+	# one wave 2 layout squeeze (7A.4): {"name", "pos": [x, y, z], "top", "bottom", "r", "layer", "open"}
+	var p = null
+	if s is Dictionary and (s as Dictionary).has("pos"):
+		p = s["pos"]
+	elif s is Array:
+		p = s
+	if not (p is Array) or (p as Array).size() < 3:
+		return {}
+	var pos := Vector3(float(p[0]), float(p[1]), float(p[2]))
+	var d: Dictionary = s if s is Dictionary else {}
+	var top := float(d.get("top", pos.y + 4.0))
+	var bottom := float(d.get("bottom", pos.y - 4.0))
+	return {"name": str(d.get("name", "a squeeze")), "pos": pos, "top": maxf(top, bottom), "bottom": minf(top, bottom),
+			"r": float(d.get("r", 12.0)), "layer": bool(d.get("layer", true)), "open": bool(d.get("open", false))}
+
+
+func squeezes() -> Array:
+	# 7A public: every squeeze (built in + layout), {"name", "pos": Vector3, "top", "bottom", "r", "layer", "open"}
+	return _squeezes.duplicate(true)
+
+
+func part_of(p: Vector3) -> int:
+	# 7A public: 0 at the top, +1 for every boundary p is fully below (inside one: the part above)
+	var k := 0
+	for b in _bounds:
+		if p.y < float(b["bottom"]):
+			k += 1
+	return k
+
+
+func part_band(k: int) -> Array:
+	# 7A public: [ceiling y, floor y] of part k: the bottom of the boundary above it (1e9 for the top
+	# part) and the top of the boundary below it (-1e9 for the last part)
+	var ceil_y := 1e9 if k <= 0 or k > _bounds.size() else float(_bounds[k - 1]["bottom"])
+	var floor_y := -1e9 if k < 0 or k >= _bounds.size() else float(_bounds[k]["top"])
+	return [ceil_y, floor_y]
+
+
+func in_squeeze(p: Vector3) -> bool:
+	# 7A public: inside a squeeze: a boundary layer, a squeeze's own region (its chamber or passage)
+	# or anywhere in the Burrows
+	for b in _bounds:
+		if p.y <= float(b["top"]) and p.y >= float(b["bottom"]):
+			return true
+	for q in _squeezes:
+		var r := float(q["r"])
+		if r <= 0.0:
+			continue
+		var c: Vector3 = q["pos"]
+		if p.y <= float(q["top"]) + 4.0 and p.y >= float(q["bottom"]) - 4.0 and Vector2(p.x - c.x, p.z - c.z).length() < r:
+			return true
+	return _in_burrows(p, false)
+
+
+func follower_part() -> int:
+	# 7A public: the part the current Follower belongs to
+	return _fol_part
+
+
+func _part_clamp_band(t: Array, home: Vector3) -> Array:
+	# 7A: a territorial hunting band [top, bottom] clipped to the part of its home
+	return _part_clamp_k(t, part_of(home))
+
+
+func _part_clamp_k(t: Array, k: int) -> Array:
+	# CoopSync hunts players within 15 m of a territorial band, so the band stops 15 m inside the
+	# part's ceiling and floor: it never reaches a player in, or past, a squeeze. Unchanged with no
+	# squeezes, or when the clip would leave less than 20 m.
+	var top := float(t[0])
+	var bottom := float(t[1])
+	if _bounds.is_empty():
+		return [top, bottom]
+	var band := part_band(k)
+	var t2 := minf(top, float(band[0]) - 15.0) if float(band[0]) < 1e8 else top
+	var b2 := maxf(bottom, float(band[1]) + 15.0) if float(band[1]) > -1e8 else bottom
+	if t2 - b2 < 20.0:
+		return [top, bottom]
+	return [t2, b2]
+
+
+func _nc_part_strayed(n2) -> bool:
+	# 7A: a creature of one part found 6 m past its part's ceiling or floor, or inside a creature-proof
+	# passage (the Burrows' tubes have their own test in _update_centipedes)
+	var k := int(n2.get_meta("zonda_part", -1))
+	if k < 0 or _squeezes.is_empty():
+		return false
+	var p: Vector3 = n2.global_position
+	var band := part_band(k)
+	if p.y > float(band[0]) + 6.0 or p.y < float(band[1]) - 6.0:
+		return true
+	for q in _squeezes:
+		if bool(q["open"]) or float(q["r"]) <= 0.0:
+			continue
+		var c: Vector3 = q["pos"]
+		if p.y <= float(q["top"]) + 4.0 and p.y >= float(q["bottom"]) - 4.0 and Vector2(p.x - c.x, p.z - c.z).length() < float(q["r"]):
+			return true
+	return false
+
+
+func _nc_spot_in_part(p: Vector3) -> bool:
+	# 7A: a Follower spot must lie in the Follower's own part and outside every squeeze
+	if _squeezes.is_empty():
+		return true
+	return part_of(p) == _fol_part and not in_squeeze(p)
+
+
+func _part_has_follower(k: int) -> bool:
+	# a part that is only the Nest (its ceiling at or below the Nest's top + 60 m) has none of its own
+	if k <= 0 or _nest_top < -1e8:
+		return true
+	return float(part_band(k)[0]) > _nest_top + 60.0
+
+
+func _fol_cid() -> String:
+	return "follower:0" if _fol_part == 0 else "follower_p%d:0" % _fol_part
+
+
+func _nc_parts_check(players: Array) -> void:
+	# 7A (host, every 2 s): the whole team is past the squeeze below the Follower's part: that part's
+	# Follower stays behind and the team's part wakes its own. A stored event, so a death reload, a
+	# late joiner and a new authority all agree.
+	if _bounds.is_empty() or _idol_taken:
+		return
+	var rear := 1 << 20
+	for p in players:
+		var q: Vector3 = (p as Node3D).global_position
+		if in_squeeze(q):
+			return                           # someone is still in the squeeze: nothing changes yet
+		rear = mini(rear, part_of(q))
+	if rear >= (1 << 20) or rear <= _fol_part:
+		return
+	var key := "cent_follower_p%d" % rear
+	if CoopSync.map_event_done(key):
+		_nc_part_release("follower_p%d" % rear)
+		return
+	CoopSync.map_event(key, {"id": "follower_p%d" % rear, "part": rear})
+
+
+func _nc_part_release(id: String) -> void:
+	# 7A (authority): the part named by id ("follower_p<k>") gets its own Follower. The one the team
+	# left behind stays in its part; the new one is placed by _follower_tick at a station of this
+	# part, above and behind the team, out of sight (C8). Never the old one teleported through rock.
+	_real_spawned[id] = true
+	var k := int(id.substr(10))
+	if k <= _fol_part:
+		return
+	var old := _fol_part
+	if is_instance_valid(_follower):
+		_nc_leave_behind(_follower, old)
+	_follower = null
+	_fol_part = k
+	_burrow_parked = false
+	_follow_best = 1e9
+	_follow_stall = 0.0
+	print("[Underdark] part %d: the Follower stays behind in part %d; %s" % [k, old,
+			"this part wakes its own behind the team" if _part_has_follower(k) and not _idol_taken else "the Nest's own hunters wait below"])
+
+
+func _nc_leave_behind(n: Node3D, k: int) -> void:
+	# 7A: a Follower stays in its own part as a territorial hunter of it: it hunts only players in
+	# that part, sleeps when nobody is within 190 m, and the squeeze leashes it; home is where it was
+	# left. One parked outside the Burrows wakes into that role (the territorial loop decides).
+	if not is_instance_valid(n) or _left_behind.has(n):
+		return
+	var home: Vector3 = n.global_position if n.is_inside_tree() else n.position
+	var band := _part_clamp_k([1e9, -1e9], k)
+	n.set_meta("zonda_territory", [float(band[0]), float(band[1])])
+	n.set_meta("zonda_home", home)
+	n.set_meta("zonda_part", k)
+	if n.process_mode == Node.PROCESS_MODE_DISABLED and not _in_grace(n):
+		n.process_mode = Node.PROCESS_MODE_INHERIT
+		n.visible = true
+	_territorial.append([n, float(band[0]), float(band[1]), home])
+	_left_behind.append(n)
+	print("[Underdark] the Follower %s stays behind in part %d, home %s" % [str(n.get_meta("zonda_cid", "?")), k, str(home)])
+
+
+func _nc_adopt_follower(n: Node3D) -> void:
+	# the layout's Follower belongs to part 0. Spawned after the team moved on (a death reload, a new
+	# authority), it is left behind at once, and the current part's Follower stays the hunter.
+	n.set_meta("zonda_part", 0)
+	if _fol_part > 0:
+		_nc_leave_behind(n, 0)
+	else:
+		_follower = n
+
+
+func _nc_finale_prep(fin_pos: Vector3) -> void:
+	# 7A: the finale's Follower belongs to the Nest's part. A Follower of an earlier part (the team is
+	# past a squeeze above the Nest) stays behind there instead of being swapped for it.
+	if not _bounds.is_empty() and is_instance_valid(_follower) and part_of(fin_pos) != _fol_part:
+		_nc_leave_behind(_follower, _fol_part)
+		_follower = null
+
+
+func _follower_tick(players: Array, in_burrows: bool) -> void:
+	# The Follower, every 2 s while the idol is not taken. The v4.9.1 rules: it cannot squeeze into
+	# the Burrows, so while anyone is inside it waits outside, asleep and hidden, and once everyone is
+	# out it comes back behind and above the team; far behind or stalled, it is put back behind the
+	# team. 7A: all of it within its own part (_nc_parts_check hands over at a squeeze). C8: a
+	# re-seat only while neither the old one nor the new spot is seen (else it waits 2 s).
+	_nc_parts_check(players)
+	if not _part_has_follower(_fol_part):
+		return                               # a Nest-only part: its hunters are the finale's
+	var need := false
+	if in_burrows and not _burrow_parked and is_instance_valid(_follower):
+		_burrow_parked = true
+		_follower.process_mode = Node.PROCESS_MODE_DISABLED
+		_follower.visible = false
+	elif _burrow_parked and not in_burrows:
+		_burrow_parked = false
+		if is_instance_valid(_follower):
+			_follower.process_mode = Node.PROCESS_MODE_INHERIT
+			_follower.visible = true
+		need = true
+	if not _burrow_parked and not in_burrows:
+		if not is_instance_valid(_follower) or not _follower.is_inside_tree():
+			need = true
+		elif not _in_grace(_follower):
+			var d := 1e9
+			for p in players:
+				d = minf(d, (p as Node3D).global_position.distance_to(_follower.global_position))
+			if d < _follow_best - 6.0:
+				_follow_best = d
+				_follow_stall = 0.0
+			else:
+				_follow_stall += 2.0
+			if d > fol_far or (_follow_stall >= fol_stall and d > fol_stall_d):
+				need = true
+			elif _in_burrows(_follower.global_position, true):
+				need = true                  # it got into a tube after all: put it back outside
+		if need:
+			var spot = _follower_spot(players)
+			if spot is Vector3 and _nc_follower_swap_ok(spot):
+				var first := not is_instance_valid(_follower)
+				_replace_follower(spot, _fol_cid(), spot - Vector3(0.0, 2.0, 0.0))
+				if first and _fol_part > 0:
+					print("[Underdark] part %d: its own Follower woke at %s" % [_fol_part, str(spot)])
+
+
+# ---- parts.flag (developer, one-shot): owner decision 7A end to end
+var _parts_test := false
+var _pt_t := 0.0
+var _pt_step := 0
+var _pt_at := 0.0
+var _pt_pass := 0
+var _pt_fail: Array = []
+var _pt_old: Node3D = null
+
+
+func _pt_check(name: String, ok: bool, detail: String = "") -> void:
+	if ok:
+		_pt_pass += 1
+		print("[PARTS] PASS %s %s" % [name, detail])
+	else:
+		_pt_fail.append(name)
+		print("[PARTS] FAIL %s %s" % [name, detail])
+
+
+func _pt_cp(id: int) -> Vector3:
+	for k in L.get("checkpoints", []):
+		if int(k["id"]) == id:
+			return _v(k["pos"])
+	return Vector3.ZERO
+
+
+func _pt_band(cid: String):
+	for e in _territorial:
+		if is_instance_valid(e[0]) and str((e[0] as Node).get_meta("zonda_cid", "")) == cid:
+			return [float(e[1]), float(e[2])]
+	return null
+
+
+func _update_parts_test(delta: float) -> void:
+	# developer test (maps/underdark/parts.flag; solo host; the test save folder; you cannot die
+	# during it): the squeezes and parts, the territorial bands clipped at the Lid, then the Follower
+	# wakes in part 0, you pass the Lid, the part 0 Follower stays behind and part 1 wakes its own
+	# behind you. Done marker "[PARTS] test done".
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	_pt_t += delta
+	match _pt_step:
+		0:
+			if _pt_t < 3.0:
+				return
+			c.prevent_player_death = true
+			for q in _squeezes:
+				print("[PARTS] squeeze %s at %s top %.1f bottom %.1f r %.1f layer=%s open=%s" % [str(q["name"]), str(q["pos"]),
+						float(q["top"]), float(q["bottom"]), float(q["r"]), str(q["layer"]), str(q["open"])])
+			_pt_check("boundaries", _bounds.size() >= 1, "%d" % _bounds.size())
+			_pt_check("part of THE FAR WALL", part_of(_pt_cp(2)) == 0, "%d" % part_of(_pt_cp(2)))
+			_pt_check("part of FUNGAL HOLLOW", part_of(_pt_cp(4)) == 1, "%d" % part_of(_pt_cp(4)))
+			var bm := Vector3.ZERO
+			for z in _burrow_zones:
+				if str(z.get("name", "")) == "Burrow Mouth":
+					bm = _v(z["center"]) + Vector3.UP * 1.0
+			_pt_check("the Burrow Mouth is a squeeze", in_squeeze(bm), str(bm))
+			_pt_check("FUNGAL HOLLOW is not", not in_squeeze(_pt_cp(4) + Vector3.UP), "")
+			_release_centipedes("cen1", true)
+			_release_centipedes("cen3", true)
+			var b1 = _pt_band("cen1:0")
+			var b3 = _pt_band("cen3:0")
+			_pt_check("cen1 hunts above the Lid only", b1 is Array and float(b1[1]) - 15.0 >= LID_TOP - 0.01, str(b1))
+			_pt_check("cen3 hunts below the Lid only", b3 is Array and float(b3[0]) + 15.0 <= LID_BOTTOM + 0.01, str(b3))
+			debug_park(_pt_cp(0) + Vector3.UP * 0.3)
+			_pt_step = 1
+			_pt_at = _pt_t
+		1:
+			if _pt_t - _pt_at < 1.5:
+				return
+			if not _spawned_cents.has("follower"):
+				CoopSync.map_event("cent_follower", {"id": "follower"})
+			_pt_step = 2
+			_pt_at = _pt_t
+		2:
+			if _pt_t - _pt_at < 2.5:
+				return
+			_pt_old = _follower
+			var cid0 := str(_follower.get_meta("zonda_cid", "")) if is_instance_valid(_follower) else "none"
+			_pt_check("part 0 Follower", is_instance_valid(_follower) and _fol_part == 0 and cid0 == "follower:0", "part %d cid %s" % [_fol_part, cid0])
+			debug_park(_pt_cp(4) + Vector3.UP * 0.3)
+			_pt_step = 3
+			_pt_at = _pt_t
+		3:
+			if _fol_part < 1 and _pt_t - _pt_at < 8.0:
+				return
+			_pt_check("past the Lid: part 1", _fol_part == 1 and CoopSync.map_event_done("cent_follower_p1"), "part %d" % _fol_part)
+			var old_ok: bool = is_instance_valid(_pt_old) and _left_behind.has(_pt_old) and int(_pt_old.get_meta("zonda_part", -1)) == 0 and _pt_old.has_meta("zonda_territory")
+			_pt_check("the part 0 Follower stays behind", old_ok, str(_pt_old.get_meta("zonda_territory", null)) if is_instance_valid(_pt_old) else "gone")
+			debug_park(_pt_cp(5) + Vector3.UP * 0.3)
+			debug_look(_pt_cp(5) + Vector3(0.0, -20.0, 0.0))     # look down: the spots above stay unseen
+			_pt_step = 4
+			_pt_at = _pt_t
+		4:
+			var f_ok: bool = is_instance_valid(_follower) and str(_follower.get_meta("zonda_cid", "")) == "follower_p1:0"
+			if not f_ok and _pt_t - _pt_at < 16.0:
+				return
+			var fp: Vector3 = _follower.global_position if is_instance_valid(_follower) else Vector3.ZERO
+			_pt_check("part 1 wakes its own Follower", f_ok and part_of(fp) == 1 and not in_squeeze(fp), "at %s" % str(fp))
+			var op: Vector3 = _pt_old.global_position if is_instance_valid(_pt_old) else Vector3.ZERO
+			_pt_check("the old one was never moved past the Lid", is_instance_valid(_pt_old) and _pt_old != _follower and op.y > LID_TOP - 6.0, "old at %s" % str(op))
+			c.prevent_player_death = false
+			_parts_test = false
+			var total := _pt_pass + _pt_fail.size()
+			if _pt_fail.is_empty():
+				print("[PARTS] test done %d/%d PASS" % [_pt_pass, total])
+			else:
+				print("[PARTS] test done %d/%d FAIL: %s" % [_pt_pass, total, ", ".join(_pt_fail)])
+			if CoopSync.has_method("guestsim_test_done"):
+				CoopSync.call("guestsim_test_done", "PARTS")
 
 
 func _update_reload_test(delta: float) -> void:
@@ -2419,7 +3809,7 @@ func _update_debug_finale(delta: float) -> void:
 			c.velocity = Vector3.ZERO
 			c.teleport_to_location(_altar_pos + Vector3(-9.0, 1.6, 0.0))
 			c.PlayerCamera.set_camera_rotation(Vector3(0.0, deg_to_rad(-90.0), 0.0))
-			CoopSync.map_event("idol", {"by": CoopSync.local_name, "id": CoopSync.my_id()})
+			CoopSync.map_event("idol", {"by": CoopSync.local_name, "id": _my_sid()})
 		return
 	if _dbg_fin_t > 34.0 and _dbg_fin_t - delta <= 34.0:
 		for f in L.get("finish", []):
@@ -2478,7 +3868,7 @@ func _update_spider_test(delta: float) -> void:
 	if not is_instance_valid(c) or not c.is_inside_tree():
 		return
 	_sp_t += delta
-	const NAMES := ["wait", "click", "drop", "hang (bite window)", "climb", "rest"]
+	const NAMES := ["wait", "click", "drop", "hang (bite window)", "climb", "rest", "scatter"]
 	for sp in _spiders:
 		if not is_instance_valid(sp):
 			continue
@@ -2610,12 +4000,14 @@ func _follower_spot(players: Array):
 			continue
 		if pos.distance_to(mouth) < 60.0:
 			continue                          # never put it back at the Burrows' door
+		if not _nc_spot_in_part(pos + Vector3(0, 3.0, 0)):
+			continue                          # 7A: only in the Follower's own part, never in a squeeze
 		var dmin := 1e9
 		for p in players:
 			dmin = minf(dmin, (p as Node3D).global_position.distance_to(pos))
-		if dmin < 70.0 or dmin > 150.0:
+		if dmin < fol_min or dmin > fol_max or dmin < 25.0:
 			continue
-		var score := absf(dmin - 100.0)
+		var score := absf(dmin - fol_aim)
 		if score < best_score:
 			best_score = score
 			best = pos + Vector3(0, 3.0, 0)
@@ -2646,7 +4038,7 @@ func coop_map_event(key: String, data: Dictionary, replay: bool = false) -> void
 	# frame is also in the stored events _reapply_events replays a frame later: the second apply
 	# changes nothing and plays nothing. The repeatable kinds (never stored) are not gated, and
 	# cent_ has its own guard (_spawned_cents) because a reload may deliberately skip it.
-	var once := not (key.begins_with("crumble_") or key.begins_with("drop_") or key.begins_with("bell_") or key.begins_with("stalkbite_") or key.begins_with("cbite_") or key.begins_with("cent_"))
+	var once := not _is_repeatable(key)
 	if once and _applied.has(key):
 		return
 	if key.begins_with("cent_") and replay and _cent_below_reload(str(data.get("id", key.substr(5)))):
@@ -2659,7 +4051,25 @@ func coop_map_event(key: String, data: Dictionary, replay: bool = false) -> void
 	_replaying = was
 
 
+func _is_repeatable(key: String) -> bool:
+	# C1: the core non-persistent kinds plus every prefix a module registered as repeatable
+	for p in REPEATABLE_CORE:
+		if key.begins_with(p):
+			return true
+	for p2 in _rep_prefixes:
+		if key.begins_with(str(p2)):
+			return true
+	return false
+
+
 func _apply_event(key: String, data: Dictionary, replay: bool) -> void:
+	# module routes first (register_events), then the map's own kinds
+	for r in _ev_routes:
+		if key.begins_with(str(r[0])):
+			var h: Callable = r[1]
+			if h.is_valid():
+				h.call(key, data, replay)
+			return
 	if key.begins_with("cent_"):
 		_release_centipedes(str(data.get("id", key.substr(5))), replay)
 	elif key.begins_with("crumble_"):
@@ -2705,22 +4115,19 @@ func _apply_event(key: String, data: Dictionary, replay: bool) -> void:
 		for s in _stalkers:
 			if s.id == sid:
 				if not CoopSync.map_is_authority():
-					s.body.position = s.rp_pos   # the bite comes from where it really is, never from afar
+					s.nc_guest_snap(s.rp_pos)    # the bite comes from where it really is, never from afar
 					s.bite_sounds()          # the host already heard it when it bit
-				if int(data.get("who", -1)) == CoopSync.my_id():
+				if _is_me_sid(data.get("who", "")):
 					s.bite_local()
 	elif key.begins_with("cbite_"):
-		# a v4.9 creature bit someone (sent by the authority, never stored)
+		# a creature bit someone (sent by the authority, never stored)
 		var bid := key.substr(6)
 		var src = _bite_source(bid)
 		if src != null:
 			if not CoopSync.map_is_authority():
 				src.play_bite(bid)           # the host already showed it when it bit
-			var w = data.get("who", -1)
-			if w != null and CoopSync.my_id() != 0 and int(w) == CoopSync.my_id():
-				if _debug_spider and Creatures.is_spider_id(bid):
-					print("[SPIDER] bitten by %s" % bid)
-				Creatures.bite_local(src.bite_origin(bid), float(data.get("dmg", 8.0)), Creatures.is_spider_id(bid))
+			if _is_me_sid(data.get("who", "")):
+				_cbite_mine(src, bid, data)
 	elif key.begins_with("husk_"):
 		_husk_event(data, replay)
 	elif key.begins_with("pfdrop_"):
@@ -2735,6 +4142,7 @@ func _apply_event(key: String, data: Dictionary, replay: bool) -> void:
 		if _is_me(data) and not _idol_taken:
 			_idol_mine = true             # this player carries it out (shown in their hand)
 		_finale(str(data.get("by", "")), replay)
+		_call_features("on_idol_taken", [data, replay])
 	elif key.begins_with("barsink_"):
 		var bi := int(key.substr(8))
 		for b in _bars:
@@ -2748,6 +4156,25 @@ func _apply_event(key: String, data: Dictionary, replay: bool) -> void:
 			_finish(str(data.get("by", "")), data)
 
 
+func _cbite_mine(src: Object, bid: String, data: Dictionary) -> void:
+	# a bite addressed to this player. The victim's own screen is the judge (C6): out of reach
+	# here ("at" + "r"), or my own lantern lit / lit in the last 0.3 s ("nl"), and it misses.
+	var o := _bite_opts(src, bid)
+	var at = data.get("at", null)
+	if at is Array and (at as Array).size() >= 3 and data.has("r"):
+		var c = Game.climber
+		if is_instance_valid(c) and c.is_inside_tree():
+			var reach: float = float(data.get("r", 0.0)) + 1.0
+			if (c.global_position as Vector3).distance_to(_v(at)) > reach:
+				return
+	if bool(data.get("nl", false)) and _lantern_shields_me():
+		return
+	if _debug_spider and Creatures.is_spider_id(bid):
+		print("[SPIDER] bitten by %s" % bid)
+	var push: float = float(data.get("push", o["push"]))
+	_bite_local(src.bite_origin(bid), float(data.get("dmg", 8.0)), bool(o["heavy"]), push)
+
+
 func _reapply_events() -> void:
 	var ev := CoopSync.map_events_for(scene_file_path)
 	for k in ev.keys():
@@ -2757,6 +4184,8 @@ func _reapply_events() -> void:
 
 func coop_map_stream(d: Dictionary, _ts: int) -> void:
 	# host -> guests: stalker positions and plate state
+	if not _nc_stream_fresh(d, _ts):
+		return                             # no-clip C7: a reordered (late) unreliable packet
 	if d.has("st"):
 		var arr: Array = d["st"]
 		for i in mini(arr.size(), _stalkers.size()):
@@ -2775,6 +4204,9 @@ func coop_map_stream(d: Dictionary, _ts: int) -> void:
 				var pup = (by_cid as Dictionary).get(str(e[0]))
 				if is_instance_valid(pup) and pup.has_method("coop_note_cries"):
 					pup.coop_note_cries(str(e[0]), int(e[1]), int(e[2]))
+				# C14: the hiss counter (a pale centipede driven off by a beam) rides here only
+				if (e as Array).size() > 3 and is_instance_valid(pup) and pup.has_method("coop_note_hiss"):
+					pup.call("coop_note_hiss", str(e[0]), int(e[3]))
 	if d.has("cx") and not CoopSync.map_is_authority():
 		# v4.9 creatures (see _stream_creatures)
 		var cx = d["cx"]
@@ -2788,6 +4220,18 @@ func coop_map_stream(d: Dictionary, _ts: int) -> void:
 						_spiders[i].remote_state(spa[i])
 			if cx.has("wh") and cx["wh"] is Array and is_instance_valid(_husk):
 				_husk.remote_state(cx["wh"])
+			# v5.0 module streams (register_stream)
+			for e2 in _streams:
+				if cx.has(e2[0]):
+					var rc: Callable = e2[2]
+					if rc.is_valid():
+						rc.call(cx[e2[0]])
+	if not CoopSync.map_is_authority():
+		for e3 in _top_streams:
+			if d.has(e3[0]):
+				var rt: Callable = e3[1]
+				if rt.is_valid():
+					rt.call(d[e3[0]])
 	if d.has("open"):
 		for gid in d["open"]:
 			if _gates.has(str(gid)) and not _gates[str(gid)].is_open:
@@ -2906,7 +4350,8 @@ func _stream_cries(delta: float) -> void:
 		# cry, or that first cry only seeds its counter and stays silent
 		if not is_instance_valid(cent) or not cent.has_meta("zonda_cid"):
 			continue
-		cr.append([str(cent.get_meta("zonda_cid")), int(cent.get_meta("zonda_cry", 0)), int(cent.get_meta("zonda_roar", 0))])
+		cr.append([str(cent.get_meta("zonda_cid")), int(cent.get_meta("zonda_cry", 0)), int(cent.get_meta("zonda_roar", 0)),
+				int(cent.get_meta("zonda_hiss", 0))])
 	if not cr.is_empty():
 		CoopSync.map_stream({"cr": cr})
 
@@ -2975,6 +4420,12 @@ func _ensure_clock() -> void:
 		return
 	if CoopSync.current_scene_path() != scene_file_path:
 		return                        # the autoload has not caught up with this scene yet
+	# C12: not before CoopSync has seen this load, and never while the saved-run prompt is up. On
+	# CONTINUE the saved clock is then the only one; on NEW RUN the clock starts as the panel closes.
+	if not _load_announced:
+		return
+	if CoopSync.has_method("save_prompt_open") and bool(CoopSync.call("save_prompt_open")):
+		return
 	_clock_asked = true
 	CoopSync.map_event("clock", {"t0": Time.get_unix_time_from_system()})
 
@@ -2998,12 +4449,26 @@ func _finish(by: String, data: Dictionary = {}) -> void:
 	if _finished:
 		return
 	_finished = true
+	# C10: the modules first (the omen trophy, the idol's last word), then banner and card
+	_call_features("on_finish", [by, data])
 	if is_instance_valid(_brood):
 		_brood.clear()                   # out in the light the brood is done
 	Game.audio.play_player_healed()
 	var secs: int = int(data.get("secs", _run_secs()))
-	var carrier: String = _idol_by if _idol_by != "" else by
-	CoopSync.show_banner("%s carried the idol out. THE UNDERDARK is cleared in %s." % [carrier, _fmt_time(secs)], 10.0)
+	var carrier := ""
+	for f in _feature_nodes():
+		if f.has_method("carrier_name"):
+			var cn := str(f.call("carrier_name"))
+			if cn != "":
+				carrier = cn
+				break
+	if carrier == "":
+		carrier = _idol_by if _idol_by != "" else by
+	var suffix := ""
+	for f2 in _feature_nodes():
+		if f2.has_method("finish_suffix"):
+			suffix += str(f2.call("finish_suffix"))
+	CoopSync.show_banner("%s carried the idol out. THE UNDERDARK is cleared in %s%s." % [carrier, _fmt_time(secs), suffix], 10.0)
 	_show_end_card(secs, carrier)
 	await get_tree().create_timer(10.0).timeout
 	if not is_inside_tree():
@@ -3055,6 +4520,14 @@ func _show_end_card(secs: int, carrier: String) -> void:
 		["Relics found this run   %d" % relics_run, 11, Color(0.92, 0.88, 0.8)],
 		["Your deaths   %d" % deaths, 11, Color(0.92, 0.88, 0.8)],
 	]
+	# modules' rows ([text, font_size, Color]) after "Your deaths"
+	for f in _feature_nodes():
+		if f.has_method("end_rows"):
+			var extra = f.call("end_rows")
+			if extra is Array:
+				for er in extra:
+					if er is Array and (er as Array).size() >= 3:
+						rows.append(er)
 	for r in rows:
 		var lb := Label.new()
 		lb.text = str(r[0])
@@ -3170,6 +4643,7 @@ func _process(delta: float) -> void:
 			if is_instance_valid(e[0]):
 				e[0].light_energy = e[1] * 0.7 * k
 	_update_lod(delta)
+	_nc_tick(delta)                    # no-clip C1: the extra solid centres (host)
 	_update_light_budget(delta)
 	_update_environment(delta)
 	_update_plates(delta)
@@ -3194,6 +4668,9 @@ func _process(delta: float) -> void:
 		_apply_rope_gold()          # the game rebuilds its rope materials now and then
 	_update_hud()
 	_check_lava()
+	_update_bedrolls(delta)
+	if _perf_mode != "":
+		_update_perf_test(delta)
 	if _debug_tour:
 		_update_tour(delta)
 	if _debug_finale:
@@ -3206,6 +4683,8 @@ func _process(delta: float) -> void:
 		_update_spider_test(delta)
 	if _debug_oil:
 		_update_oil_test(delta)
+	if _parts_test:
+		_update_parts_test(delta)
 
 
 func _update_lod(delta: float) -> void:
@@ -3242,8 +4721,12 @@ func _update_lod(delta: float) -> void:
 				if ((q as Vector3) - (entry[1] as Vector3)).length() - float(entry[2]) < 60.0:
 					solid = 1
 					break
+			if solid == 0 and _nc_near_centre(entry):
+				solid = 1                      # no-clip C1: the Stalkers and the keep points too
 		if body.collision_layer != solid:
 			body.collision_layer = solid
+			if solid == 1:
+				_nc_stamp[_lod_index] = Engine.get_physics_frames()   # C1: solid for queries 2 frames on
 
 
 func _setup_environment() -> void:
@@ -3252,12 +4735,14 @@ func _setup_environment() -> void:
 		return
 	_env = we.environment.duplicate()
 	we.environment = _env
+	_ssao_la_base = _env.ssao_light_affect
 	_env.fog_depth_begin = 14.0
 	_env.fog_depth_end = 400.0
 	_look_from = _look_of(0)
 	_look_to = _look_of(0)
 	_apply_look(_look_of(0))
 	_make_sky_lights()
+	_apply_lantern_shading()
 
 
 func _make_sky_lights() -> void:
@@ -3329,14 +4814,42 @@ func _announce_light() -> void:
 
 func _apply_material_brightness() -> void:
 	var f := float(BRIGHT_ALB[clampi(_bright_i, 0, BRIGHT_ALB.size() - 1)])
+	# every albedo change re-solves the sheen from the biome's ratio, so a lit wall looks equally
+	# glossy in LANTERN (darker albedo) and NORMAL (design 1.2)
 	for i in mini(LOOKS.size(), _wall_mat.size()):
+		var sh: Array = ROCK_SHEEN[clampi(i, 0, ROCK_SHEEN.size() - 1)]
 		var wl: float = WALL_LIFT[i] * f
-		(_wall_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][0].r * wl, LOOKS[i][0].g * wl, LOOKS[i][0].b * wl)
+		var wm := _wall_mat[i] as StandardMaterial3D
+		wm.albedo_color = Color(LOOKS[i][0].r * wl, LOOKS[i][0].g * wl, LOOKS[i][0].b * wl)
+		wm.metallic_specular = sheen_spec(float(sh[0]), float(sh[1]), ROCK_TEX_WALL * _lum_lin(wm.albedo_color))
 		var fll: float = FLOOR_LIFT[i] * f
-		(_floor_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][1].r * fll, LOOKS[i][1].g * fll, LOOKS[i][1].b * fll)
+		var fm := _floor_mat[i] as StandardMaterial3D
+		fm.albedo_color = Color(LOOKS[i][1].r * fll, LOOKS[i][1].g * fll, LOOKS[i][1].b * fll)
+		fm.metallic_specular = sheen_spec(float(sh[0]), float(sh[1]), ROCK_TEX_FLOOR * _lum_lin(fm.albedo_color))
 	for i in _dress_mat.size():
+		var sh2: Array = ROCK_SHEEN[clampi(i, 0, ROCK_SHEEN.size() - 1)]
 		var dl: float = 0.62 * (0.7 + 0.3 * f)
-		(_dress_mat[i] as StandardMaterial3D).albedo_color = Color(LOOKS[i][0].r * dl, LOOKS[i][0].g * dl, LOOKS[i][0].b * dl)
+		var dm := _dress_mat[i] as StandardMaterial3D
+		dm.albedo_color = Color(LOOKS[i][0].r * dl, LOOKS[i][0].g * dl, LOOKS[i][0].b * dl)
+		dm.metallic_specular = sheen_spec(float(sh2[0]), float(sh2[1]), ROCK_TEX_WALL * _lum_lin(dm.albedo_color))
+	_apply_lantern_shading()
+
+
+func _apply_lantern_shading() -> void:
+	# LANTERN light (F5 = 0) only: wrap diffuse on the rock floors, and in NORMAL PIXELS the AO's hold on direct light
+	# capped like ULTRA HD's. NORMAL light gets the plain diffuse and the game's AO back; ULTRA HD's AO is gfx.gd's.
+	var lantern := _bright_i == 0
+	for fm in _floor_mat:
+		(fm as StandardMaterial3D).diffuse_mode = BaseMaterial3D.DIFFUSE_LAMBERT_WRAP if lantern else BaseMaterial3D.DIFFUSE_BURLEY
+	if _env == null or _ssao_la_base < 0.0 or _gfx_is_ultra():
+		return
+	_env.ssao_light_affect = minf(_ssao_la_base, LANTERN_SSAO_LIGHT_MAX) if lantern else _ssao_la_base
+
+
+static func _lum_lin(c: Color) -> float:
+	# linear luminance of an sRGB albedo colour
+	var l := c.srgb_to_linear()
+	return 0.2126 * l.r + 0.7152 * l.g + 0.0722 * l.b
 
 
 func _set_bright(i: int, save: bool = true) -> void:
@@ -3514,6 +5027,22 @@ func _build_hud() -> void:
 	ls.font_color = Color(0.9, 0.85, 0.75)
 	_hud_depth.label_settings = ls
 	_hud.add_child(_hud_depth)
+	# C9: a second, smaller line for the modules (the altar, the omens, ...)
+	_hud_sub = Label.new()
+	_hud_sub.anchor_left = 1.0
+	_hud_sub.anchor_right = 1.0
+	_hud_sub.offset_left = -380.0
+	_hud_sub.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_hud_sub.offset_right = -10.0
+	_hud_sub.offset_top = 22.0
+	_hud_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	var ls2 := LabelSettings.new()
+	ls2.font_size = 9
+	ls2.outline_size = 3
+	ls2.outline_color = Color.BLACK
+	ls2.font_color = Color(0.78, 0.72, 0.62)
+	_hud_sub.label_settings = ls2
+	_hud.add_child(_hud_sub)
 	add_child(_hud)
 
 
@@ -3527,11 +5056,28 @@ func _update_hud() -> void:
 	var relics := ""
 	if CoopSync.cosmetics > 0:
 		relics = "   relics %d/3" % CoopSync.cosmetics
-	# from Fungal Hollow down, the team's idol fragments (synced map events, so everyone agrees)
+	# from Fungal Hollow down, the team's idol fragments (synced map events, so everyone agrees);
+	# once the idol is carried, the idol module's own word replaces the count
 	var idol := ""
 	if b >= 2 or _frag_count > 0:
 		idol = "   idol %d/3" % _frag_count
+	var f_idol = feature("idol")
+	if f_idol != null and f_idol.has_method("hud_idol"):
+		var hi := str(f_idol.call("hud_idol")).strip_edges()
+		if hi != "":
+			idol = "   " + hi               # stripped above: hud_idol() brings its own "   " lead
 	_hud_depth.text = "%s   %d m   %s%s%s" % [bname, int(-c.global_position.y), _fmt_time(secs), idol, relics]
+	# the modules' line, 5 times a second (it does not need every frame)
+	_hud_sub_t -= get_process_delta_time()
+	if _hud_sub != null and _hud_sub_t <= 0.0:
+		_hud_sub_t = 0.2
+		var parts: PackedStringArray = []
+		for f in _feature_nodes():
+			if f.has_method("hud_line"):
+				var s := str(f.call("hud_line"))
+				if s != "":
+					parts.append(s)
+		_hud_sub.text = "   ".join(parts)
 
 
 # ------------------------------------------------------------------ debug tour (screenshots)
@@ -3589,6 +5135,563 @@ func _update_tour(delta: float) -> void:
 		Input.parse_input_event(ev)
 	if _tour_f6 and _weather != null:
 		print("[Underdark] tour specks: enabled=%s level=%.2f biome=%d" % [str(_weather.enabled), _weather.level, _weather.cur])
+
+
+# ------------------------------------------------------------------ v5.0 feature modules
+
+func _load_features() -> void:
+	# each module is a separate file, loaded at runtime: a missing file, or one that does not
+	# compile, is skipped with one line and the map runs on without it
+	for entry in FEATURES:
+		var key := str(entry[0])
+		var path := DIR + str(entry[1])
+		if not FileAccess.file_exists(path):
+			print("[Underdark] feature %s missing, skipped" % key)
+			continue
+		var s = load(path)
+		if s == null or not (s is Script) or not (s as Script).can_instantiate():
+			print("[Underdark] feature %s missing, skipped (it did not load)" % key)
+			continue
+		var f = (s as Script).new()
+		if not (f is Node):
+			print("[Underdark] feature %s missing, skipped (not a Node)" % key)
+			continue
+		var fn := f as Node
+		fn.name = "Feature_" + key
+		_features[key] = fn
+		if fn.has_method("setup"):
+			fn.call("setup", self)          # BEFORE add_child: it registers its events and streams
+		add_child(fn)
+		print("[Underdark] feature %s loaded" % key)
+
+
+func feature(key: String) -> Node:
+	# the module, or null
+	var f = _features.get(key)
+	if f != null and is_instance_valid(f):
+		return f
+	return null
+
+
+func _feature_nodes() -> Array:
+	# the loaded modules in FEATURES order
+	var out: Array = []
+	for entry in FEATURES:
+		var f := feature(str(entry[0]))
+		if f != null:
+			out.append(f)
+	return out
+
+
+func _call_features(method: String, args: Array = []) -> void:
+	for f in _feature_nodes():
+		if f.has_method(method):
+			f.callv(method, args)
+
+
+func register_events(prefixes: Array, handler: Callable, repeatable: bool) -> void:
+	# handler.call(key, data, replay) for every event whose key starts with one of the prefixes.
+	# Checked before the map's own kinds. repeatable = never once-gated (non-persistent kinds).
+	for p0 in prefixes:
+		var p := str(p0)
+		var bad := ""
+		if p == "":
+			bad = "(empty)"
+		for b in BUILTIN_PREFIXES:
+			if p.begins_with(b) or str(b).begins_with(p):
+				bad = b
+		for k in BUILTIN_KEYS:
+			if str(k).begins_with(p):
+				bad = k
+		for r in _ev_routes:
+			if p.begins_with(str(r[0])) or str(r[0]).begins_with(p):
+				bad = "registered " + str(r[0])
+		if bad != "":
+			push_error("[Underdark] register_events: prefix '%s' overlaps '%s', refused" % [p, bad])
+			continue
+		_ev_routes.append([p, handler, repeatable])
+		if repeatable:
+			_rep_prefixes.append(p)
+
+
+func register_stream(key: String, send: Callable, recv: Callable) -> void:
+	# a "cx" key the authority streams at 10 Hz in its own message; guests get recv.call(v)
+	if key in ["b", "sp", "wh"] or key == "":
+		push_error("[Underdark] register_stream: cx key '%s' is reserved, refused" % key)
+		return
+	for e in _streams:
+		if str(e[0]) == key:
+			push_error("[Underdark] register_stream: cx key '%s' registered twice, refused" % key)
+			return
+	_streams.append([key, send, recv])
+
+
+func register_top_stream(key: String, recv: Callable) -> void:
+	# a top-level map_stream key the module sends itself (CoopSync.map_stream({key: v}))
+	if key in ["st", "pl", "open", "closed", "cr", "cx", "vc"] or key == "":
+		push_error("[Underdark] register_top_stream: key '%s' is reserved, refused" % key)
+		return
+	_top_streams.append([key, recv])
+
+
+func register_bites(prefix: String, src: Object) -> void:
+	# bite ids starting with prefix belong to src (bite_origin, play_bite, optional bite_opts);
+	# its "bit" signal is connected here
+	if prefix == "" or src == null:
+		push_error("[Underdark] register_bites: empty prefix or source, refused")
+		return
+	_bite_srcs.append([prefix, src])
+	if src.has_signal("bit") and not src.is_connected("bit", _on_creature_bit):
+		src.connect("bit", _on_creature_bit)
+
+
+func register_threats(src: Object) -> void:
+	# src.threat_positions() feeds the heartbeat only (C8)
+	if src != null and not _threat_srcs.has(src):
+		_threat_srcs.append(src)
+
+
+func add_light(pos: Vector3, color: Color, energy: float, rng: float, fill: bool = false) -> OmniLight3D:
+	# a map light that joins the 64-light budget, also when made after the first 1.5 s
+	var o := _add_light(pos, color, energy, rng, fill)
+	if _lights_collected:
+		manage_light(o)
+	return o
+
+
+func manage_light(l: OmniLight3D) -> void:
+	# join the light budget (zonda_managed, distance fade), now or at the collection
+	if not is_instance_valid(l) or l.has_meta("zonda_keep"):
+		return
+	if not _lights_collected:
+		if not _late_lights.has(l):
+			_late_lights.append(l)
+		return
+	_prep_managed(l)
+	if not _managed_lights.has(l):
+		_managed_lights.append(l)
+
+
+func ext_instance(rel: String, dim: float) -> Node3D:
+	return _ext_instance(rel, dim)
+
+
+func add_box_body(center: Vector3, size: Vector3, yaw: float) -> StaticBody3D:
+	# a stone box you can stand on and hook, like the props' boxes
+	var body := StaticBody3D.new()
+	body.collision_layer = 1
+	body.physics_material_override = load("res://physics_materials/stone.tres")
+	var cs := CollisionShape3D.new()
+	var sh := BoxShape3D.new()
+	sh.size = size
+	cs.shape = sh
+	body.add_child(cs)
+	body.position = center
+	body.rotation.y = yaw
+	add_child(body)
+	return body
+
+
+func place_bedroll(floor_pos: Vector3, yaw: float) -> Node3D:
+	# a bedroll by a camp fire. Far chunks have no collision, and a body added in _ready is not
+	# queryable on its first frame, so it waits hidden at the unsnapped point and is snapped to
+	# the floor (and shown) once the local player is within 120 m (_update_bedrolls, 2 Hz)
+	var n := _ext_instance(BEDROLL, 0.28)
+	if n == null:
+		return null
+	n.scale = Vector3.ONE * BEDROLL_SCALE
+	n.rotation.y = yaw
+	n.position = floor_pos
+	n.visible = false
+	for gi in n.find_children("*", "GeometryInstance3D", true, false):
+		(gi as GeometryInstance3D).visibility_range_end = 120.0
+		(gi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
+		(gi as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(n)
+	_bedrolls.append([n, floor_pos])
+	return n
+
+
+func _update_bedrolls(delta: float) -> void:
+	if _bedrolls.is_empty():
+		return
+	_bed_t -= delta
+	if _bed_t > 0.0:
+		return
+	_bed_t = 0.5
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	var me: Vector3 = c.global_position
+	var keep: Array = []
+	var space := get_world_3d().direct_space_state
+	for e in _bedrolls:
+		var n = e[0]
+		if not is_instance_valid(n):
+			continue
+		var p: Vector3 = e[1]
+		if p.distance_to(me) > 120.0:
+			keep.append(e)
+			continue
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 2.0, p + Vector3.DOWN * 2.0, 1))
+		if not hit.is_empty():
+			(n as Node3D).position = Vector3(p.x, (hit["position"] as Vector3).y, p.z)
+		(n as Node3D).visible = true          # no floor within 2 m: it stays at the unsnapped point
+	_bedrolls = keep
+
+
+func register_flask(f: Node3D) -> void:
+	# a module's oil flask: hidden again by coop_oil_imported like the map's own
+	if is_instance_valid(f) and not _flasks.has(f):
+		_flasks.append(f)
+
+
+func coop_oil_imported() -> void:
+	# lantern.import_oil calls this (a SAVE continue, a guest's oilset): flasks whose id is now in
+	# this player's taken set hide at once
+	var n := 0
+	for f in _flasks:
+		if is_instance_valid(f) and f.has_method("_refresh_taken"):
+			f.call("_refresh_taken")
+			if f.has_method("is_taken") and bool(f.call("is_taken")):
+				n += 1
+	print("[Underdark] oil imported: %d of %d flasks now taken" % [n, _flasks.size()])
+
+
+func soft_dot() -> Texture2D:
+	return _soft_dot()
+
+
+func dev_flag(name: String) -> Variant:
+	# null when maps/underdark/<name> is absent; else its stripped text, and the file in the game
+	# folder is deleted (one-shot, like autostart.flag)
+	if not FileAccess.file_exists(DIR + name):
+		return null
+	var t := FileAccess.get_file_as_string(DIR + name).strip_edges()
+	DirAccess.remove_absolute(OS.get_executable_path().get_base_dir() + "/mods-unpacked/zonda-CoopSync/maps/underdark/" + name)
+	return t
+
+
+func _use_test_files() -> void:
+	# 1A.2: the test save folder and the test cosmetics file (B1, idempotent)
+	if CoopSync.has_method("use_test_files"):
+		CoopSync.call("use_test_files")
+	else:
+		push_warning("[Underdark] CoopSync.use_test_files() is missing: a test flag runs without the test files")
+
+
+func debug_park(pos: Vector3) -> void:
+	var c = Game.climber
+	if is_instance_valid(c) and c.is_inside_tree():
+		_debug_park(c, pos)
+
+
+func debug_look(target: Vector3) -> void:
+	# a test's camera: look from where the player stands toward target
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	var eye: Vector3 = c.global_position + Vector3.UP * 1.5
+	var dir := target - eye
+	if dir.length() < 0.01:
+		return
+	dir = dir.normalized()
+	c.PlayerCamera.set_camera_rotation(Vector3(asin(clampf(dir.y, -1.0, 1.0)), atan2(-dir.x, -dir.z), 0.0))
+	c.global_rotation = Vector3.ZERO
+
+
+func debug_shot(path: String) -> void:
+	_debug_shot(path)
+
+
+func set_light_mode(i: int) -> void:
+	# tests: LANTERN (0) or NORMAL (1) without saving the player's look cfg
+	_set_bright(i, false)
+
+
+func load_announced() -> bool:
+	return _load_announced
+
+
+func _announce_load() -> void:
+	# C12: tell CoopSync this map is up (fresh = no map state for it before this load). On a fresh
+	# authority load with an unfinished save it shows the prompt, synchronously.
+	if CoopSync.has_method("map_loaded"):
+		CoopSync.call("map_loaded", scene_file_path, _oil_fresh)
+	_load_announced = true
+
+
+func hint_once(key: String, text: String, secs: float = 6.0) -> void:
+	# a local banner, once per map load per key
+	if _hints.has(key):
+		return
+	_hints[key] = true
+	CoopSync.show_banner(text, secs)
+
+
+func add_text(pos: Vector3, r: float, text: String) -> Area3D:
+	# a lore text shown when the local player walks within r (the game's own text area)
+	var a := _area(pos, r, PLAYER_LAYER)
+	a.set_script(load(TEXT_AREA_SCRIPT))
+	a.set("displayed_text", text)
+	add_child(a)
+	return a
+
+
+func biome_at(p: Vector3) -> int:
+	return _biome_at(p)
+
+
+func enclosed(p: Vector3) -> bool:
+	return _enclosed(p)
+
+
+func nearest_threat(p: Vector3) -> float:
+	return _nearest_threat(p)
+
+
+func checkpoint_label(id: int) -> String:
+	for c in L.get("checkpoints", []):
+		if int(c["id"]) == id:
+			return str(c.get("label", ""))
+	return ""
+
+
+func run_secs() -> int:
+	return _run_secs()
+
+
+func idol_is_taken() -> bool:
+	return _idol_taken
+
+
+func is_finished() -> bool:
+	return _finished
+
+
+func idol_prey() -> Node3D:
+	# the idol holder the Nest hunts (the idol module), or null
+	var f := feature("idol")
+	if f != null and f.has_method("holder_node"):
+		var n = f.call("holder_node")
+		if n is Node3D and is_instance_valid(n):
+			return n
+	return null
+
+
+func set_idol_mine(on: bool) -> void:
+	# the idol module moves the idol between hands; _update_held_idol shows it and re-asserts
+	# CoopSync.idol_carrier while it is mine
+	_idol_mine = on
+	if on:
+		_held_failed = false
+		return
+	CoopSync.idol_carrier = false
+	if is_instance_valid(_held_idol):
+		_held_idol.queue_free()
+	_held_idol = null
+
+
+func new_brood(data: Dictionary) -> Node3D:
+	# a Creatures.Brood set up with data (not added to the tree): points, count, tag, hunts_idol
+	var br = Creatures.Brood.new()
+	br.setup(data, self)
+	return br
+
+
+func make_egg_cluster(pos: Vector3, n: int, s: float) -> Node3D:
+	# the Nest's glowing egg clutch, anywhere (not added to the tree)
+	var eg := EggCluster.new()
+	eg.setup({"pos": [pos.x, pos.y, pos.z], "n": n, "s": s})
+	return eg
+
+
+func coop_filter_spawn(p: Vector3) -> Vector3:
+	# CoopSync passes every respawn candidate through the modules' spawn_filter
+	var q := p
+	for f in _feature_nodes():
+		if f.has_method("spawn_filter"):
+			var r = f.call("spawn_filter", q)
+			if r is Vector3:
+				q = r
+	return q
+
+
+func coop_loop_ghost(key: String, data: Dictionary) -> void:
+	# loopback: a request addressed to the Ghost ("to": "777"); each module may answer it
+	for f in _feature_nodes():
+		if f.has_method("loop_ghost"):
+			f.call("loop_ghost", key, data)
+
+
+func coop_guestsim_done() -> Array:
+	# guest simulation playback is over: every module reports ("PASS ...", "FAIL ...", "SKIP ...").
+	# Each line is printed as "[GUESTSIM] <feature> <line>"; the raw lines are returned (CoopSync
+	# counts the ones that begin with PASS or FAIL), and guestsim_lines keeps the prefixed copies.
+	guestsim_lines.clear()
+	var raw: Array = []
+	for entry in FEATURES:
+		var f := feature(str(entry[0]))
+		if f == null or not f.has_method("guestsim_report"):
+			continue
+		var lines = f.call("guestsim_report")
+		if lines is Array:
+			for ln in lines:
+				var line := "%s %s" % [str(entry[0]), str(ln)]
+				guestsim_lines.append(line)
+				raw.append(str(ln))
+				print("[GUESTSIM] " + line)
+	return raw
+
+
+# ------------------------------------------------------------------ perf.flag (C17)
+
+static func script_has_fn(s, fn: String) -> bool:
+	# a (static) function on a script loaded at runtime (1A.1: check, then callv)
+	if s == null or not (s is Script):
+		return false
+	for m in (s as Script).get_script_method_list():
+		if str(m.get("name", "")) == fn:
+			return true
+	return false
+
+
+func _rift_centre(y: float) -> Vector2:
+	var R = load(DIR + "rift.gd") if FileAccess.file_exists(DIR + "rift.gd") else null
+	if script_has_fn(R, "center"):
+		var v = R.callv("center", [y])
+		if v is Vector2:
+			return v
+	# the same formula as GEN's Rift.center (rift.gd ports it)
+	return Vector2(430.0 + 42.0 * sin(y / 470.0 + 1.3) + 16.0 * sin(y / 190.0 + 0.4),
+			20.0 + 42.0 * cos(y / 420.0) + 16.0 * sin(y / 230.0 + 2.0))
+
+
+func _update_perf_test(delta: float) -> void:
+	# developer A/B (maps/underdark/perf.flag "on" | "off"): the same spot, the same 20 s sample.
+	# "on" first wakes the early brood (omen test API) so the new creatures are all running.
+	var c = Game.climber
+	if not is_instance_valid(c) or not c.is_inside_tree():
+		return
+	_perf_t += delta
+	var om := feature("omen")
+	match _perf_phase:
+		0:
+			if _perf_t < 4.0:
+				return
+			c.prevent_player_death = true
+			_perf_t = 0.0
+			_perf_phase = 4
+			if _perf_mode == "on":
+				if om != null and om.has_method("test_light") and om.has_method("test_seal"):
+					om.call("test_light", "brood")
+					_perf_phase = 1
+				else:
+					print("[PERF] the omen module's test API is missing: no early brood")
+		1:
+			if _perf_t >= 1.0:
+				om.call("test_seal")
+				_perf_t = 0.0
+				_perf_phase = 2
+		2:
+			if _perf_t >= 1.0:
+				var cen = om.call("egg_centroid") if om.has_method("egg_centroid") else null
+				if cen is Vector3:
+					var arr := Vector3(571.0, -830.7, -20.2)
+					var flat := Vector3(arr.x - cen.x, 0.0, arr.z - cen.z).normalized()
+					var at: Vector3 = Vector3(cen.x, arr.y + 1.0, cen.z) + flat * 20.0
+					_debug_park(c, at)
+					debug_look(cen)
+					print("[PERF] parked 20 m from the shelf eggs at %s" % str(at))
+					_perf_phase = 3
+				else:
+					print("[PERF] no egg centroid: skipping the brood")
+					_perf_phase = 4
+				_perf_t = 0.0
+		3:
+			var hatched: bool = om != null and om.has_method("hatched") and bool(om.call("hatched"))
+			if hatched:
+				print("[PERF] the early brood hatched: 3 s, then the sampling spot")
+				_perf_t = 0.0
+				_perf_phase = 8
+			elif _perf_t > 25.0:
+				print("[PERF] no hatch after 25 s")
+				_perf_t = 0.0
+				_perf_phase = 4
+		8:
+			if _perf_t >= 3.0:
+				_perf_t = 0.0
+				_perf_phase = 4
+		4:
+			_debug_park(c, PERF_SPOT + Vector3(0, 1.0, 0))
+			var ctr := _rift_centre(PERF_SPOT.y)
+			debug_look(Vector3(ctr.x, PERF_SPOT.y + 1.5, ctr.y))
+			_perf_t = 0.0
+			_perf_phase = 5
+		5:
+			if _perf_t >= 5.0:
+				_perf_t = 0.0
+				_perf_samples.clear()
+				_perf_proc.clear()
+				_perf_mod.clear()
+				_perf_phase = 6
+		6:
+			_perf_samples.append(delta)
+			_perf_proc.append(Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0)
+			_perf_mod.append(float(CoopSync.perf_mod_usec_avg))
+			if _perf_t >= 20.0:
+				_perf_report()
+				_perf_phase = 7
+				c.prevent_player_death = false          # a test never leaves the player invincible
+
+
+func _perf_report() -> void:
+	var total := 0.0
+	for d in _perf_samples:
+		total += float(d)
+	var n := _perf_samples.size()
+	var fps: float = float(n) / total if total > 0.0 else 0.0
+	var sorted_ms: Array = []
+	for d2 in _perf_samples:
+		sorted_ms.append(float(d2) * 1000.0)
+	sorted_ms.sort()
+	var p95: float = float(sorted_ms[clampi(int(n * 0.95), 0, n - 1)]) if n > 0 else 0.0
+	var proc := 0.0
+	for x in _perf_proc:
+		proc += float(x)
+	var modu := 0.0
+	for y in _perf_mod:
+		modu += float(y)
+	_update_creature_centres()
+	var base := 0
+	for cent in Game.centipedes:
+		if is_instance_valid(cent) and cent.is_inside_tree() and not bool(cent.get("coop_puppet")) and cent.process_mode != Node.PROCESS_MODE_DISABLED:
+			base += 1
+	for s in _stalkers:
+		if is_instance_valid(s.body):
+			base += 1
+	var threats := 0
+	for src in _threat_srcs:
+		if is_instance_valid(src) and src.has_method("threat_positions"):
+			var tl = src.call("threat_positions")
+			if tl is Array:
+				threats += (tl as Array).size()
+	var shades := -1
+	for e in _streams:
+		if str(e[0]) == "sh" and (e[1] as Callable).is_valid():
+			shades = 0
+			var v = (e[1] as Callable).call()
+			if v is Array:
+				for x2 in v:
+					if not _stream_empty([x2]):
+						shades += 1
+	print("[PERF] mode=%s fps_avg=%.1f frame_ms_p95=%.2f process_ms_avg=%.2f mod_usec_avg=%.0f centres=%d base=%d threats=%d shades_awake=%d" % [
+		_perf_mode, fps, p95, proc / maxf(1.0, float(_perf_proc.size())), modu / maxf(1.0, float(_perf_mod.size())),
+		_creature_centres.size(), base, threats, shades])
+	if _creature_centres.size() == base:
+		print("[PERF] test done 1/1 PASS")
+	else:
+		print("[PERF] test done 0/1 FAIL: centres")
 
 
 # ------------------------------------------------------------------ helpers
@@ -3792,12 +5895,71 @@ class U:
 		parent.add_child(p)
 		return p
 
+	static func sid(v) -> String:
+		# a Steam id as a String (R1): CoopSync.sid when B1's version has it, else the same rule
+		# (String as is, int as digits, anything else "": a JSON-mangled float never matches)
+		if CoopSync.has_method("sid"):
+			return str(CoopSync.call("sid", v))
+		if v is String:
+			return v
+		if v is int:
+			return str(v)
+		return ""
+
 	static func cave_bus() -> StringName:
 		# v4.9: creature, trap and ambience sounds ring through the soundscape's cave reverb
 		# ("ZondaCave" sends to MainBus, so the game's volume slider still governs them)
 		if AudioServer.get_bus_index("ZondaCave") >= 0:
 			return &"ZondaCave"
 		return &"MainBus"
+
+
+class NCX:
+	# v5.0 no-clip: the helper noclip.gd (another group's file, spec section 2) loaded once at
+	# runtime, never preloaded. Missing, every call below answers "as before" (Rule K).
+	const PATH := "res://mods-unpacked/zonda-CoopSync/maps/underdark/noclip.gd"
+	static var _s = null
+	static var _tried := false
+
+	static func nc():
+		if not _tried:
+			_tried = true
+			if FileAccess.file_exists(PATH) or ResourceLoader.exists(PATH):
+				_s = load(PATH)
+			if _s == null:
+				push_warning("[CLIP] noclip.gd missing: creatures move as before")
+		return _s
+
+	static func on() -> bool:
+		# the guard is on: THE UNDERDARK is live, the helper loaded, and the probe's baseline is not running
+		var s = nc()
+		return s != null and bool(s.call("is_enabled"))
+
+	static func measuring() -> bool:
+		var s = nc()
+		return s != null and bool(s.call("measuring"))
+
+	static func note(kind: String, key: String, n: int = 1) -> void:
+		# a fairness or guard counter (a no-op unless the probe is measuring)
+		var s = nc()
+		if s != null:
+			s.call("note", kind, key, n)
+
+	static func ray(space, a: Vector3, b: Vector3) -> Dictionary:
+		# the helper's both-faces ray: {} when clear, else {"position", "normal" (facing a), "d"}
+		var s = nc()
+		if s == null:
+			return {}
+		var r = s.call("ray", space, a, b)
+		return r if r is Dictionary else {}
+
+	static func seen(points: Array) -> bool:
+		var s = nc()
+		return s != null and bool(s.call("seen_by_any", points))
+
+	static func solid(p: Vector3, r: float) -> bool:
+		var s = nc()
+		return s == null or bool(s.call("solid_at", p, r))
 
 
 # ================================================================== trap classes
@@ -4541,6 +6703,22 @@ class Stalker extends Node3D:
 	# A centipede-shaped thing that only moves while nobody on the team can see it.
 	# Host runs it and streams its position; guests just show it. It hunts the nearest
 	# living player inside its zone, bites, and retreats to the dark.
+	# v5.0 no-clip (spec 3.C: C2, C3, C4, C6), only while the guard is on (NCX.on(); else the v4.9.1
+	# code below runs unchanged): the brain runs on the physics tick and walks a proven floor with the
+	# helper's walk_step (L-shaped steps, the full 2.2 m step up, never off a drop over 12 m), rides at
+	# its measured head height, pitches to the slope, turns its snout clear of walls, and bites only
+	# along a clear line. WHEN it moves is unchanged: only while unseen, or while it retreats. Its
+	# segments follow a distance trail of foot points. Guests draw it 150 ms behind the host, between
+	# two packets (no extrapolation), and snap only on a declared teleport or a gap too big to glide.
+	const STEP_UP := 2.2
+	const SEG_GAP := 1.8                   # segment i sits SEG_GAP x (i + 1) m back along the trail
+	const CRUMB := 0.5
+	const HEAD_CANDS := [Vector2(0, 0), Vector2(20, 0), Vector2(40, 0), Vector2(60, 0), Vector2(0, 30),
+			Vector2(0, -30), Vector2(0, 60), Vector2(0, -60)]   # head clearance: (pitch up, yaw), degrees
+	const PLAYER_HALF_H := 0.78            # a climber's capsule centre (its node) is this far above its feet
+	# the head's half width at its own centre height (mesh x 1.4, z -1..+1): the probe's cheeks. The 1.71 of
+	# its box is the mandible tips, 4.25 m ahead and 1 m down (head_half_w: the guard's side rays)
+	const CHEEK_W := 1.40
 	var id := ""
 	var home: Vector3
 	var zone: Array = []
@@ -4562,6 +6740,48 @@ class Stalker extends Node3D:
 	var rp_pos: Vector3
 	var rp_yaw := 0.0
 	var retreat := 0.0
+	# v5.0 no-clip
+	var tp := 0                            # its teleports (streamed: a guest snaps once per change)
+	var lift := 1.23                       # the body rides this far above its foot (the head's bottom + 0.1)
+	var seg_lift := 0.70
+	var head_fwd := 4.83
+	var head_up := 1.61
+	var head_node: Node3D = null
+	var f := Vector3.ZERO                  # the foot: a floor point whose headroom was proven (host)
+	var _f_ok := false
+	var _via := Vector3.ZERO
+	var _goal := Vector3.ZERO
+	var _prof: Dictionary = {}
+	var _st: Dictionary = {}
+	var _plan_since := 1.0
+	var _plan_last := 0.0                  # the last accepted step's length (0: refused or none)
+	var _pause_t := 0.0
+	var _refused_t := 0.0
+	var _need_home := false
+	var _home_try_t := 0.0
+	var _seen_n := 0
+	var _seen_c := false
+	var _floor_n := Vector3.UP
+	var _pitch := 0.0
+	var _hc_i := 0
+	var _hc_try := 0
+	var _hc_mode := 0
+	var _hc_scan := 0
+	var _hc_ok := 0.0
+	var _hc_t := 0.0
+	var _hc_ang := Vector2.ZERO
+	var _nc_was := false
+	var _crumbs: Array = []                # foot points, newest first, one per 0.5 m
+	var _g_pk: Array = []                  # guest: [arrival ms, pos, yaw, tp, pitch], the last 6
+	var _g_tp := -1
+	var _g_hold := false
+	var _g_catch := false
+	var _g_jump := 0                       # guest: its own declared snaps (no clear way to glide), added to tp
+	var _tgt_feet := 0.0                   # host: the target's feet (a player's node is 0.78 m above them)
+	var _face := Vector3.ZERO              # host: the flat heading it walks when that is not its target's
+	var head_half_w := 1.68                # the head's widest half width (the guard's side rays)
+	var _part := -2                        # host: its den's part of the map (7A), -1 when the map does not tell
+	var _w0 := -1.0                        # host: the passage width where it stands (per plan, when asked)
 
 	func setup(s: Dictionary) -> void:
 		id = str(s["id"])
@@ -4578,6 +6798,7 @@ class Stalker extends Node3D:
 			var h: Node3D = head_ps.instantiate()
 			h.scale = Vector3.ONE * 1.4
 			body.add_child(h)
+			head_node = h
 		for i in 9:
 			if seg_ps:
 				var sg: Node3D = seg_ps.instantiate()
@@ -4611,6 +6832,8 @@ class Stalker extends Node3D:
 		l.shadow_enabled = false
 		body.add_child(l)
 		rp_pos = home
+		_nc_measure()
+		add_to_group("zonda_nc")
 
 	func _in_zone(p: Vector3) -> bool:
 		for z in zone:
@@ -4639,24 +6862,26 @@ class Stalker extends Node3D:
 				return true
 		return false
 
-	func _seen_by_teammate(rp: Node3D) -> bool:
+	func _seen_by_teammate(rp: Node3D, at = null) -> bool:
 		# a teammate's real view: camera yaw and pitch from their state packet, from their eyes.
 		# An older build sends no pitch: then the old yaw-only test from the knight's body.
+		# at: where it stands at the v4.9.1 body height (no-clip), else its drawn body
+		var bp: Vector3 = at if at is Vector3 else body.position
 		var cy = rp.get("cam_yaw")
 		var cp = rp.get("cam_pitch")
 		if cy == null or cp == null:
 			var fwd0: Vector3 = -rp.global_basis.z
-			var to0: Vector3 = (body.position + Vector3.UP * 1.7) - rp.global_position
+			var to0: Vector3 = (bp + Vector3.UP * 1.7) - rp.global_position
 			var d0: float = to0.length()
 			if d0 < 100.0 and fwd0.dot(to0 / maxf(d0, 0.01)) > 0.5:
-				var ray := PhysicsRayQueryParameters3D.create(rp.global_position + Vector3.UP * 1.5, body.position + Vector3.UP * 1.7, 1)
+				var ray := PhysicsRayQueryParameters3D.create(rp.global_position + Vector3.UP * 1.5, bp + Vector3.UP * 1.7, 1)
 				return get_world_3d().direct_space_state.intersect_ray(ray).is_empty()
 			return false
 		var fwd: Vector3 = -Basis.from_euler(Vector3(float(cp), float(cy), 0.0)).z
 		var eye: Vector3 = rp.global_position + Vector3.UP * 1.55
 		if rp.has_method("eye_position"):
 			eye = rp.call("eye_position")
-		return _seen_from(eye, fwd, body.position)
+		return _seen_from(eye, fwd, bp)
 
 
 	func _floor_under(p: Vector3) -> float:
@@ -4668,8 +6893,12 @@ class Stalker extends Node3D:
 
 	func _process(delta: float) -> void:
 		bite_cd = maxf(0.0, bite_cd - delta)
+		var nc := NCX.on()
 		if CoopSync.map_is_authority():
-			_think(delta)
+			if not nc:
+				_think(delta)                  # guard on: the brain runs on the physics tick (C2, R15)
+		elif nc:
+			_nc_guest(delta)
 		else:
 			# while this guest is watching it, it holds still on this screen (the host stops it
 			# too, a packet later); small corrections happen only while nobody here looks
@@ -4682,7 +6911,16 @@ class Stalker extends Node3D:
 				body.position = body.position.lerp(rp_pos, clampf(delta * 10.0, 0.0, 1.0))
 				body.rotation.y = lerp_angle(body.rotation.y, rp_yaw, clampf(delta * 8.0, 0.0, 1.0))
 		_update_segments(delta)
+		if nc:
+			_nc_head(delta)
+		elif _nc_was:
+			_nc_off()
+		_nc_was = nc
 		_local_sounds(delta)
+
+	func _physics_process(delta: float) -> void:
+		if CoopSync.map_is_authority() and NCX.on():
+			_think(delta)
 
 	func _local_sounds(delta: float) -> void:
 		# what THIS player hears, host or guest: wet breathing inside 40 m, claws clicking on the
@@ -4709,27 +6947,36 @@ class Stalker extends Node3D:
 		sfx_chomp.play()
 
 	func _think(delta: float) -> void:
+		var nc := NCX.on()
+		# where it stands at the v4.9.1 body height (floor + 0.5): with the guard on the drawn body
+		# rides higher, and the seen test and the bite reach stay exactly what they were
+		var me: Vector3 = _nc_ref() if nc else body.position
 		var players := CoopSync.alive_player_nodes()
 		var nearest: Node3D = null
 		var nd := 1e9
 		for p in players:
 			if not _in_zone(p.global_position):
 				continue
-			var d: float = (p.global_position - body.position).length()
+			if nc and not _nc_may_hunt(p.global_position):
+				continue                       # 7A: nobody in a squeeze, nobody in another part of the map
+			var d: float = (p.global_position - me).length()
 			if d < nd:
 				nd = d
 				nearest = p
 		# seen by the local camera (not a dead host's spectator camera), or by a living teammate's
 		# real view (their camera yaw and pitch, from their eyes)
 		var seen := false
-		var c = Game.climber
-		if is_instance_valid(c) and c.Camera and not c.get("coop_spectating"):
-			seen = _seen_by(body.position, c.Camera)
-		if not seen:
-			for rp in CoopSync.remote_players():
-				if _seen_by_teammate(rp):
-					seen = true
-					break
+		if nc:
+			seen = _nc_seen(me)
+		else:
+			var c = Game.climber
+			if is_instance_valid(c) and c.Camera and not c.get("coop_spectating"):
+				seen = _seen_by(body.position, c.Camera)
+			if not seen:
+				for rp in CoopSync.remote_players():
+					if _seen_by_teammate(rp):
+						seen = true
+						break
 		visible_to_someone = seen
 		# the bell: while it rings the stalker slinks back to its dark
 		if CoopSync.lure_active():
@@ -4737,47 +6984,63 @@ class Stalker extends Node3D:
 		if retreat > 0.0:
 			retreat -= delta
 			target_pos = home
+			_tgt_feet = home.y
 		elif nearest:
 			target_pos = nearest.global_position + Vector3.UP * 0.8
+			_tgt_feet = nearest.global_position.y - PLAYER_HALF_H
 			if not sfx_breath.playing and nd < 40.0:
 				sfx_breath.play()
 		else:
 			target_pos = home
+			_tgt_feet = home.y
 		if not seen or retreat > 0.0:
-			hidden_t += delta
-			var step := speed * delta
-			var to := target_pos - body.position
-			to.y = 0.0                                   # it walks the rock, it does not fly
-			var flat := to.length()
-			var want := body.position
-			if flat > step:
-				want += to / flat * step
-			elif flat > 0.01:
-				want += to
-			var space := get_world_3d().direct_space_state
-			if flat > 0.01:
-				var chest := Vector3.UP * 1.4
-				if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, want + chest, 1)).is_empty():
-					body.position = want
+			if nc:
+				_nc_step(delta)
+			else:
+				hidden_t += delta
+				var step := speed * delta
+				var to := target_pos - body.position
+				to.y = 0.0                                   # it walks the rock, it does not fly
+				var flat := to.length()
+				var want := body.position
+				if flat > step:
+					want += to / flat * step
+				elif flat > 0.01:
+					want += to
+				var space := get_world_3d().direct_space_state
+				if flat > 0.01:
+					var chest := Vector3.UP * 1.4
+					if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, want + chest, 1)).is_empty():
+						body.position = want
+					else:
+						var up_over := want + Vector3.UP * 2.2   # a ledge in the way: try stepping onto it
+						if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, up_over + chest, 1)).is_empty():
+							body.position = up_over
+				var fy := _floor_under(body.position)
+				if fy < -1e8:
+					body.position = home                     # over the void: back to its den
 				else:
-					var up_over := want + Vector3.UP * 2.2   # a ledge in the way: try stepping onto it
-					if space.intersect_ray(PhysicsRayQueryParameters3D.create(body.position + chest, up_over + chest, 1)).is_empty():
-						body.position = up_over
-			var fy := _floor_under(body.position)
-			if fy < -1e8:
-				body.position = home                     # over the void: back to its den
-			else:
-				body.position.y = lerpf(body.position.y, fy + 0.5, clampf(delta * 6.0, 0.0, 1.0))
-			if flat > 0.5:
-				body.rotation.y = atan2(-to.x, -to.z)
+					body.position.y = lerpf(body.position.y, fy + 0.5, clampf(delta * 6.0, 0.0, 1.0))
+				if flat > 0.5:
+					body.rotation.y = atan2(-to.x, -to.z)
 		if nearest and nd < 2.6 and bite_cd <= 0.0 and retreat <= 0.0:
-			bite_cd = 3.0
-			retreat = 4.0
-			bite_sounds()
-			if nearest == Game.climber:
-				bite_local()
-			else:
-				CoopSync.map_event("stalkbite_" + id, {"who": nearest.get("peer_id")}, false)
+			# C2: with the guard on a bite needs a clear line from 1 m above its foot to the victim's
+			# capsule centre (no bite through a shelf). The counters run with the guard off too
+			# (bites_clean: that same line was clear), so the probe's baseline counts the same bites.
+			var clean := true
+			if nc or NCX.measuring():
+				clean = NCX.ray(get_world_3d().direct_space_state, me + Vector3.UP * 0.5, nearest.global_position).is_empty()
+			if clean or not nc:
+				NCX.note("stalker", "bites")
+				if clean:
+					NCX.note("stalker", "bites_clean")
+				bite_cd = 3.0
+				retreat = 4.0
+				bite_sounds()
+				if nearest == Game.climber:
+					bite_local()
+				else:
+					CoopSync.map_event("stalkbite_" + id, {"who": U.sid(nearest.get("peer_id"))}, false)
 
 	func bite_local() -> void:
 		var c = Game.climber
@@ -4791,6 +7054,9 @@ class Stalker extends Node3D:
 		Game.audio.play_player_was_bit()
 
 	func _update_segments(delta: float) -> void:
+		if NCX.on():
+			_nc_segments()
+			return
 		trail.push_front(body.position)
 		trail.pop_back()
 		for i in segs.size():
@@ -4803,11 +7069,646 @@ class Stalker extends Node3D:
 				sg.rotation.y = atan2(-dir.x, -dir.z)
 
 	func state_packet() -> Array:
-		return [body.position.x, body.position.y, body.position.z, body.rotation.y]
+		# [x, y, z, yaw, tp, pitch]: v4.9.1 receivers read the first four; tp and the slope pitch are new
+		return [body.position.x, body.position.y, body.position.z, body.rotation.y, tp, body.rotation.x]
 
 	func remote_state(a: Array) -> void:
 		rp_pos = Vector3(a[0], a[1], a[2])
 		rp_yaw = float(a[3])
+		# C4: the last 6 packets with their arrival times. A new teleport counter, or a gap it could not
+		# have walked (6 m, or 1.5 x its speed over the time between the two packets when that is more:
+		# a lost packet is not a teleport), snaps it at once and restarts its trail
+		var t := int(a[4]) if a.size() > 4 else 0
+		var pch := float(a[5]) if a.size() > 5 else 0.0
+		var now := Time.get_ticks_msec()
+		var snap := _g_tp >= 0 and t != _g_tp
+		var nc := NCX.on()
+		if not _g_pk.is_empty():
+			var last: Array = _g_pk[-1]
+			var dt := float(now - int(last[0])) / 1000.0
+			if (last[1] as Vector3).distance_to(rp_pos) > maxf(6.0, speed * dt * 1.5):
+				snap = true
+			elif not snap and nc and not _nc_l_clear(last[1], rp_pos, true):
+				# the way from the last packet is drawn along the host walk's L (rise first, drop last);
+				# where that L crosses rock (two brain steps in one packet cut a lip), it jumps instead
+				snap = true
+		_g_tp = t
+		if snap:
+			_g_pk.clear()
+			if nc and not _g_hold:
+				_nc_guest_place(rp_pos, rp_yaw, pch)   # (while this guest looks at it, the look's end decides)
+		_g_pk.append([now, rp_pos, rp_yaw, t, pch])
+		if _g_pk.size() > 6:
+			_g_pk.pop_front()
+
+	# ---------------------------------------------------------------- v5.0 no-clip (host)
+
+	func _nc_measure() -> void:
+		# C2: the head's and a segment's real extents (fallbacks: the helper's ENV.stalker), and the
+		# walk profile from them: probes at 0.3 / 1.0 / 1.9 / 2.4 m start in proven headroom, and the
+		# 2.4 m probe makes the full 2.2 m step up usable (spec 2.6)
+		var s = NCX.nc()
+		if s != null:
+			var env = s.call("env", "stalker")
+			if env is Dictionary:
+				lift = float(env.get("lift", lift))
+				head_fwd = float(env.get("head_fwd", head_fwd))
+				head_up = float(env.get("head_up", head_up))
+				head_half_w = float(env.get("head_half_w", head_half_w))
+				seg_lift = float(env.get("seg_below", seg_lift - 0.05)) + 0.05
+		if is_instance_valid(head_node):
+			var hb = _local_aabb(head_node)
+			if hb is AABB and (hb as AABB).size.length() > 0.5:
+				lift = maxf(0.3, -(hb as AABB).position.y) + 0.1
+				head_up = maxf(0.3, (hb as AABB).end.y)
+				head_fwd = maxf(0.5, -(hb as AABB).position.z)
+				head_half_w = maxf(CHEEK_W, maxf(-(hb as AABB).position.x, (hb as AABB).end.x))
+		if not segs.is_empty():
+			var sb = _local_aabb(segs[0])
+			if sb is AABB and (sb as AABB).size.length() > 0.5:
+				seg_lift = maxf(0.1, -(sb as AABB).position.y) + 0.05
+		_prof = {"probes": [0.3, 1.0, 1.9, 2.4], "lead": 0.4, "step_up": STEP_UP, "max_drop": 12.0,
+				"head": maxf(2.5, lift + head_up + 0.05), "min_ny": 0.5, "kind": "stalker"}
+
+	static func _local_aabb(root: Node3D):
+		# every VisualInstance3D under root, in root's frame with root's own rotation and scale (not its
+		# position); null when there is none
+		var out = null
+		for vi in root.find_children("*", "VisualInstance3D", true, false):
+			var xf: Transform3D = (vi as Node3D).transform
+			var p: Node = (vi as Node).get_parent()
+			while p != null and p != root:
+				if p is Node3D:
+					xf = (p as Node3D).transform * xf
+				p = p.get_parent()
+			xf = Transform3D(root.transform.basis, Vector3.ZERO) * xf
+			var a: AABB = xf * (vi as VisualInstance3D).get_aabb()
+			out = a if out == null else (out as AABB).merge(a)
+		return out
+
+	func _nc_ref() -> Vector3:
+		return (f + Vector3.UP * 0.5) if _f_ok else body.position
+
+	func _nc_seen(me: Vector3) -> bool:
+		# the v4.9.1 test (knees, back and head above where it stands, from every living eye),
+		# recomputed every 4th physics tick (30 Hz) and cached in between (C2)
+		_seen_n += 1
+		if _seen_n % 4 != 1:
+			return _seen_c
+		var seen := false
+		var c = Game.climber
+		if is_instance_valid(c) and c.Camera and not c.get("coop_spectating"):
+			seen = _seen_by(me, c.Camera)
+		if not seen:
+			for rp in CoopSync.remote_players():
+				if _seen_by_teammate(rp, me):
+					seen = true
+					break
+		_seen_c = seen
+		return seen
+
+	func _nc_seed(space, top: Vector3, fallback: Vector3) -> void:
+		# the foot: a both-faces ray down from top, taken only with the walk's full headroom above it
+		f = fallback
+		var hit := NCX.ray(space, top, top - Vector3.UP * (lift + 8.0))
+		if not hit.is_empty():
+			var hp: Vector3 = hit["position"]
+			if NCX.ray(space, hp + Vector3.UP * 0.1, hp + Vector3.UP * float(_prof.get("head", 2.9))).is_empty():
+				f = hp
+		_goal = f
+		_via = f
+		_f_ok = true
+
+	func _nc_step(delta: float) -> void:
+		# C2: HOW it moves (when it moves is _think's, unchanged). Plans a step at 30 Hz from a proven
+		# floor point, then walks the planned L path at its full speed every physics tick.
+		hidden_t += delta
+		var S = NCX.nc()
+		var space := get_world_3d().direct_space_state
+		if not _f_ok:
+			_nc_seed(space, home + Vector3.UP * 1.0, home - Vector3.UP * 0.5)
+		if not bool(S.call("solid_at", f, 8.0)):
+			S.call("keep_solid", f)
+			return                             # its rock is not loaded here yet: it holds (spec 2.5)
+		if _need_home:
+			_home_try_t -= delta
+			if _home_try_t <= 0.0:
+				_home_try_t = 0.5
+				_nc_try_home()
+			return                             # found in rock: it holds until nobody sees it
+		var to := target_pos - f
+		to.y = 0.0
+		var flat := to.length()
+		_plan_since += delta
+		_pause_t -= delta
+		# the tick's whole distance (speed x delta): a step that ends mid-tick plans the next one at once
+		# and walks on, so it keeps its full speed (a full step is speed / 30 m: about one plan per 4
+		# ticks); a short last step toward the target plans at most at 30 Hz
+		var budget := speed * delta
+		for _k in 2:
+			if f.distance_to(_goal) < 0.01 and _pause_t <= 0.0:
+				to = target_pos - f              # from where it stands now (a plan can come mid-tick)
+				to.y = 0.0
+				flat = to.length()
+				if flat > 0.05 and (_plan_last >= speed / 30.0 - 0.001 or _plan_since >= (1.0 / 30.0) - delta * 0.5):
+					_plan_since = 0.0
+					_nc_plan(S, space, to, flat)
+			if f.distance_to(_goal) < 0.001 or budget <= 0.001:
+				break
+			if f.distance_to(_via) < 0.01:
+				_via = _goal                   # the corner is reached (a flat step starts at it): on to the goal
+			var r0 := _nc_rem(f)
+			var dv := f.distance_to(_via)
+			f = S.call("l_step", f, _via, _goal, budget)
+			if dv <= budget + 0.001 or f.distance_to(_via) < 0.01:
+				# the corner was reached in this step, or passed (l_step goes on toward the goal with what
+				# is left): kept, the next tick would walk back to it, and it froze after every rise or drop
+				_via = _goal
+			budget -= maxf(0.0, r0 - _nc_rem(f))
+		body.position = f + Vector3.UP * lift
+		if flat > 0.5:
+			# it faces the way it walks: its target, or the side heading _nc_plan took round a wall (facing
+			# the target there put the 4.8 m snout into the wall it was stepping round)
+			var fd: Vector3 = _face if _face.length() > 0.5 else to
+			body.rotation.y = atan2(-fd.x, -fd.z)
+		# the slope pitch: its 4.8 m snout follows the floor along the heading (level in v4.9.1)
+		var fw := Vector3(-sin(body.rotation.y), 0.0, -cos(body.rotation.y))
+		var want := clampf(atan2(-_floor_n.dot(fw), maxf(_floor_n.y, 0.05)), -0.698, 0.698)
+		_pitch = lerpf(_pitch, want, clampf(8.0 * delta, 0.0, 1.0))
+		body.rotation.x = _pitch
+
+	func _nc_rem(p: Vector3) -> float:
+		# what is left of the planned L path from p (the helper's l_step: to the corner, then the goal)
+		if p.distance_to(_via) > 0.01:
+			return p.distance_to(_via) + _via.distance_to(_goal)
+		return p.distance_to(_goal)
+
+	func _nc_plan(S, space, to: Vector3, flat: float) -> void:
+		# straight at the target, then 0.8 and 1.6 rad either side; every heading refused: a 0.5 s
+		# pause (spec 2.6), and after 6 s of refusals in all, home (only while unseen)
+		# The ledge rule compares FEET: a player's node is 0.78 m above them and target_pos 0.8 m above
+		# that, so target_pos.y stopped it under any ledge over 0.62 m, which walk_step climbs up to 2.2 m.
+		if _tgt_feet - f.y > STEP_UP and flat < 2.0:
+			_face = Vector3.ZERO
+			return                             # under a ledge it cannot climb: it waits there and faces it
+		var dir := to / flat
+		var dist := minf(speed / 30.0, flat)
+		_plan_last = 0.0
+		_w0 = -1.0
+		# the first heading whose step its whole head fits (_nc_room 2); else the first that is no worse
+		# for its cheeks than where it stands (1: along a wall it already touches, never into it)
+		var fb: Array = []
+		for a in [0.0, 0.8, -0.8, 1.6, -1.6]:
+			var hd: Vector3 = dir.rotated(Vector3.UP, a)
+			var r = S.call("walk_step", space, f, hd, dist, _prof)
+			if not (r is Dictionary):
+				continue
+			if bool(r.get("ok", false)):
+				var k := _nc_room(space, r["pos"], hd)
+				if k == 2:
+					_nc_take(r, hd, a, dist)
+					return                     # (walk_step itself counts "walk" / "refused" under prof.kind)
+				if k == 1 and fb.is_empty():
+					fb = [r, hd, a]
+				continue                       # 7A: a squeeze, another part, or a gap narrower than its head
+			if str(r.get("why", "")) == "unloaded":
+				S.call("keep_solid", f + dir * dist)
+				_pause_t = 0.25
+				return                         # missing rock is never read as a void
+		if not fb.is_empty():
+			_nc_take(fb[0], fb[1], float(fb[2]), dist)
+			return
+		_pause_t = 0.5
+		_refused_t += 0.5
+		NCX.note("stalker", "paused")
+		if _refused_t >= 6.0:
+			_nc_try_home()
+
+	func _nc_take(r: Dictionary, hd: Vector3, a: float, dist: float) -> void:
+		_goal = r["pos"]
+		_via = r["via"]
+		_floor_n = r.get("n", Vector3.UP)
+		_refused_t = 0.0
+		_plan_last = dist
+		_face = Vector3.ZERO if a == 0.0 else hd
+
+	func _nc_room(space, np: Vector3, hd: Vector3) -> int:
+		# 7A (host, guard on), after walk_step accepted a step to floor point np along the flat heading hd
+		# (it faces hd while it walks it). 0 = refused: into a squeeze (unless it already stands in one),
+		# into another part of the map (unless that is its den's), or into a passage narrower than its head
+		# (3.4 m with the mandibles) and narrower than where it stands. 2 = its cheeks clear the rock
+		# either side. 1 = they do not, but no less than where it stands (it slides along a wall it already
+		# touches rather than stall). walk_step proves only the centre line: these rays are at body height.
+		var m = _nc_map()
+		if m != null:
+			if bool(m.call("in_squeeze", np)) and not bool(m.call("in_squeeze", f)):
+				return 0
+			var pn := int(m.call("part_of", np))
+			if pn != int(m.call("part_of", f)) and pn != _nc_home_part():
+				return 0
+		var c1 := np + Vector3.UP * lift
+		var wd := _nc_width(space, c1)
+		if wd < 2.0 * head_half_w:
+			if _w0 < 0.0:
+				_w0 = _nc_width(space, f + Vector3.UP * lift)
+			if wd < _w0 - 0.05:
+				return 0
+		var s1 := _nc_sides(space, c1, hd)
+		var w := minf(s1.x, s1.y)
+		if w >= CHEEK_W + 0.02:
+			return 2
+		var s0 := _nc_sides(space, f + Vector3.UP * lift, hd)
+		return 1 if w >= minf(s0.x, s0.y) - 0.05 else 0
+
+	func _nc_width(space, c: Vector3) -> float:
+		# the narrowest of four spans through c (both world axes and both diagonals, so a passage entered
+		# at a slant is not measured wide), each side up to the head's whole width + 10 cm (one wall with
+		# open rock beyond is no passage)
+		var reach := 2.0 * head_half_w + 0.1
+		var best := 2.0 * reach
+		for d in [Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0.7071, 0, 0.7071), Vector3(0.7071, 0, -0.7071)]:
+			var v: Vector3 = d
+			var span := 0.0
+			for sgn in [1.0, -1.0]:
+				var h := NCX.ray(space, c, c + v * (reach * float(sgn)))
+				span += reach if h.is_empty() else float(h.get("d", reach))
+			best = minf(best, span)
+		return best
+
+	func _nc_sides(space, c: Vector3, hd: Vector3) -> Vector2:
+		# the free room on either side of c across the flat heading hd (x: its right, y: its left), each up
+		# to the head's half width + 5 cm: where its cheeks go while it faces hd
+		var reach := head_half_w + 0.05
+		var side := Vector3(-hd.z, 0.0, hd.x)
+		if side.length() < 0.001:
+			return Vector2(reach, reach)
+		side = side.normalized()
+		var out := Vector2(reach, reach)
+		var h1 := NCX.ray(space, c, c + side * reach)
+		if not h1.is_empty():
+			out.x = float(h1.get("d", reach))
+		var h2 := NCX.ray(space, c, c - side * reach)
+		if not h2.is_empty():
+			out.y = float(h2.get("d", reach))
+		return out
+
+	func _nc_map():
+		# the map (this node's parent) when it tells the parts apart (7A); else null
+		var m := get_parent()
+		if m != null and m.has_method("part_of") and m.has_method("in_squeeze"):
+			return m
+		return null
+
+	func _nc_home_part() -> int:
+		if _part == -2:
+			var m = _nc_map()
+			_part = int(m.call("part_of", home)) if m != null else -1
+		return _part
+
+	func _nc_may_hunt(p: Vector3) -> bool:
+		# 7A: it hunts nobody inside a squeeze and nobody in another part of the map; it turns back at the
+		# opening instead (the guard on only: v4.9.1 hunted everyone in its zone)
+		var m = _nc_map()
+		if m == null:
+			return true
+		if bool(m.call("in_squeeze", p)):
+			return false
+		var hp := _nc_home_part()
+		return hp < 0 or int(m.call("part_of", p)) == hp
+
+	func _nc_vis() -> Array:
+		# its own visible points for the sight rule: the head and segments 1, 4 and 8
+		var out: Array = [body.global_position]
+		for i in [1, 4, 8]:
+			if i < segs.size() and is_instance_valid(segs[i]) and (segs[i] as Node3D).is_visible_in_tree():
+				out.append((segs[i] as Node3D).global_position)
+		return out
+
+	func _nc_try_home() -> void:
+		# home only while nobody sees it and nobody is within 25 m of its den; else it keeps waiting
+		for p in CoopSync.alive_player_nodes():
+			if (p as Node3D).global_position.distance_to(home) < 25.0:
+				return
+		if NCX.seen(_nc_vis()):
+			return
+		_nc_home_tp()
+
+	func _nc_home_tp() -> void:
+		# the foot back on its den's floor (placed by the helper, the den as the air anchor), the body,
+		# the trail and the segments reset, and one more teleport for the guests
+		var S = NCX.nc()
+		if S == null:
+			return
+		var space := get_world_3d().direct_space_state
+		_nc_seed(space, home + Vector3.UP * 1.0, home - Vector3.UP * 0.5)
+		if _st.is_empty():
+			var st0 = S.call("state", "stalker", f + Vector3.UP * 1.0)
+			if st0 is Dictionary:
+				_st = st0
+		if not _st.is_empty():
+			var p = S.call("place", space, _st, f + Vector3.UP * 1.0, home + Vector3.UP * 1.0)
+			if p is Vector3:
+				f = (p as Vector3) - Vector3.UP * 1.0
+		_goal = f
+		_via = f
+		_face = Vector3.ZERO
+		body.position = f + Vector3.UP * lift
+		_crumbs.clear()
+		for sg in segs:
+			(sg as Node3D).visible = false
+		tp += 1                                # (the helper's place counts it as "tps")
+		_refused_t = 0.0
+		_need_home = false
+
+	func nc_reseed() -> void:
+		# a guest that became the authority (the host left): its foot from where this screen drew it;
+		# found in rock, it holds there until nobody sees it, then goes home
+		if not NCX.on() or not is_inside_tree() or not is_instance_valid(body):
+			return
+		var S = NCX.nc()
+		var space := get_world_3d().direct_space_state
+		_nc_seed(space, body.position + Vector3.UP * 0.3, body.position - Vector3.UP * lift)
+		if int(S.call("inside2", space, f + Vector3.UP * 1.0)) == 1:
+			_need_home = true
+			_home_try_t = 0.0
+
+	# ---------------------------------------------------------------- v5.0 no-clip (every machine)
+
+	func _nc_segments() -> void:
+		# C3: a distance trail of foot points (a crumb every 0.5 m, 40 at most). Segment i sits 1.8 m x
+		# (i + 1) along it, on the floor line, facing along the trail (it pitches with the slope);
+		# hidden while the trail is shorter than its place, laid out still when it stops.
+		var foot: Vector3 = f if (CoopSync.map_is_authority() and _f_ok) else body.position - Vector3.UP * lift
+		if _crumbs.is_empty() or foot.distance_to(_crumbs[0]) >= CRUMB:
+			_crumbs.push_front(foot)
+			if _crumbs.size() > 40:
+				_crumbs.pop_back()
+		for i in segs.size():
+			var sg: Node3D = segs[i]
+			var r := _trail_at(foot, SEG_GAP * float(i + 1))
+			if r.is_empty():
+				sg.visible = false
+				continue
+			sg.visible = true
+			sg.position = (r[0] as Vector3) + Vector3.UP * seg_lift
+			var d: Vector3 = r[1]
+			if d.length() > 0.01:
+				var dn := d.normalized()
+				var upv := Vector3.UP if absf(dn.y) < 0.98 else Vector3.FORWARD
+				sg.basis = Basis.looking_at(dn, upv) * Basis.from_scale(Vector3.ONE * 1.3)
+
+	func _trail_at(foot: Vector3, dist: float) -> Array:
+		# [the point dist metres back along foot -> crumbs, the direction toward the head there], or []
+		var prev := foot
+		var acc := 0.0
+		for c in _crumbs:
+			var q: Vector3 = c
+			var l := prev.distance_to(q)
+			if l > 0.0001 and acc + l >= dist:
+				return [prev.lerp(q, (dist - acc) / l), prev - q]
+			acc += l
+			prev = q
+		return []
+
+	func _nc_head(delta: float) -> void:
+		# C2 head clearance (visual, host and guests): the snout turns clear of rock (up to 60 degrees up,
+		# or 30 / 60 to a side), one ray per 30 Hz tick along the candidate being tried; after 0.25 s
+		# clear it relaxes toward straight ahead. Applied smoothly at 10 rad/s.
+		if not is_instance_valid(head_node):
+			return
+		_hc_t -= delta
+		if _hc_t <= 0.0:
+			_hc_t = 1.0 / 30.0
+			_nc_head_probe()
+		var want: Vector2 = HEAD_CANDS[_hc_i]
+		_hc_ang = _hc_ang.move_toward(Vector2(deg_to_rad(want.x), deg_to_rad(want.y)), 10.0 * delta)
+		head_node.rotation = Vector3(_hc_ang.x, _hc_ang.y, 0.0)
+
+	func _nc_head_probe() -> void:
+		var c = Game.climber
+		var bp := body.global_position
+		if not is_instance_valid(c) or not c.is_inside_tree() or (c.global_position as Vector3).distance_to(bp) > 60.0:
+			return
+		if not NCX.solid(bp, 8.0):
+			return
+		var n := HEAD_CANDS.size()
+		if _hc_mode == 0:
+			_hc_try = _hc_i
+		var cand: Vector2 = HEAD_CANDS[_hc_try]
+		var dir: Vector3 = body.global_basis.orthonormalized() * Basis.from_euler(Vector3(deg_to_rad(cand.x), deg_to_rad(cand.y), 0.0)) * Vector3.FORWARD
+		var clear := NCX.ray(get_world_3d().direct_space_state, bp, bp + dir * (head_fwd + 0.3)).is_empty()
+		match _hc_mode:
+			0:                                 # holding the current candidate
+				if clear:
+					_hc_ok += 1.0 / 30.0
+					if _hc_ok >= 0.25 and _hc_i != 0:
+						_hc_mode = 1           # relax: try straight ahead, then the one before
+						_hc_try = 0
+				else:
+					_hc_ok = 0.0
+					_hc_mode = 2               # blocked: search the next candidates in turn
+					_hc_scan = 1
+					_hc_try = (_hc_i + 1) % n
+			1:
+				if clear:
+					_hc_i = _hc_try
+					_hc_ok = 0.0
+					_hc_mode = 0
+				elif _hc_try == 0 and _hc_i > 1:
+					_hc_try = _hc_i - 1
+				else:
+					_hc_ok = 0.0
+					_hc_mode = 0
+			2:
+				if clear:
+					_hc_i = _hc_try
+					_hc_ok = 0.0
+					_hc_mode = 0
+				else:
+					_hc_scan += 1
+					if _hc_scan >= n:
+						_hc_mode = 0           # nothing clears: keep the current one and look again
+					else:
+						_hc_try = (_hc_try + 1) % n
+
+	func _nc_off() -> void:
+		# the guard went off (the probe's baseline): the v4.9.1 pose again
+		if is_instance_valid(head_node):
+			head_node.rotation = Vector3.ZERO
+		_hc_ang = Vector2.ZERO
+		_hc_i = 0
+		_hc_mode = 0
+		body.rotation.x = 0.0
+		_pitch = 0.0
+		for sg in segs:
+			(sg as Node3D).visible = true
+
+	func _nc_guest(delta: float) -> void:
+		# C4: drawn 150 ms behind the host, between the two packets around that moment, along the host
+		# walk's L (no extrapolation: past the newest it holds there). While this guest looks at it
+		# (within 12 m of the host's place) it holds still, as in v4.9.1; when the look ends it glides to
+		# where it should be along a clear L, or snaps (declared) if rock is in the way (nobody looks now).
+		if _g_pk.is_empty():
+			return
+		var rt := Time.get_ticks_msec() - 150
+		var n := _g_pk.size()
+		var tgt: Vector3 = _g_pk[n - 1][1]
+		var yaw := float(_g_pk[n - 1][2])
+		var pch := float(_g_pk[n - 1][4])
+		if rt <= int(_g_pk[0][0]):
+			tgt = _g_pk[0][1]
+			yaw = float(_g_pk[0][2])
+			pch = float(_g_pk[0][4])
+		elif rt < int(_g_pk[n - 1][0]):
+			for i in n - 1:
+				var a: Array = _g_pk[i]
+				var b: Array = _g_pk[i + 1]
+				if rt >= int(a[0]) and rt <= int(b[0]):
+					var k := clampf(float(rt - int(a[0])) / maxf(1.0, float(int(b[0]) - int(a[0]))), 0.0, 1.0)
+					tgt = _l_lerp(a[1], b[1], k)   # along the host walk's L, not the diagonal through a lip
+					yaw = lerp_angle(float(a[2]), float(b[2]), k)
+					pch = lerpf(float(a[4]), float(b[4]), k)
+					break
+		var hold := false
+		var c = Game.climber
+		if is_instance_valid(c) and c.is_inside_tree() and c.Camera and not c.get("coop_spectating"):
+			if (rp_pos - body.position).length() < 12.0:
+				hold = _seen_by(body.position - Vector3.UP * (lift - 0.5), c.Camera)
+		if hold:
+			_g_hold = true
+			return
+		var gap := body.position.distance_to(tgt)
+		if _g_hold:
+			_g_hold = false
+			if gap > 1.0:
+				if not _nc_l_clear(body.position, tgt):
+					_nc_guest_place(tgt, yaw, pch)
+					return
+				_g_catch = true
+		if _g_catch:
+			var step := maxf(speed, 20.0) * delta
+			if gap > step:
+				if not _nc_l_clear(body.position, tgt):
+					_g_catch = false
+					_nc_guest_place(tgt, yaw, pch)
+					return
+				body.position = _l_move(body.position, tgt, step)
+				body.rotation.y = lerp_angle(body.rotation.y, yaw, clampf(delta * 8.0, 0.0, 1.0))
+				body.rotation.x = pch
+				return
+			_g_catch = false
+		body.position = tgt
+		body.rotation.y = yaw
+		body.rotation.x = pch
+
+	func _nc_guest_place(p: Vector3, yaw: float, pch: float) -> void:
+		# every guest snap is a declared jump: the probe reads tp + _g_jump (noclip_points)
+		if body.position.distance_to(p) > 0.05:
+			_g_jump += 1
+		body.position = p
+		body.rotation.y = yaw
+		body.rotation.x = pch
+		_crumbs.clear()                        # a fresh trail: the segments reappear as it walks
+		for sg in segs:
+			(sg as Node3D).visible = false
+		_g_catch = false
+
+	func nc_guest_snap(p: Vector3) -> void:
+		# the stalkbite_ handler: the bite comes from where it really is. v4.9.1 set it there every time;
+		# with the guard on only a gap over 3 m or rock on the L way snaps (else the 150 ms render reaches it)
+		if not NCX.on():
+			body.position = p
+			return
+		if body.position.distance_to(p) > 3.0 or not _nc_l_clear(body.position, p):
+			_nc_guest_place(p, rp_yaw, body.rotation.x)
+
+	static func _l_corner(a: Vector3, b: Vector3) -> Vector3:
+		# the corner of the host walk's L from a to b (walk_step's 0.15 m rule): a rise goes up at a, then
+		# over; a drop goes over at a's height, then down; a (a straight line) when the height barely changes
+		var dy := b.y - a.y
+		if dy > 0.15:
+			return Vector3(a.x, b.y, a.z)
+		if dy < -0.15:
+			return Vector3(b.x, a.y, b.z)
+		return a
+
+	static func _l_lerp(a: Vector3, b: Vector3, k: float) -> Vector3:
+		# the point a fraction k along that L (shades.gd _l_lerp)
+		var c := _l_corner(a, b)
+		var l1 := a.distance_to(c)
+		var l2 := c.distance_to(b)
+		var s := k * (l1 + l2)
+		if s <= l1:
+			return a.lerp(c, s / l1) if l1 > 0.00001 else c
+		return c.lerp(b, (s - l1) / l2) if l2 > 0.00001 else b
+
+	static func _l_move(cur: Vector3, tgt: Vector3, step: float) -> Vector3:
+		# step metres from cur toward tgt along the L between them
+		var c := _l_corner(cur, tgt)
+		var dv := cur.distance_to(c)
+		if dv > 0.01:
+			if dv >= step:
+				return cur.move_toward(c, step)
+			return c.move_toward(tgt, step - dv)
+		return cur.move_toward(tgt, step)
+
+	func _nc_l_clear(a: Vector3, b: Vector3, packets: bool = false) -> bool:
+		# C4 (guest): the L from drawn body point a to b crosses no rock at the body's height, nor at the
+		# segments' (seg_lift above the foot line). Rock that is not loaded here (over 150 m from every
+		# player) is never ray-tested: between two host packets the way is drawn untested there (nobody is
+		# near enough to see it; a snap would restart its trail every packet), a catch-up snaps (2.5).
+		if a.distance_to(b) < 0.01:
+			return true
+		if not NCX.solid(a, 4.0) or not NCX.solid(b, 4.0):
+			return packets
+		var w3 := get_world_3d()
+		if w3 == null:
+			return packets
+		var space := w3.direct_space_state
+		var c := _l_corner(a, b)
+		for dh in [0.0, maxf(0.0, lift - seg_lift)]:
+			var o: Vector3 = Vector3.DOWN * float(dh)
+			if not NCX.ray(space, a + o, c + o).is_empty() or not NCX.ray(space, c + o, b + o).is_empty():
+				return false
+		return true
+
+	func noclip_points() -> Array:
+		# C6, for the no-clip probe (group "zonda_nc"). Centres: the drawn body and the visible segments
+		# 1, 4 and 8 (body index 0, segment i index i + 1, 1.8 m apart). Extremities in the head's
+		# actual frame (after the slope pitch and the head clearance): top, snout, jaw bottom, and both
+		# cheeks at the head's centre height (CHEEK_W). A guest's tp counts its own declared snaps too.
+		if not is_instance_valid(body):
+			return []
+		var c: Array = [body.global_position]
+		var cn: Array = ["body"]
+		var sidx: Array = [0]
+		for i in [1, 4, 8]:
+			if i < segs.size() and is_instance_valid(segs[i]) and (segs[i] as Node3D).is_visible_in_tree():
+				c.append((segs[i] as Node3D).global_position)
+				cn.append("seg%d" % i)
+				sidx.append(i + 1)
+		var x: Array = []
+		var xn: Array = []
+		var xc: Array = []
+		var xg: Array = []
+		if is_instance_valid(head_node):
+			var hb := head_node.global_basis.orthonormalized()
+			var hp := head_node.global_position
+			var fw := -hb.z
+			var up := hb.y
+			var rt := hb.x
+			x = [hp + up * head_up, hp + fw * head_fwd, hp + fw * (head_fwd * 0.5) - up * (lift - 0.1),
+					hp + rt * CHEEK_W, hp - rt * CHEEK_W]
+			xn = ["top", "snout", "jaw", "cheek_r", "cheek_l"]
+			xc = [0, 0, 0, 0, 0]
+			xg = [false, false, false, false, false]
+		var auth := CoopSync.map_is_authority()
+		var st := "guest"
+		if auth:
+			st = "retreat" if retreat > 0.0 else ("hunt" if target_pos.distance_to(home) > 1.0 else "home")
+		return [{"kind": "stalker", "id": id, "view": "host" if auth else "guest", "c": c, "cn": cn, "seg": sidx,
+				"sp": SEG_GAP, "x": x, "xn": xn, "xc": xc, "xg": xg, "vis": body.is_visible_in_tree(), "wl": false,
+				"tp": tp if auth else maxi(0, _g_tp) + _g_jump, "st": st, "fx": {}}]
 
 
 class Ambience extends Node3D:
@@ -5040,6 +7941,7 @@ class Bell extends Node3D:
 	var cool := 0.0
 	var swing := 0.0
 	var lure_left := 0.0
+	var cracked := false             # omen THE CRACKED BELL: it rings dull and turns nothing
 
 	func setup(b: Dictionary, mat: Material) -> void:
 		id = str(b["id"])
@@ -5128,11 +8030,22 @@ class Bell extends Node3D:
 			CoopSync.map_event("bell_" + id, {}, false)
 
 	func toll() -> void:
+		if cracked:
+			# a dull clank, a short swing, and no lure at all
+			swing = 1.2
+			cool = 6.0
+			sfx.pitch_scale = 0.55
+			sfx.volume_db = -4.0
+			sfx.play()
+			CoopSync.show_banner("The bell is cracked. Nothing turns toward it.", 5.0)
+			return
 		swing = 2.5
 		# a second ring while the lure still runs only rings: it never stretches the lure
 		if lure_left <= 0.0:
 			lure_left = 20.0
 		cool = 6.0
+		sfx.pitch_scale = 1.0
+		sfx.volume_db = 6.0
 		sfx.play()
 		Game.audio.play_dark_transition2()
 		var map := get_parent()
@@ -5197,6 +8110,10 @@ class EggCluster extends Node3D:
 class BatSwarm extends Node3D:
 	# A colony roosting under an overhang. When the local player comes near it bursts out,
 	# wheels once around the balcony and is gone up the rift. Each player sees their own.
+	# v5.0 no-clip (spec 3.C C5), only while the guard is on (NCX.on(); else the v4.9.1 flight): it
+	# bursts only over loaded rock, leaves by the most open way (leaning toward the void), wheels no
+	# wider than its roost allows, and every bat is ray-checked every frame: a bat that meets rock
+	# bounces off it, and on its third bump it fades out (0.3 s) and is gone. No bat starts in rock.
 	var bats: Array = []
 	var vel: Array = []
 	var live := false
@@ -5205,6 +8122,13 @@ class BatSwarm extends Node3D:
 	var n_bats := 14
 	var mesh: ArrayMesh
 	var mat: StandardMaterial3D
+	var nc_id := "bat"                     # the no-clip probe's id (set by _place_bats)
+	var _nc := false                       # this burst runs guarded (decided when it bursts)
+	var _exit_dir := Vector3.UP
+	var _wheel_r := 6.5
+	var _bumps: Array = []
+	var _fade: Array = []                  # seconds into the fade-out, -1 = flying
+	var _ids: Array = []                   # a stable id per bat (the probe tracks points by it)
 
 	func setup(d: Dictionary) -> void:
 		position = Vector3(d["pos"][0], d["pos"][1], d["pos"][2])
@@ -5224,6 +8148,9 @@ class BatSwarm extends Node3D:
 		st.add_vertex(Vector3(0.3, 0.05, -0.1))
 		mesh = st.commit()
 
+	func _ready() -> void:
+		add_to_group("zonda_nc")
+
 	func _process(delta: float) -> void:
 		var c = Game.climber
 		if not is_instance_valid(c) or not c.is_inside_tree():
@@ -5232,20 +8159,51 @@ class BatSwarm extends Node3D:
 			if Engine.get_process_frames() % 10 != 0:
 				return
 			if (c.global_position - global_position).length() < trig:
+				if NCX.on() and not NCX.solid(global_position, 10.0):
+					return                     # C5: its rock is not loaded yet: again at the next check
 				_burst()
 			return
 		t += delta
-		for i in bats.size():
+		var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state if _nc else null
+		var ramp := clampf(t - 2.2, 0.0, 1.0)
+		for i in range(bats.size() - 1, -1, -1):
 			var b: MeshInstance3D = bats[i]
+			if not is_instance_valid(b):
+				_drop(i)
+				continue
+			if float(_fade[i]) >= 0.0:
+				_fade[i] = float(_fade[i]) + delta
+				b.scale = Vector3.ONE * maxf(0.001, 1.0 - float(_fade[i]) / 0.3)
+				if float(_fade[i]) >= 0.3:
+					b.queue_free()
+					_drop(i)
+				continue
 			var v: Vector3 = vel[i]
 			var to_home: Vector3 = global_position - b.global_position
 			to_home.y = 0.0
-			var wheel := Vector3(-to_home.z, 0.0, to_home.x).normalized() * 6.5
-			var up := Vector3(0, clampf(t - 2.2, 0.0, 1.0) * 8.0, 0)
-			var want: Vector3 = wheel + to_home.normalized() * 1.5 + up + Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 5.0
+			var wheel := Vector3(-to_home.z, 0.0, to_home.x).normalized() * (_wheel_r if _nc else 6.5)
+			var pull := 1.5
+			if _nc:
+				pull += maxf(0.0, to_home.length() - _wheel_r) * 1.5     # no wider than the roost allows
+			var up := (_exit_dir * ramp * 8.0) if _nc else Vector3(0, ramp * 8.0, 0)
+			var want: Vector3 = wheel + to_home.normalized() * pull + up + Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 5.0
 			v = v.lerp(want, delta * 3.0)
+			var prev: Vector3 = b.global_position
+			var nxt: Vector3 = prev + v * delta
+			if _nc:
+				var mv := nxt - prev
+				var ml := mv.length()
+				var hit := NCX.ray(space, prev, nxt + (mv / ml * 0.2 if ml > 0.0001 else Vector3.ZERO))
+				if not hit.is_empty():
+					var nrm: Vector3 = (hit["normal"] as Vector3).normalized()
+					var cand: Vector3 = (hit["position"] as Vector3) + nrm * 0.25
+					nxt = cand if NCX.ray(space, prev, cand).is_empty() else prev
+					v = v.bounce(nrm) * 0.5
+					_bumps[i] = int(_bumps[i]) + 1
+					if int(_bumps[i]) >= 3:
+						_fade[i] = 0.0         # the third bump: it fades out and is gone
 			vel[i] = v
-			b.global_position += v * delta
+			b.global_position = nxt
 			var flat := Vector3(v.x, 0.0, v.z)
 			if flat.length() > 0.2:
 				b.look_at(b.global_position + flat.normalized() * 2.0, Vector3.UP)
@@ -5253,17 +8211,34 @@ class BatSwarm extends Node3D:
 		if t > 7.5:
 			queue_free()
 
+	func _drop(i: int) -> void:
+		bats.remove_at(i)
+		vel.remove_at(i)
+		_bumps.remove_at(i)
+		_fade.remove_at(i)
+		_ids.remove_at(i)
+
 	func _burst() -> void:
 		live = true
+		_nc = NCX.on()
+		var space: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+		if _nc:
+			_nc_exit(space)
 		for i in n_bats:
 			var b := MeshInstance3D.new()
 			b.mesh = mesh
 			b.material_override = mat
 			b.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			b.position = Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 2.0
+			var off := Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 2.0
+			if _nc and not NCX.ray(space, global_position, global_position + off).is_empty():
+				off = Vector3.ZERO             # C5: that offset is in rock: this bat starts at the roost
+			b.position = off
 			add_child(b)
 			bats.append(b)
 			vel.append(Vector3(randf() - 0.5, randf() * 0.4, randf() - 0.5) * 9.0)
+			_bumps.append(0)
+			_fade.append(-1.0)
+			_ids.append(i)
 		# the colony leaving the rock: a scatter of grit and a dry chittering of claws
 		var grit := U.sfx("res://sfx/soundsnap/41281-FOLEY_FOOTSTEPS_BOOTS_SLIDE_GRAVEL_SCATTER_01.wav", -2.0, Vector3.ZERO, self, 30.0)
 		grit.pitch_scale = 1.35
@@ -5272,6 +8247,58 @@ class BatSwarm extends Node3D:
 			var cl := U.sfx(U.CLICKS[randi() % U.CLICKS.size()], -6.0, Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 3.0, self, 28.0)
 			cl.pitch_scale = randf_range(1.6, 2.2)
 			get_tree().create_timer(0.08 + k * randf_range(0.07, 0.16)).timeout.connect(cl.play)
+
+	func _nc_exit(space) -> void:
+		# C5, once per burst: 12 rays of 30 m over the upper hemisphere (elevations 20, 50 and 80
+		# degrees, 4 azimuths); the way out scores its free distance + 10 x how much it leans toward the
+		# void. 6 flat rays of 8 m at roost height give how wide the colony may wheel.
+		var p := global_position
+		var rc := Vector2(p.x, p.z)
+		var m = get_parent()
+		if m != null and m.has_method("_rift_centre"):
+			var v = m.call("_rift_centre", p.y)
+			if v is Vector2:
+				rc = v
+		var void_dir := Vector3(rc.x - p.x, 0.0, rc.y - p.z)
+		void_dir = void_dir.normalized() if void_dir.length() > 0.01 else Vector3.ZERO
+		var best := -1e9
+		_exit_dir = Vector3.UP
+		for el in [20.0, 50.0, 80.0]:
+			var e := deg_to_rad(float(el))
+			for k in 4:
+				var az := deg_to_rad(45.0 + 90.0 * float(k))
+				var d := Vector3(cos(e) * sin(az), sin(e), cos(e) * cos(az))
+				var hit := NCX.ray(space, p, p + d * 30.0)
+				var free := 30.0 if hit.is_empty() else p.distance_to(hit["position"])
+				var score := free + 10.0 * d.dot(void_dir)
+				if score > best:
+					best = score
+					_exit_dir = d
+		var mn := 8.0
+		for k2 in 6:
+			var az2 := TAU * float(k2) / 6.0
+			var d2 := Vector3(sin(az2), 0.0, cos(az2))
+			var h2 := NCX.ray(space, p, p + d2 * 8.0)
+			if not h2.is_empty():
+				mn = minf(mn, p.distance_to(h2["position"]))
+		_wheel_r = clampf(mn - 1.5, 2.0, 6.5)
+
+	func noclip_points() -> Array:
+		# C6, for the no-clip probe (group "zonda_nc"): every flying bat is a centre point (no
+		# extremities); local on every machine, so the view is always "host"
+		if not live:
+			return []
+		var c: Array = []
+		var cn: Array = []
+		var sg: Array = []
+		for i in bats.size():
+			var b = bats[i]
+			if is_instance_valid(b) and float(_fade[i]) < 0.0:
+				c.append((b as Node3D).global_position)
+				cn.append("bat%d" % int(_ids[i]))
+				sg.append(-1)
+		return [{"kind": "bat", "id": nc_id, "view": "host", "c": c, "cn": cn, "seg": sg, "sp": 0.0, "x": [], "xn": [],
+				"xc": [], "xg": [], "vis": is_visible_in_tree(), "wl": false, "tp": 0, "st": "fly", "fx": {}}]
 
 
 class Ghost extends Node3D:

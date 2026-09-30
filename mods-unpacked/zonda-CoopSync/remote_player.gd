@@ -61,6 +61,36 @@ var _lan_t := 0.0
 var _lan_flash := 0.0
 var _lan_next := 2.0
 
+# ---- v5.0 (contract 2.7). Read by the feature modules (LightField, Harriers, idol, omen).
+var lantern_lit := false      # "lan": this teammate's lantern is on
+var on_ground := false        # "gnd": standing on floor (coop_sync already excludes Attached)
+var idol_level := 0           # "idl": 0 = not the idol's host, else 1 + weight% (bool true from old builds = 1)
+var omen_tier := 0            # "om": the omen trophy tier shown on this knight (0..4)
+const MOD_DIR := "res://mods-unpacked/zonda-CoopSync/"
+const IDOL_RED := Color(1.0, 0.4, 0.34)
+const OUTLINE_T4 := Color(0.42, 0.02, 0.02)
+const IDOL_GLOW := Color(1.0, 0.1, 0.06)
+const BURN_EVERY := 2.0
+const SFX_BURN_FALLBACK := "res://sfx/soundsnap/monster_idle/306004-Creature-Oxbow-Breaths-Wet-Fast.wav"
+static var _look = null                   # lantern_look.gd, loaded once at runtime
+static var _look_tried := false
+static var _voice_script = null           # voice.gd (the demon bus statics)
+static var _voice_tried := false
+var _idol_glow: OmniLight3D = null
+var _tinted := -1                         # the lantern tint applied: -1 none yet, 0 normal, 1 idol red
+var _charm_tier := -1
+var _demon_on := false
+var _pulse_t := 0.0
+var _sizzle_t := 0.0
+var _sfx_burn: AudioStreamPlayer3D = null
+var stat_sizzles := 0                     # idol burn sizzles played at this knight (tests)
+
+
+# v5.0 lighting design: every surface's sheen is tuned to a flame with light_specular 1.0, so a
+# teammate's lantern makes the rock as glossy as your own (it was 0.5, about half). Your own lantern's
+# lights are driven every frame by lantern.gd (OWN_SPECULAR, gust and near-wall aware).
+const TEAM_SPECULAR := 1.0
+
 
 static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, shadows: bool) -> Array:
 	# returns [root, light]. Colours are kept dim: the game doubles brightness in post.
@@ -106,6 +136,7 @@ static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, sh
 	handle.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(handle)
 	var flame := MeshInstance3D.new()
+	flame.name = "Flame"                          # LanternLook.tint_cage_lantern finds it by name
 	var sm := SphereMesh.new()
 	sm.radius = 0.032
 	sm.height = 0.064
@@ -121,6 +152,7 @@ static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, sh
 	root.add_child(flame)
 	if dot_tex != null:
 		var fire := CPUParticles3D.new()
+		fire.name = "Fire"                        # LanternLook.tint_cage_lantern finds it by name
 		fire.amount = 7
 		fire.lifetime = 0.45
 		fire.randomness = 0.6
@@ -157,6 +189,7 @@ static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, sh
 	light.shadow_enabled = shadows
 	light.shadow_bias = 0.08
 	light.light_volumetric_fog_energy = 0.3          # 1.0 turned nearby mist into a white blob
+	light.light_specular = TEAM_SPECULAR
 	light.set_meta("zonda_keep", true)
 	if shadows:
 		# your own lantern: 2 shadow passes instead of the cube's 6, every frame
@@ -176,6 +209,7 @@ static func build_cage_lantern(dot_tex: Texture2D, energy: float, rng: float, sh
 	spot.shadow_enabled = shadows
 	spot.shadow_bias = 0.06
 	spot.light_volumetric_fog_energy = 0.3
+	spot.light_specular = TEAM_SPECULAR
 	spot.set_meta("zonda_keep", true)
 	if not shadows:
 		_make_cheap_light(spot)
@@ -273,6 +307,8 @@ func _ensure_voice() -> void:
 	_voice.name = "Voice"
 	_voice.position = VOICE_POS
 	add_child(_voice)
+	if _demon_on:
+		_voice.set_bus_override("ZondaDemon")     # v5.0: still the idol's host
 
 
 func voice_push(pcm: PackedFloat32Array) -> void:
@@ -378,6 +414,116 @@ func _build_idol() -> void:
 				m.set_surface_override_material(si, d)
 
 
+static func _look_script():
+	# lantern_look.gd (v5.0), loaded once at runtime so a problem there can never stop this script
+	if not _look_tried:
+		_look_tried = true
+		var s = load(MOD_DIR + "lantern_look.gd")
+		if s is Script:
+			_look = s
+		else:
+			push_warning("[CoopSync] lantern_look.gd did not load: no lantern tint or charm on teammates")
+	return _look
+
+
+static func _demon_script():
+	# voice.gd holds the demon bus statics (ensure_demon_bus, set_demon_level)
+	if not _voice_tried:
+		_voice_tried = true
+		var s = load(MOD_DIR + "voice.gd")
+		if s is Script:
+			_voice_script = s
+		else:
+			push_warning("[CoopSync] voice.gd did not load: no demon voice for the idol's host")
+	return _voice_script
+
+
+func weight_pct() -> int:
+	# the idol's weight this teammate streams, 0..98 (0 when not the host)
+	return maxi(idol_level - 1, 0)
+
+
+func _idol_dim() -> float:
+	# the same curve as your own lantern's curse_dim (lantern.gd): W = weight% x 0.4 seconds
+	if idol_level <= 0:
+		return 1.0
+	var w := float(weight_pct()) * 0.4
+	return lerpf(1.0, 0.5, clampf((w - 10.0) / 20.0, 0.0, 1.0))
+
+
+func _update_idol_marks(idl: bool) -> void:
+	# THE IDOL WANTS A HOST, the marks of the host (3.3 D): the demon voice and the idol's red glow.
+	# The red lantern and the red IDOL tag are set in update_state; the burn sizzle in _process.
+	if idl != _demon_on:
+		_demon_on = idl
+		var VS = _demon_script()
+		if idl and VS != null:
+			VS.call("ensure_demon_bus")
+		if is_instance_valid(_voice) and _voice.has_method("set_bus_override"):
+			_voice.set_bus_override("ZondaDemon" if idl else "")
+	if idl:
+		var VS2 = _demon_script()
+		if VS2 != null:
+			VS2.call("set_demon_level", float(weight_pct()) / 98.0)    # rate limited inside
+		if _idol_glow == null:
+			_idol_glow = OmniLight3D.new()
+			_idol_glow.name = "IdolGlow"
+			_idol_glow.light_color = IDOL_GLOW
+			_idol_glow.light_energy = 0.9
+			_idol_glow.omni_range = 5.0
+			_make_cheap_light(_idol_glow)
+			_idol_glow.light_cull_mask = ~(1 << 1)
+			_idol_glow.set_meta("zonda_not_real_light", true)
+			_idol_glow.set_meta("zonda_keep", true)
+			_idol_glow.position = IDOL_HAND
+			add_child(_idol_glow)
+	if _idol_glow != null and _idol_glow.visible != idl:
+		_idol_glow.visible = idl
+
+
+func _update_idol_process(delta: float) -> void:
+	# the glow pulses 0.8 -> 1.0 with a heartbeat that quickens with the weight (the host hears
+	# the same curve on their own PC), and from 50% weight the idol sizzles every 2 s
+	if idol_level <= 0 or not visible:
+		_sizzle_t = 0.0
+		return
+	var w := float(weight_pct()) * 0.4
+	var hk := clampf((w - 6.0) / 24.0, 0.0, 1.0)
+	var period := lerpf(1.25, 0.36, pow(hk, 0.8))
+	_pulse_t += delta
+	if _pulse_t >= period:
+		_pulse_t = fmod(_pulse_t, period)
+	if _idol_glow != null:
+		_idol_glow.light_energy = 0.9 * (0.8 + 0.2 * exp(-_pulse_t * 8.0))
+	if weight_pct() < 50 or not alive:
+		_sizzle_t = 0.0
+		return
+	_sizzle_t -= delta
+	if _sizzle_t > 0.0:
+		return
+	_sizzle_t = BURN_EVERY
+	stat_sizzles += 1
+	var at := global_position + IDOL_HAND
+	var sc := get_tree().current_scene if is_inside_tree() else null
+	var ss = sc.get("_ss") if sc != null else null
+	if is_instance_valid(ss) and ss is Node and ss.has_method("has_oneshot") and ss.has_oneshot("idol_burn"):
+		ss.play_oneshot("idol_burn", at)
+		return
+	# the kind is not installed: the documented game-file fallback (contract 2.10)
+	if _sfx_burn == null:
+		_sfx_burn = AudioStreamPlayer3D.new()
+		_sfx_burn.stream = load(SFX_BURN_FALLBACK)
+		_sfx_burn.pitch_scale = 0.6
+		_sfx_burn.volume_db = -8.0
+		_sfx_burn.max_distance = 45.0
+		_sfx_burn.unit_size = 4.0
+		_sfx_burn.bus = &"ZondaCave" if AudioServer.get_bus_index("ZondaCave") >= 0 else &"MainBus"
+		_sfx_burn.position = IDOL_HAND
+		add_child(_sfx_burn)
+	if _sfx_burn.stream != null:
+		_sfx_burn.play()
+
+
 func eye_position() -> Vector3:
 	# this teammate's camera, about 1.55 m above the knight's feet
 	return global_position + Vector3.UP * EYE_HEIGHT
@@ -399,17 +545,32 @@ func update_state(msg: Dictionary) -> void:
 	var now := Time.get_ticks_msec()
 	player_name = CoopSync.sanitize_name(str(msg.get("n", player_name)))
 	scene_path = str(msg.get("scene", ""))
+	# v5.0: "idl" is 1 + the host's weight% (an int); a build before 5.0 sends true
+	var idv = msg.get("idl", 0)
+	var lvl := 0
+	if idv is bool:
+		lvl = 1 if idv else 0
+	elif idv is int or idv is float:
+		lvl = clampi(int(idv), 0, 99)
+	var was_idol := idol_level > 0
+	idol_level = lvl
+	var idl := idol_level > 0
 	var hp: float = float(msg.get("hp", 100.0))
 	var label_text := "%s  ♥ %d" % [player_name, int(round(hp))]
+	if idl:
+		label_text += "  IDOL"
 	if _label.text != label_text:
 		_label.text = label_text
 	if _label.no_depth_test != CoopSync.nametags_through_walls:
 		_label.no_depth_test = CoopSync.nametags_through_walls
 	var cos := int(msg.get("cos", 0))
-	if cos != _cos:
+	if cos != _cos or idl != was_idol:
 		_cos = cos
-		_apply_cosmetics()
+		_apply_cosmetics()                    # the gold name, or the red IDOL tag while it lasts
 	var lan: bool = bool(msg.get("lan", false))
+	lantern_lit = lan
+	on_ground = bool(msg.get("gnd", false))
+	omen_tier = clampi(int(msg.get("om", 0)), 0, 4)
 	if lan and _lantern == null:
 		# the knight holds it in its right hand, a little forward, swinging as it walks
 		var pair := build_cage_lantern(null, 2.6, 16.0, false)
@@ -420,14 +581,31 @@ func update_state(msg: Dictionary) -> void:
 		_lantern_spot.light_cull_mask = ~(1 << 1)
 		_lantern.position = Vector3(0.36, 0.92, -0.22)
 		add_child(_lantern)
+		_tinted = -1
+		_charm_tier = -1
 	if _lantern != null and _lantern.visible != lan:
 		_lantern.visible = lan
+	if _lantern != null:
+		var want_tint := 1 if idl else 0
+		if want_tint != _tinted:
+			_tinted = want_tint
+			var LL = _look_script()
+			if LL != null:
+				LL.callv("tint_cage_lantern", [_lantern, _lantern_light, _lantern_spot, idl])
+		if omen_tier != _charm_tier:
+			_charm_tier = omen_tier
+			var LL2 = _look_script()
+			if LL2 != null:
+				LL2.callv("set_charm", [_lantern, omen_tier])
+	var outline := OUTLINE_T4 if omen_tier >= 4 else Color(0, 0, 0, 1)
+	if _label.outline_modulate != outline:
+		_label.outline_modulate = outline
 	oil_pct = int(msg.get("ol", -1))
-	var idl: bool = bool(msg.get("idl", false))
 	if idl and _idol == null and not _idol_failed:
 		_build_idol()
 	if _idol != null and _idol.visible != idl:
 		_idol.visible = idl
+	_update_idol_marks(idl)
 
 	var was_attached := attached
 	attached = bool(msg.get("att", false))
@@ -479,12 +657,17 @@ func _process(delta: float) -> void:
 			_lan_next = randf_range(1.2, 4.0)
 		_lan_flash = maxf(0.0, _lan_flash - delta * 3.0)
 		var f := (0.8 + 0.12 * sin(_lan_t * 8.3) + 0.06 * sin(_lan_t * 21.0)) * (1.0 + _lan_flash)
+		# v5.0: the idol's red lantern burns a little hotter (LanternLook's energy k) and dims
+		# with the weight, like the host's own lantern
+		f *= float(_lantern.get_meta("zonda_energy_k", 1.0)) * _idol_dim()
 		_lantern_light.light_energy = 2.6 * f
 		_lantern_light.omni_range = 16.0 + 5.0 * _lan_flash
 		if _lantern_spot != null:
 			_lantern_spot.light_energy = 3.2 * f
 			_lantern_spot.spot_range = 27.0 + 7.0 * _lan_flash
+			_lantern_spot.rotation.x = cam_pitch      # the beam tilts where they look (interpolated)
 		_lantern.rotation.z = sin(_lan_t * 2.4) * 0.06
+	_update_idol_process(delta)
 	CoopSync.perf_add(Time.get_ticks_usec() - t0)
 
 
@@ -541,8 +724,13 @@ func _process_inner(delta: float) -> void:
 
 
 func _apply_cosmetics() -> void:
-	# relics earned on the hard routes: 1 = gold name, 2 = gold rope, 3 = a crown
-	_label.modulate = GOLD if _cos >= 1 else Color.WHITE
+	# relics earned on the hard routes: 1 = gold name, 2 = gold rope, 3 = a crown.
+	# v5.0: while this teammate carries the idol the name is red; it goes back to gold (or white)
+	# when the idol leaves them.
+	if idol_level > 0:
+		_label.modulate = IDOL_RED
+	else:
+		_label.modulate = GOLD if _cos >= 1 else Color.WHITE
 	for m in _rope_materials:
 		if m is StandardMaterial3D:
 			(m as StandardMaterial3D).albedo_color = Color(0.55, 0.4, 0.12) if _cos >= 2 else Color.WHITE

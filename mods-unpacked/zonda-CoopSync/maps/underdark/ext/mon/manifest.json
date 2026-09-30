@@ -54,5 +54,39 @@
    "death": 1.04,
    "jump": 0.71
   }
+ },
+ "harrier": {
+  "file": "harrier.glb",
+  "anims": {
+   "idle": "BatArmature|Bat_Flying",
+   "walk": "BatArmature|Bat_Flying",
+   "attack": "BatArmature|Bat_Attack",
+   "death": "BatArmature|Bat_Death",
+   "hit": "BatArmature|Bat_Hit"
+  },
+  "height_m": 4.4235,
+  "size_m": [
+   4.0,
+   4.138,
+   3.687
+  ],
+  "forward": "+Z",
+  "loop": [
+   "idle",
+   "walk"
+  ],
+  "anim_len_s": {
+   "idle": 1.25,
+   "walk": 1.25,
+   "attack": 0.88,
+   "death": 1.21,
+   "hit": 1.25
+  },
+  "wingspan_m": 4.0,
+  "center_m": [
+   0.02,
+   1.888,
+   -0.654
+  ]
  }
 }

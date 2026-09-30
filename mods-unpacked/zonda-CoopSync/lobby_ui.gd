@@ -149,7 +149,7 @@ func _build_voice_ui(col: VBoxContainer) -> void:
 	col.add_child(title)
 
 	var hint := Label.new()
-	hint.text = "Voice: push to talk (hold V) / open mic (F7)"
+	hint.text = "Voice chat is always on: just talk. F7 mutes your mic."
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(1, 1, 1, 0.7)
@@ -186,6 +186,14 @@ func _build_voice_ui(col: VBoxContainer) -> void:
 	vrow.add_child(_voice_vol_label)
 	col.add_child(vrow)
 
+	# v4.9.1: which microphone voice chat records (mic_menu.gd builds the same picker the pause
+	# menu shows; null theme = this panel's, not focusable so Space can never open the dropdown)
+	var mm = CoopSync.get("mic_menu")
+	if mm != null and is_instance_valid(mm) and mm.has_method("build_picker"):
+		var picker = mm.build_picker(null, false)
+		if picker is Control:
+			col.add_child(picker)
+
 	col.add_child(HSeparator.new())
 	var pl := Label.new()
 	pl.text = "Players (tick Mute to silence one)"
@@ -203,8 +211,9 @@ func _update_voice_ui() -> void:
 		_voice_mode_btn.visible = false
 		return
 	var om := bool(v.open_mic)
-	_voice_mode_label.text = "Now: OPEN MIC (Steam cuts silence)" if om else "Now: PUSH TO TALK, hold V"
-	var bt := "Switch to push to talk" if om else "Switch to open mic"
+	# neutral on purpose: Steam cuts the silence on the Steam mic, the mod's voice gate on a picked one
+	_voice_mode_label.text = "Your mic: ON (silence is not sent)" if om else "Your mic: MUTED (F7 to unmute)"
+	var bt := "Mute my mic" if om else "Unmute my mic"
 	if _voice_mode_btn.text != bt:
 		_voice_mode_btn.text = bt
 	var want := float(v.volume) * 100.0

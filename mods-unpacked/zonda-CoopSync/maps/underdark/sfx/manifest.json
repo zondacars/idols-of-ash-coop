@@ -263,6 +263,246 @@
     "file": "brood_skitter_3807692.ogg",
     "db": 1.1
    }
+  ],
+  "omen_light": [
+   {
+    "file": "omen_light_370362_1.ogg",
+    "db": 6.0
+   },
+   {
+    "file": "omen_light_398448_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "omen_light_248236_1.ogg",
+    "db": 6.0
+   }
+  ],
+  "omen_snuff": [
+   {
+    "file": "omen_snuff_499020_1.ogg",
+    "db": 2.7
+   },
+   {
+    "file": "omen_snuff_242867_1.ogg",
+    "db": 1.5
+   }
+  ],
+  "idol_burn": [
+   {
+    "file": "idol_burn_123710_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "idol_burn_137262_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "idol_burn_160350_1.ogg",
+    "db": 0.0
+   }
+  ],
+  "pale_hiss": [
+   {
+    "file": "pale_hiss_545484_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "pale_hiss_545484_2.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "pale_hiss_673425_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "pale_hiss_445983_1.ogg",
+    "db": 0.0
+   }
+  ],
+  "shade_whisper": [
+   {
+    "file": "shade_whisper_832739_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_whisper_832739_2.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_whisper_193818_1.ogg",
+    "db": 0.0
+   }
+  ],
+  "shade_hiss": [
+   {
+    "file": "shade_hiss_673425_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_hiss_673425_2.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_hiss_673425_3.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_hiss_545484_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_hiss_545484_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "shade_shriek": [
+   {
+    "file": "shade_shriek_467695_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_shriek_442564_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_shriek_442564_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "shade_crack": [
+   {
+    "file": "shade_crack_621977_1.ogg",
+    "db": 6.0
+   },
+   {
+    "file": "shade_crack_621977_2.ogg",
+    "db": 6.0
+   },
+   {
+    "file": "shade_crack_621977_3.ogg",
+    "db": 6.0
+   },
+   {
+    "file": "shade_crack_621977_4.ogg",
+    "db": 6.0
+   }
+  ],
+  "shade_gargle": [
+   {
+    "file": "shade_gargle_445983_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "shade_gargle_445983_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "fire_hiss": [
+   {
+    "file": "fire_hiss_579098_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "fire_hiss_579098_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "harrier_shriek": [
+   {
+    "file": "harrier_shriek_518297_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_shriek_518297_2.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_shriek_518297_3.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_shriek_436199_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_shriek_436199_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "harrier_wing": [
+   {
+    "file": "harrier_wing_670509_1.ogg",
+    "db": 1.0
+   },
+   {
+    "file": "harrier_wing_670509_2.ogg",
+    "db": 0.9
+   },
+   {
+    "file": "harrier_wing_670509_3.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_wing_572216_1.ogg",
+    "db": 1.5
+   },
+   {
+    "file": "harrier_wing_572216_2.ogg",
+    "db": 0.8
+   },
+   {
+    "file": "harrier_wing_572216_3.ogg",
+    "db": 1.4
+   }
+  ],
+  "harrier_dive": [
+   {
+    "file": "harrier_dive_392404_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "harrier_dive_392404_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "stone_crack": [
+   {
+    "file": "stone_crack_524312_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "stone_crack_222521_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "stone_crack_222521_2.ogg",
+    "db": 0.0
+   }
+  ],
+  "stone_groan": [
+   {
+    "file": "stone_groan_844329_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "stone_groan_578491_1.ogg",
+    "db": 0.0
+   }
+  ],
+  "stone_boom": [
+   {
+    "file": "stone_boom_149966_1.ogg",
+    "db": 1.4
+   },
+   {
+    "file": "stone_boom_517747_1.ogg",
+    "db": 1.5
+   },
+   {
+    "file": "stone_boom_524312_1.ogg",
+    "db": 0.0
+   }
   ]
  }
 }
