@@ -1577,9 +1577,13 @@ func _tp3_pick() -> void:
 			var a11: Vector3 = sp11.get("anchor")
 			var f11: Vector3 = sp11.get("floor_pt")
 			var off11 := Vector2(a11.x - f11.x, a11.z - f11.z).length()
-			var spot := _spider_spot(sp11) if off11 <= 0.8 else Vector3.ZERO
+			# v5.1: and nothing solid between that floor and its body (a slab under the perch: it never clicks there)
+			var under_ok := bool(sp11.call("_sees", f11 + Vector3.UP * 0.4)) if sp11.has_method("_sees") else true
+			var spot := _spider_spot(sp11) if off11 <= 0.8 and under_ok else Vector3.ZERO
 			if off11 > 0.8:
 				print("[SPIDERLIGHT] %s: its floor point is %.1f m off to the side of its anchor, skipped" % [str(sp11.get("id")), off11])
+			elif not under_ok:
+				print("[SPIDERLIGHT] %s: rock between its floor point and its body, skipped" % str(sp11.get("id")))
 			if spot != Vector3.ZERO:
 				_t_sp = sp11
 				_t_d["rest0"] = float(sp11.get("rest_s"))

@@ -1731,7 +1731,7 @@ class WallSpider extends Node3D:
 					continue
 				var pp: Vector3 = (p as Node3D).global_position
 				var hd := Vector2(pp.x - anchor.x, pp.z - anchor.z).length()
-				if hd < trigger_r and pp.y < anchor.y and pp.y > floor_pt.y - 4.0:
+				if hd < trigger_r and pp.y < anchor.y and pp.y > floor_pt.y - 4.0 and _sees(pp):
 					_enter(CLICK)
 					return
 				if hd < LIGHT_WAIT_R and absf(pp.y - anchor.y) < 20.0:
@@ -1797,6 +1797,18 @@ class WallSpider extends Node3D:
 		print("[SPIDERLIGHT] %s scatter (%s)" % [id, why])
 		_enter(SCATTER)
 
+	func _sees(pp: Vector3) -> bool:
+		# v5.1: rock between its perch and someone under it (a shelf, a slab: sp_2 of the v5.1 layout hangs
+		# over one) means no click and no bite through it
+		if not is_inside_tree():
+			return false
+		# cast from the player up to the perch (a perch tucked into the crack starts inside rock, where a
+		# ray sees nothing): rock within 1 m of the perch is its own crack, anything further is in the way
+		var perch := Vector3(anchor.x, cling_y - 0.3, anchor.z)
+		var q := PhysicsRayQueryParameters3D.create(pp + Vector3(0.0, 0.4, 0.0), perch, 1)   # just under the eye (the origin is about 1 m up)
+		var h := get_world_3d().direct_space_state.intersect_ray(q)
+		return h.is_empty() or (h["position"] as Vector3).distance_to(perch) <= 1.0
+
 	func _try_bite() -> void:
 		# one snap at the bottom of the drop, only at someone still under it
 		var at := Vector3(anchor.x, low_y, anchor.z)
@@ -1804,7 +1816,7 @@ class WallSpider extends Node3D:
 			if not is_instance_valid(p) or not (p as Node3D).is_inside_tree():
 				continue
 			var d: Vector3 = (p as Node3D).global_position - at
-			if Vector2(d.x, d.z).length() < REACH and d.y > -2.6 and d.y < 0.9:
+			if Vector2(d.x, d.z).length() < REACH and d.y > -2.6 and d.y < 0.9 and _sees((p as Node3D).global_position):
 				Kit.note("spider", "bites")
 				bit.emit(p, DAMAGE, id)
 				return

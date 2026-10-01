@@ -71,9 +71,12 @@ const REVERB := [
 	[0.45, 0.90, 0.5, 0.15, 30.0, 4500.0, 0.00],    # 7 THE FOUNDRY: dull, hot
 	[0.52, 0.55, 0.7, 0.22, 40.0, 7500.0, 0.05],    # 8 THE NEST: organic, close
 	[0.24, 0.72, 0.4, 0.10, 20.0, 8000.0, 0.00],    # 9 THE BURROWS: tight, dry
+	[0.50, 0.40, 0.8, 0.22, 40.0, 10000.0, 0.10],   # 10 (bone: a surface, never a place)
+	[0.50, 0.40, 0.8, 0.22, 40.0, 10000.0, 0.10],   # 11 (bark: a surface, never a place)
+	[0.60, 0.45, 0.9, 0.18, 70.0, 9000.0, 0.10],    # 12 DRY GULCH: a dead canyon, a long slap-back
 ]
 # How much rift wind each biome gets (the Foundry and Burrows are sheltered).
-const WIND_K := [1.0, 0.85, 0.6, 0.65, 0.7, 0.7, 0.8, 0.5, 0.6, 0.3]
+const WIND_K := [1.0, 0.85, 0.6, 0.65, 0.7, 0.7, 0.8, 0.5, 0.6, 0.3, 0.7, 0.7, 0.95]
 # Ambient one-shot mix per biome: kind -> weight (only kinds present in the manifest play).
 const AMB := [
 	{"rockfall": 1.0, "drip": 0.3},
@@ -86,6 +89,9 @@ const AMB := [
 	{"rockfall": 1.0, "chain_creak": 0.7},
 	{"drip": 0.5, "rockfall": 0.6},
 	{"drip": 0.4, "rockfall": 0.8},
+	{"drip": 0.6, "rockfall": 0.6},
+	{"drip": 0.6, "rockfall": 0.6},
+	{"town_creak": 1.2, "rockfall": 0.25},                # 12 DRY GULCH: signs creaking in the wind
 ]
 
 var map: Node3D = null

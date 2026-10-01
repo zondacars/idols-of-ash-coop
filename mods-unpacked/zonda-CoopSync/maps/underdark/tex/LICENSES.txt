@@ -16,3 +16,7 @@ albedo * tint keeps the mean luminance listed.
 7 THE FOUNDRY        foundry/   ambientCG Rock033    https://ambientcg.com/view?id=Rock033  CC0
 8 THE NEST           nest/      ambientCG Rock029    https://ambientcg.com/view?id=Rock029  CC0
 9 THE BURROWS        burrows/   ambientCG Ground048  https://ambientcg.com/view?id=Ground048  CC0
+12 DRY GULCH         gulch/     ambientCG Ground105  https://ambientcg.com/view?id=Ground105  CC0  (v5.1)
+
+The town's boards (v5.1, town/planks_*.jpg): ambientCG Planks039 https://ambientcg.com/view?id=Planks039 CC0,
+1K-JPG reduced to 512x512, albedo desaturated 55% and scaled to a mean linear luminance of 0.16.

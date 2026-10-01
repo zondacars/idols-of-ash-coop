@@ -99,6 +99,12 @@
     "file": "bed_burrows_draft.ogg",
     "db": -15.0
    }
+  ],
+  "12": [
+   {
+    "file": "bed_gulch_wind_112296.ogg",
+    "db": -9.0
+   }
   ]
  },
  "rift_wind": [
@@ -501,6 +507,20 @@
    },
    {
     "file": "stone_boom_524312_1.ogg",
+    "db": 0.0
+   }
+  ],
+  "town_creak": [
+   {
+    "file": "town_creak_759692_1.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "town_creak_759692_2.ogg",
+    "db": 0.0
+   },
+   {
+    "file": "town_creak_759692_3.ogg",
     "db": 0.0
    }
   ]

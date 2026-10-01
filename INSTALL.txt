@@ -56,10 +56,10 @@ wide, with 150-300 m sightlines).
   - 4,144 m deep (campaign: 2,100). The rift is 190 to 460 m across, and you
     can see the far wall, the ledges below you and the landmarks from
     hundreds of metres away.
-  - 8 strata down the rift plus THE BURROWS and THE NEST:
+  - 9 strata down the rift plus THE BURROWS and THE NEST (v5.1 adds DRY GULCH):
     THE MOUTH > OSSUARY > THE BURROWS > FUNGAL HOLLOW > ROOTWORKS >
-    DROWNED GALLERIES > SUNKEN VILLAGE > CRYSTAL VEINS > THE FOUNDRY (and
-    THE CRUCIBLE) > THE NEST
+    DROWNED GALLERIES > DRY GULCH > SUNKEN VILLAGE > CRYSTAL VEINS > THE FOUNDRY
+    (and THE CRUCIBLE) > THE NEST
   - Horizontal set pieces that cross the whole void: the Span (a broken
     323 m stone bridge), four giant roots (420-460 m each), two hanging
     village archipelagos (44 platforms on chains), three crystal spars
@@ -67,6 +67,92 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v5.1:
+  - EVERYONE NEEDS v5.1 (lobbies are version-checked). Copy BOTH override.cfg and
+    the mods-unpacked folder again. The map changed, so a run saved in v5.0 cannot
+    be continued: start a NEW RUN.
+  - DRY GULCH, a new place in THE UNDERDARK. At the bottom of the Drowned
+    Galleries, THE SPILLWAY (a steep stone drain) takes you down onto the dry bed
+    of the lake that used to be there. The bed seals the rift from wall to wall,
+    and in the middle of it stands a ghost mining town in the dark: a main street
+    with boardwalks, about twenty false-front buildings (a saloon with an
+    out-of-tune piano still playing, a hotel, a bank, the sheriff's jail, a general
+    store, an undertaker and more; some you can walk into), a church, a water
+    tower, a clock tower at the far end of the street, the gallows at the near end
+    and boats stranded on the cracked mud. The only way on is THE ADIT, an old
+    mine tunnel in the far wall that winds down under the lake bed to the Sunken
+    Village. Everything below the town is the same as before, just deeper.
+      THE NOON DUEL: step onto the town's plaza and the clock strikes twelve. You
+        get twelve slow tolls (about 24 seconds, the clock face brighter on each
+        one). From the sixth, a spectral marshal stands in front of the clock
+        tower, looking down the street. On the last stroke he draws: anyone he
+        can see down the street takes 35 HP and a shove. Anything solid between
+        you is cover: a wagon, a barrel, a post, a wall, a doorway. Then the clock
+        strikes again every 75 seconds while anyone is still in town.
+      THE SIDEWINDER: a rattlesnake as long as the street is wide swims under the
+        dust. You see a moving ripple and hear sand hiss. It hunts by SOUND:
+        your voice and your steps on the sand (running carries far, walking less,
+        standing still not at all). When it has you, its tail comes up RATTLING
+        for 1.5 seconds, then it strikes where you are standing (30 HP and a
+        shove). Get off the sand, onto the boards, into a building or up on a
+        roof, or get 5 m away, and it bites dust. Inside a building or on a roof
+        it cannot hear or reach you; on the boardwalks only running or talking out
+        loud carries down through the planks.
+  - THE IDOL, REWORKED.
+      No more waiting: a friend can pass it straight back to you.
+      TAP G to THROW it where you look (about 15 m). HOLD G next to a friend
+        (3 m) to hand it over, as before.
+      Anyone who walks over a thrown idol picks it up, the thrower too.
+      Thrown into the pit, it crawls back up onto the ledge beside you: it can
+        never be lost.
+      On the ground it WEEPS softly, and the Nest keeps hunting whoever threw
+        it. Leave it lying for 15 seconds and it glows red and SCREAMS, again
+        and again, and the whole Nest goes for the idol itself until someone
+        picks it up.
+      The way out only opens for a team that carries the idol out.
+  - THE SQUEEZES. At every big change of place there is now a crawl through the
+    rock, and the big creatures of the part above cannot follow you through it:
+    the one that was following you comes to the hole, claws and snarls at it, and
+    gives up. Each one is different: THE THROAT (a crack that drops down a
+    chimney), the Lid's BURROWS, THE ROOT KNOT (the Kiln Gate's passage, grown
+    through with roots), THE CULVERT (a stone pipe half full of black water), THE
+    SPILLWAY, THE ADIT (timber frames, rails and a mine cart), THE CRYPT GAP (a
+    crawl between the coffins under the Sunken Village) and THE VENT (a hot
+    chimney that sighs steam). The map is now nine parts, and each wakes its own
+    Follower behind you.
+  - THE SPAN FALLS. Walk out onto the Ossuary's stone bridge with nobody left
+    behind you and it gives way: a crack behind you, the far end's last slab
+    drops (an 11 m gap to hook across), then the bridge falls apart behind you,
+    slab by slab, faster than a walk. Run. It stays down. If you were not on it,
+    THE MINERS' PEGS (old iron pegs a rope apart) take you down the wall from
+    the near side to the shelf below.
+  - THE CHANDELIER COMES DOWN. Six seconds after you reach the Fungal Hollow, the
+    eighteen stone spikes hanging under the Lid start to crack, one about every
+    four seconds, flicker their green lights and fall, booming on the shelf far
+    below. The biggest groans for six seconds and comes down last. None of them
+    can hit the route.
+  - THE FALSE HEARTHS ARE AWAKE: four camps off the path in the Sunken Village and
+    the Crystal Veins. A small fire, a bedroll, an oil flask and an ember. It is
+    not a checkpoint. Look up before you sit down.
+  - THINGS THAT HUNT BY SOUND. Your voice chat is real noise in THE UNDERDARK: a
+    whisper carries about 5 m, talking 12 m, shouting 30 m (F7 mute is silence).
+    The STALKERS are blind: they hunt only the people they can hear (your voice,
+    or your steps when you run), search where they last heard you, then go home.
+    BAT COLONIES burst from further away the louder you are (talk past them and
+    they go at 15 m, shout and they go at 37 m, creep past quietly and you can
+    get within 6 m). The Sidewinder hears you too. A small line at the top of the
+    screen shows how loud your voice is while you speak.
+  - ECHOES AND NOTES. Where someone dies, a dark stain stays on the rock. Stand in
+    it for a moment and a pale ghost plays back their last six seconds. Press N to
+    chalk a note at your feet from a short list ("Something waits behind you",
+    "Hidden path", "Do not trust the fire" and more); notes only show inside a
+    lantern's light. Both are kept with the saved run.
+
+  Honest notes: v5.1 was tested hands-off in the game with automated runs, a
+  loopback co-op partner and a synthetic voice, not yet by real people on real
+  PCs. The Chandelier's biggest spike shatters on the shelf like the others (an
+  early idea had it land across the gap as a new path; it does not).
+
 NEW IN v5.0:
   - EVERYONE NEEDS v5.0, and copy BOTH override.cfg and the mods-unpacked
     folder again (override.cfg carries the line that lets the game use your
@@ -139,8 +225,7 @@ NEW IN v5.0:
   - THE MICROPHONE PICKER and always-on voice chat from v4.9.1 are in this version
     (see the v4.9.1 notes below): pick your microphone in the pause menu, talk
     freely, F7 mutes your own mic.
-  - Coming later, not in this version: The Span Falls and The Chandelier Comes
-    Down.
+  - The Span Falls and The Chandelier Comes Down came in v5.1.
 
   Honest note: v5.0 was tested hands-off in the game with automated runs, a
   loopback co-op partner and a synthetic voice. It has not yet been played by two

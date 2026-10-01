@@ -8,10 +8,12 @@ import numpy as np
 from sdf import Chamber, Tunnel, Shaft, Trench, Bowl, Field
 
 BIOMES = ["THE MOUTH", "OSSUARY", "FUNGAL HOLLOW", "ROOTWORKS", "DROWNED GALLERIES",
-          "SUNKEN VILLAGE", "CRYSTAL VEINS", "THE FOUNDRY", "THE NEST", "THE BURROWS"]
+          "SUNKEN VILLAGE", "CRYSTAL VEINS", "THE FOUNDRY", "THE NEST", "THE BURROWS",
+          "THE RIBS", "THE ROOTS", "DRY GULCH"]       # v5.1: 10 and 11 are surfaces (bone, bark), 12 is the town
 # the color of the ambient wall lights per biome
 GLOW = [[1.0, 0.8, 0.55], [0.85, 0.8, 0.65], [0.4, 1.0, 0.6], [1.0, 0.6, 0.25], [0.5, 0.8, 0.85],
-        [0.8, 0.75, 0.9], [0.5, 0.75, 1.0], [1.0, 0.45, 0.15], [1.0, 0.2, 0.15], [1.0, 0.72, 0.4]]
+        [0.8, 0.75, 0.9], [0.5, 0.75, 1.0], [1.0, 0.45, 0.15], [1.0, 0.2, 0.15], [1.0, 0.72, 0.4],
+        [0.95, 0.9, 0.75], [1.0, 0.6, 0.25], [0.9, 0.78, 0.5]]
 MOUTH, OSSUARY, FUNGAL, ROOTS, DROWNED, VILLAGE, CRYSTAL, FOUNDRY, NEST, BURROWS = range(10)
 
 A = "res://Art/"
@@ -30,7 +32,7 @@ XDIM = [("graveyard/candle", 0.3), ("graveyard/lightpost", 0.25), ("graveyard/",
         ("dungeon/", 0.28), ("nature/mushroom", 0.32), ("nature/", 0.28),
         ("quat/DeadTree", 0.12), ("quat/Skull", 0.35), ("quat/Column", 0.35), ("quat/Arch", 0.35), ("quat/Wall", 0.35),
         ("quat/Support", 0.35), ("quat/Stairs", 0.35), ("quat/Rail", 0.35), ("quat/Statue", 0.4), ("quat/Bricks", 0.35),
-        ("ph/brass", 0.35), ("ph/treasure", 0.45), ("ph/metal_jug", 0.4)]
+        ("ph/brass", 0.35), ("ph/treasure", 0.45), ("ph/metal_jug", 0.4), ("west/", 0.34)]
 
 
 def xdim(rel, default):

@@ -2526,8 +2526,13 @@ func _fairness(groups: Dictionary) -> void:
 		var b: int = _sum(base, fl[1], fl[2], fl[4])
 		_fair_count(str(fl[0]), g, b, float(fl[5]), nob)
 	for fr in FAIR_RATES:
+		var gsec := 0.0
+		for gk in fr[1]:
+			if groups.get(gk) is Dictionary:
+				gsec += float((groups[gk] as Dictionary).get("s", 0.0))
 		_fair_rate(str(fr[0]), _sum(groups, fr[1], fr[2], fr[3]), _sum(groups, fr[1], fr[2], "att_ms"),
-				_sum(base, fr[1], fr[2], fr[4]), _sum(base, fr[1], fr[2], "att_ms"), float(fr[5]), nob)
+				_sum(base, fr[1], fr[2], fr[4]), _sum(base, fr[1], fr[2], "att_ms"), float(fr[5]), nob,
+				_sum(groups, fr[1], fr[2], "path_ms"), gsec)
 	# the ledge rules: if the baseline bit on the ledge at least once, the guarded run does too
 	for lr in [["stalker ledge bites", "P3b", ["stalker"], "bites", "bites_clean"], ["shade ledge strikes", "P7b", ["shade"], "strikes", "strikes"],
 			["shade low ceiling strikes", "P7c", ["shade"], "strikes", "strikes"]]:
@@ -2643,14 +2648,18 @@ func _fair_count(line: String, g: int, b: int, factor: float, nob: bool) -> void
 	_fair_line(line, str(g), str(b), _ratio(g, b), rule, _count_rule(g, b, factor), nob)
 
 
-func _fair_rate(line: String, g: int, gms: int, b: int, bms: int, factor: float, nob: bool) -> void:
-	# a rate per second of attack state (see FAIR_RATES): under 3 s of attack the rate says nothing
+func _fair_rate(line: String, g: int, gms: int, b: int, bms: int, factor: float, nob: bool, gwait := 0, gsec := 0.0) -> void:
+	# a rate per second of attack state (see FAIR_RATES): under 3 s of attack the rate says nothing.
+	# v5.1: a guarded one that never arrived because it spent most of the phase waiting for the GAME'S own
+	# path search (gwait, the pathfinder's "path_ms") lost a route lottery, not a fight with the guard: information
 	var gr := float(g) / (float(gms) / 1000.0) if gms >= 3000 else 0.0
 	var br := float(b) / (float(bms) / 1000.0) if bms >= 3000 else 0.0
 	var ok := true
 	var rule := ">=%.2fx baseline rate" % factor
 	if br <= 0.0:
 		rule = "information (baseline: no attack time or no events)"
+	elif gms < 3000 and gsec > 0.0 and float(gwait) >= 0.5 * gsec * 1000.0:
+		rule = "information (the guarded one never got 3 s of attack: it spent %.0f of %.0f s waiting for the game's own path search, a route lottery, not the guard)" % [float(gwait) / 1000.0, gsec]
 	elif gms < 3000:
 		ok = false
 		rule += " (the guarded one never got 3 s of attack)"

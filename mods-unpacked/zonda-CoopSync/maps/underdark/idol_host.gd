@@ -7,6 +7,18 @@ extends Node
 # heavy (heartbeat, a dimmer and redder lantern, breaths, then a burn that telegraphs) and can
 # push it into a living friend's hands by holding G within 3 m. The friend cannot refuse.
 #
+# IDOL ON THE GROUND (v5.1, owner design 2026-09-30): no cling any more (a friend can pass it straight
+# back). TAP G throws it where you look (about 15 m; a throw into the pit comes back up on the ledge
+# next to the thrower, so it can never be lost). Anyone who walks over a thrown idol picks it up,
+# the thrower too (after 2 s, or once they stepped away). On the ground it weeps softly and the Nest
+# keeps hunting the LAST THROWER; after 15 s nobody picked it up it glows red and SCREAMS, and from
+# then on the Nest goes for the idol itself (a decoy pin) until someone picks it up.
+#   idolthrow_<n> non-persistent  {n, giver, giver_by, from, pos, pit, fly, at}   holder -> authority
+#   idolgrab_<n>  non-persistent  {n, to, to_by, at}                             walker -> authority
+#   idolpass_<n> gains ground:true (id "", pos, from, pit, fly) for a throw, pickup:true + thrower
+#                for a pickup. passes() counts hand passes and pickups by someone else than the
+#                thrower (a throw to a friend is one pass once it is caught).
+#
 # LOADED BY THE MAP (underdark.gd _load_features, contract 2.2): s.new(), setup(map), add_child.
 # Everything this file calls in other builders' files is made at runtime (1A.1): has_method +
 # call, get / set. A missing hook is warned about once and the feature degrades.
@@ -80,7 +92,24 @@ const PASS_REACH := 3.0
 const PASS_REACH_LOOP := 4.5
 const PASS_HOLD := 0.6
 const G_LOST_GRACE := 0.25         # a friend out of reach this long restarts the 0.6 s push
-const CLING_S := 6.0
+const CLING_S := 0.0                # v5.1: no cling, a friend can pass it straight back
+const THROW_TAP_S := 0.3            # G let go sooner than this = a throw; held longer = a hand-over
+const THROW_SPEED := 13.5           # m/s forward along the view; with the lift, about 15 m on flat rock
+const THROW_LIFT := 3.5             # m/s upward added to the throw
+const THROW_GRAV := 9.8
+const THROW_MAX_T := 4.0
+const THROW_PIT_DROP := 30.0        # falling this far below the hand = the pit
+const GRAB_R := 1.7                 # walk within this (flat) of a thrown idol to pick it up
+const GRAB_DY := 2.4
+const GRAB_HOST_REACH := 4.5        # the authority's check (lag allowance)
+const GRAB_HOST_REACH_LOOP := 6.5
+const GRAB_RESEND_MS := 800
+const THROWER_GRAB_S := 2.0         # the thrower's own pickup is armed after this, or once 1 m clear
+const WEEP_S := 15.0                # weeping this long, then the glow and the scream
+const SCREAM_EVERY := 9.0           # it screams again this often while it lies there
+const SFX_WEEP := ["idol_weep_403911.ogg", "idol_weep_359154.ogg"]
+const SFX_SOB := "idol_sob_172738_1.ogg"
+const SFX_SCREAM := ["idol_scream_333832_1.ogg", "idol_scream_469141_1.ogg"]
 const OFFER_TIMEOUT := 2.5
 const RECV_REACH := 4.5
 const HOST_REACH := 6.0
@@ -116,6 +145,33 @@ var _last_scent_ms := -1000000
 var _load_ms := 0
 # giver side
 var _pending: Dictionary = {}      # {n, to, to_by, ms}
+# v5.1 the idol on the ground (from the stored events; every PC builds its own copy)
+var _ground := false
+var _ground_n := 0
+var _ground_pos := Vector3.ZERO
+var _ground_from := Vector3.ZERO
+var _ground_pit := false
+var _ground_fly := 0.0
+var _ground_thrower := ""
+var _ground_thrower_by := ""
+var _ground_ms := 0                 # this PC: when it lands (the flight ends)
+var _ground_node: Node3D = null     # the idol lying there (model, glow, sounds); the Nest's decoy after the scream
+var _ground_glow: OmniLight3D = null
+var _weep: AudioStreamPlayer3D = null
+var _cry: AudioStreamPlayer3D = null
+var _screamed := false
+var _scream_t := 0.0
+var _sob_t := 6.0
+var _grab_sent_ms := -100000
+var _grab_armed := false
+var _throw_sent_ms := -100000
+var _g_press_ms := 0
+var _g_was_held := false
+var _last_floor := Vector3.ZERO
+var _has_last_floor := false
+var _floor_t := 0.0
+var throw_log: Array = []           # tests: [n, pos, pit, dist] per throw this PC sent
+var scream_log: Array = []          # tests: msec per scream
 var _g_held := false
 var _g_done := false
 var _g_t := 0.0
@@ -169,7 +225,7 @@ func setup(m: Node) -> void:
 	map = m
 	_load_ms = Time.get_ticks_msec()
 	if map != null and map.has_method("register_events"):
-		map.call("register_events", ["idolreq_", "idolacc_", "idolno_"], Callable(self, "_on_net_event"), true)
+		map.call("register_events", ["idolreq_", "idolacc_", "idolno_", "idolthrow_", "idolgrab_"], Callable(self, "_on_net_event"), true)
 		map.call("register_events", ["idolpass_"], Callable(self, "_on_pass_event"), false)
 		_events_ok = true
 	else:
@@ -335,6 +391,7 @@ func _test_hold_g(secs: float) -> void:
 	_g_t = 0.0
 	_g_lost = 0.0
 	_g_to = ""
+	_g_press_ms = Time.get_ticks_msec()
 
 
 # ---------------------------------------------------------------- replicated state (R17)
@@ -356,20 +413,45 @@ func _derive_state(ev: Dictionary) -> Dictionary:
 		if n > best_n:
 			best_n = n
 			best = d
-		if not _b(d.get("confirm", false)) and not _b(d.get("orphan", false)):
+		if _counts_as_pass(d):
 			count += 1
 	var holder := ""
 	var by := ""
+	var ground := false
 	if best != null:
 		holder = _sid(best.get("id", ""))
 		by = str(best.get("by", ""))
+		ground = _b(best.get("ground", false))
 	elif ev.get("idol") is Dictionary:
 		var idd: Dictionary = ev["idol"]
 		by = str(idd.get("by", ""))
 		holder = _sid(idd.get("id", ""))
 		if holder == "" and by == CoopSync.local_name:
 			holder = _my_sid()                 # a pre-5.0 "idol" without a usable id: by name
-	return {"seq": best_n, "holder": holder, "by": by, "passes": count}
+	return {"seq": best_n, "holder": "" if ground else holder, "by": by, "passes": count,
+			"ground": ground, "best": best if best != null else {}}
+
+
+static func _counts_as_pass(d: Dictionary) -> bool:
+	# a hand pass, or a thrown idol caught by someone else than the thrower (v5.1)
+	if _b(d.get("confirm", false)) or _b(d.get("orphan", false)) or _b(d.get("ground", false)):
+		return false
+	if _b(d.get("pickup", false)):
+		var th := str(d.get("thrower", ""))
+		return th != "" and th != str(d.get("id", ""))
+	return true
+
+
+static func _v3(a, fallback: Vector3 = Vector3.ZERO) -> Vector3:
+	if a is Array and (a as Array).size() >= 3:
+		return Vector3(float(a[0]), float(a[1]), float(a[2]))
+	if a is Vector3:
+		return a
+	return fallback
+
+
+static func _arr(v: Vector3) -> Array:
+	return [snappedf(v.x, 0.01), snappedf(v.y, 0.01), snappedf(v.z, 0.01)]
 
 
 func _has_pass_stored() -> bool:
@@ -387,6 +469,7 @@ func _refresh(extra_key: String = "", extra_data = null) -> void:
 	var st := _derive_state(ev)
 	_seq = int(st["seq"])
 	_holder_by = str(st["by"])
+	_set_ground(bool(st["ground"]), st["best"] if st["best"] is Dictionary else {}, _seq)
 	var h := str(st["holder"])
 	if h != _holder_sid:
 		_holder_sid = h
@@ -453,17 +536,18 @@ func _write_confirm() -> void:
 
 
 func hud_idol() -> String:
-	if not _taken() or _holder_sid == "":
+	if not _taken():
+		return ""
+	if _ground:
+		return "   idol: on the ground (screaming)" if _screamed else "   idol: on the ground"
+	if _holder_sid == "":
 		return ""
 	if not _is_me(_holder_sid):
 		return "   idol: %s" % holder_name()
 	var s := "   idol: you"
 	if _finished():
 		return s
-	var left := CLING_S - _stint_s()
-	if left > 0.0:
-		s += " (it clings %d)" % ceili(left)
-	elif _w >= W_BURN:
+	if _w >= W_BURN:
 		s += " (burning)"
 	elif _w >= W_HEAVY:
 		s += " (heavy)"
@@ -473,7 +557,26 @@ func hud_idol() -> String:
 func carrier_name() -> String:
 	if not _taken():
 		return ""
+	if _ground:
+		return _ground_thrower_by
 	return holder_name()
+
+
+func on_ground() -> bool:
+	# v5.1: the idol lies where it was thrown (nobody holds it)
+	return _ground and _taken() and not _finished()
+
+
+func prey_node() -> Node3D:
+	# v5.1: what the Nest hunts: the holder; with the idol on the ground the last thrower, and
+	# after the scream the idol itself (a decoy node with meta "zonda_pin_decoy")
+	if not _taken() or _finished():
+		return null
+	if not _ground:
+		return holder_node()
+	if _screamed and is_instance_valid(_ground_node) and _ground_node.is_inside_tree():
+		return _ground_node
+	return _node_for_sid(_ground_thrower)
 
 
 func end_rows() -> Array:
@@ -539,6 +642,7 @@ func _cleanup() -> void:
 	var ss = _ss()
 	if ss != null:
 		ss.set("heart_floor", 0.0)
+	_free_ground_node()
 
 
 func guestsim_report() -> Array:
@@ -583,6 +687,10 @@ func _on_net_event(key: String, data: Dictionary, replay: bool) -> void:
 		return                               # never stored, so never replayed; just in case
 	if key.begins_with("idolreq_"):
 		_on_req(data)
+	elif key.begins_with("idolthrow_"):
+		_on_throw(data)
+	elif key.begins_with("idolgrab_"):
+		_on_grab(data)
 	elif key.begins_with("idolacc_"):
 		_on_acc(data)
 	elif key.begins_with("idolno_"):
@@ -603,7 +711,7 @@ func _on_req(data: Dictionary) -> void:
 		why = "dead"
 	elif _finished():
 		why = "done"
-	elif n != _seq + 1 or giver != _holder_sid:
+	elif n != _seq + 1 or giver != _holder_sid or _ground:
 		why = "stale"
 	else:
 		var gn := _node_for_sid(giver)
@@ -630,7 +738,7 @@ func _on_acc(data: Dictionary) -> void:
 	var why := ""
 	if _finished():
 		why = "done"
-	elif n != _seq + 1 or from != to or giver != _holder_sid or to == "" or to == giver:
+	elif n != _seq + 1 or from != to or giver != _holder_sid or to == "" or to == giver or _ground:
 		why = "stale"
 	else:
 		var rn := _node_for_sid(to)
@@ -679,6 +787,12 @@ func _on_pass_event(key: String, data: Dictionary, replay: bool) -> void:
 	if _b(data.get("confirm", false)):
 		if me_before and not me_now:
 			CoopSync.show_banner("%s got to the idol first." % holder_name(), 4.0)
+		return
+	if _b(data.get("ground", false)):
+		_announce_throw(data, me_before)
+		return
+	if _b(data.get("pickup", false)):
+		_announce_pickup(data, me_now)
 		return
 	if _holder_sid == before:
 		return
@@ -763,13 +877,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			_g_t = 0.0
 			_g_lost = 0.0
 			_g_to = ""
+			_g_press_ms = Time.get_ticks_msec()
 	else:
 		_g_held = false
 	get_viewport().set_input_as_handled()
 
 
 func _process(delta: float) -> void:
-	if _holder_sid == "" and _w <= 0.0 and _intro_left < 0.0 and not _taken():
+	if _holder_sid == "" and _w <= 0.0 and _intro_left < 0.0 and not _taken() and not _ground:
 		return                                   # nothing to do before the idol is taken
 	var t0 := Time.get_ticks_usec()
 	var now := Time.get_ticks_msec()
@@ -778,6 +893,9 @@ func _process(delta: float) -> void:
 	_mates = CoopSync.remote_players().size()
 	_update_intro(delta)
 	_update_g(delta, c, alive)
+	_update_floor(delta, c, alive)
+	_update_ground(delta, now)
+	_update_grab(c, alive, now)
 	_update_pending(now)
 	_update_weight(delta, c, alive)
 	_update_burn(delta, c, alive)
@@ -800,9 +918,9 @@ func _update_intro(delta: float) -> void:
 	if _finished():
 		return
 	if _mates > 0:
-		CoopSync.show_banner("The idol wants a host. Whoever holds it is hunted. Hold G next to a friend to pass it on.", 7.0)
+		CoopSync.show_banner("The idol wants a host. Whoever holds it is hunted. Hold G next to a friend to pass it, tap G to throw it.", 7.0)
 	else:
-		CoopSync.show_banner("The idol wants a host. Everything in the Nest hunts you. Get it out.", 6.0)
+		CoopSync.show_banner("The idol wants a host. Everything in the Nest hunts you. Get it out. Tap G to throw it.", 6.0)
 
 
 func _g_banner(text: String) -> void:
@@ -816,6 +934,7 @@ func _g_banner(text: String) -> void:
 func _update_g(delta: float, c, alive: bool) -> void:
 	if not _carrying():
 		_g_held = false
+		_g_was_held = false
 		_g_t = 0.0
 		_g_lost = 0.0
 		_g_to = ""
@@ -829,6 +948,12 @@ func _update_g(delta: float, c, alive: bool) -> void:
 		var down := Input.is_physical_key_pressed(KEY_G) or Input.is_key_pressed(KEY_G)
 		if not down or not DisplayServer.window_is_focused():
 			_g_held = false                  # a missed key-up (focus moved away) never keeps it held
+	# v5.1: G let go within 0.3 s (and nothing else started) is a throw
+	if _g_was_held and not _g_held and not _g_done:
+		if float(Time.get_ticks_msec() - _g_press_ms) < THROW_TAP_S * 1000.0 and alive and _pending.is_empty():
+			_g_done = true
+			_throw(c)
+	_g_was_held = _g_held
 	if not _g_held or _g_done:
 		_g_t = 0.0
 		_g_lost = 0.0
@@ -837,9 +962,11 @@ func _update_g(delta: float, c, alive: bool) -> void:
 	if not alive or not _pending.is_empty():
 		_g_done = true
 		return
+	if float(Time.get_ticks_msec() - _g_press_ms) < THROW_TAP_S * 1000.0:
+		return                               # still a tap: the throw or the hand-over decides on release
 	if _mates <= 0:
 		_g_done = true
-		_g_banner("There is no one to take it. Get it out.")
+		_g_banner("There is no one to take it. Get it out, or tap G to throw it.")
 		return
 	# While G stays held, being out of reach or inside the cling only waits: the push starts as
 	# soon as a friend is in reach and the idol lets go. A shove (a bite throws you about 15 m/s),
@@ -853,11 +980,6 @@ func _update_g(delta: float, c, alive: bool) -> void:
 			_g_banner("Stand next to a friend (3 m) and hold G to pass the idol.")
 		return
 	_g_lost = 0.0
-	var left := CLING_S - _stint_s()
-	if left > 0.0:
-		_g_t = 0.0
-		_g_banner("The idol will not let go yet (%d)." % ceili(left))
-		return
 	var to := str(rp.peer_id)
 	if to != _g_to:
 		_g_to = to
@@ -915,8 +1037,9 @@ func _update_pending(now: int) -> void:
 func _update_weight(delta: float, c, alive: bool) -> void:
 	var carrying := _carrying()
 	if c != null and is_instance_valid(c):
-		# a co-op respawn (health seen at 0, then above 0) starts the weight again
-		if float(c.get("health")) <= 0.0:
+		# a co-op respawn (health seen at 0, then above 0) starts the weight again; an invincible
+		# player (prevent_player_death, the tests) never dies, so a burst of bites to 0 is no respawn
+		if float(c.get("health")) <= 0.0 and not _b(c.get("prevent_player_death")):
 			_saw_dead = true
 		elif _saw_dead:
 			_saw_dead = false
@@ -1012,7 +1135,7 @@ func _burn_tick(c) -> void:
 		floor_skips += 1
 		return
 	c.take_damage(dmg)
-	burn_log.append([Time.get_ticks_msec(), dmg])
+	burn_log.append([Time.get_ticks_msec(), dmg, _w])
 	if not _burn_told:
 		_burn_told = true
 		CoopSync.show_banner("The idol burns you. Pass it on." if _mates > 0 else "The idol burns you. Get it out.", 4.0)
@@ -1075,7 +1198,7 @@ func _update_glow(now: int) -> void:
 
 func _update_pins() -> void:
 	var taken := _taken()
-	var hn: Node3D = holder_node() if (taken and not _finished()) else null
+	var hn: Node3D = prey_node() if (taken and not _finished()) else null
 	var pins = CoopSync.get("hunt_pins")
 	if pins is Dictionary:
 		if hn != null:
@@ -1083,14 +1206,14 @@ func _update_pins() -> void:
 		else:
 			pins.erase("idol")
 	CoopSync.set("idol_holder_sid", _holder_sid if taken else "")
-	if hn != null:
+	if hn != null and not _ground:
 		_last_pos = hn.global_position
 		_has_last_pos = true
 
 
 func _check_orphan(now: int) -> void:
 	# the authority moves an idol whose holder is spectating, has left or has gone stale
-	if not CoopSync.map_is_authority() or not _taken() or _finished():
+	if not CoopSync.map_is_authority() or not _taken() or _finished() or _ground:
 		_orphan_since = -1
 		return
 	if holder_node() != null:
@@ -1170,6 +1293,417 @@ static func _in_groups(prefix: String, groups) -> bool:
 	if groups is Array:
 		return (groups as Array).has(prefix)
 	return false
+
+
+# ---------------------------------------------------------------- v5.1 throw, ground, pickup
+
+func _space():
+	var c = Game.climber
+	if c != null and is_instance_valid(c) and c.is_inside_tree():
+		return c.get_world_3d().direct_space_state
+	if map != null and map is Node3D and (map as Node3D).is_inside_tree():
+		return (map as Node3D).get_world_3d().direct_space_state
+	return null
+
+
+func _ray(space, a: Vector3, b: Vector3, skip: Array = []) -> Dictionary:
+	if space == null:
+		return {}
+	var q := PhysicsRayQueryParameters3D.create(a, b, 1, skip)
+	return space.intersect_ray(q)
+
+
+func _floor_under(space, p: Vector3, up: float, down: float, skip: Array = []) -> Dictionary:
+	# a walkable floor under p (normal pointing up), or {}
+	var hit := _ray(space, p + Vector3.UP * up, p + Vector3.DOWN * down, skip)
+	if hit.is_empty() or (hit["normal"] as Vector3).y < 0.55:
+		return {}
+	return hit
+
+
+func _update_floor(delta: float, c, alive: bool) -> void:
+	# the last spot this PC stood on solid floor: where a throw into the pit comes back up
+	if not alive or not _carrying():
+		return
+	_floor_t -= delta
+	if _floor_t > 0.0:
+		return
+	_floor_t = 0.2
+	var space = _space()
+	var hit := _floor_under(space, c.global_position, 0.3, 2.6, [c.get_rid()])
+	if not hit.is_empty():
+		_last_floor = hit["position"]
+		_has_last_floor = true
+
+
+func _plan_throw(c) -> Dictionary:
+	# the arc from the eye along the view: 13.5 m/s forward + 3.5 m/s up, rock stops it. A wall or
+	# ceiling hit drops it to the floor below; no floor within 30 m under the hand = the pit
+	var space = _space()
+	var cam = c.get("Camera")
+	var eye: Vector3 = (cam as Node3D).global_position if cam is Node3D else c.global_position + Vector3.UP * 1.5
+	var fwd: Vector3 = -(cam as Node3D).global_transform.basis.z if cam is Node3D else -c.global_transform.basis.z
+	fwd = fwd.normalized()
+	var skip := [c.get_rid()]
+	var p := eye + fwd * 0.5
+	var vel := fwd * THROW_SPEED + Vector3.UP * THROW_LIFT
+	var t := 0.0
+	var dt := 1.0 / 30.0
+	var rest = null
+	while t < THROW_MAX_T:
+		var q := p + vel * dt
+		vel.y -= THROW_GRAV * dt
+		t += dt
+		var hit := _ray(space, p, q, skip)
+		if not hit.is_empty():
+			var hp: Vector3 = hit["position"]
+			var hn: Vector3 = hit["normal"]
+			if hn.y >= 0.55:
+				rest = hp
+			else:
+				var f := _floor_under(space, hp + hn * 0.35, 0.2, THROW_PIT_DROP + (hp.y - eye.y) + 2.0, skip)
+				if not f.is_empty() and (f["position"] as Vector3).y > eye.y - THROW_PIT_DROP:
+					rest = f["position"]
+					t += 0.3
+			break
+		p = q
+		if p.y < eye.y - THROW_PIT_DROP:
+			break
+	if rest != null:
+		return {"pos": rest, "from": eye, "pit": false, "fly": clampf(t, 0.25, 2.2)}
+	# the pit gives it back: the ledge next to the thrower (in front if there is floor, else at the
+	# feet, else the last floor this PC stood on)
+	var flat := Vector3(fwd.x, 0.0, fwd.z)
+	flat = flat.normalized() if flat.length() > 0.01 else Vector3.FORWARD
+	var ledge = null
+	for k in [1.6, 0.9, 0.0]:
+		var f2 := _floor_under(space, c.global_position + flat * k, 1.2, 3.2, skip)
+		if not f2.is_empty():
+			ledge = f2["position"]
+			break
+	if ledge == null:
+		ledge = _last_floor if _has_last_floor else c.global_position
+	return {"pos": ledge, "from": eye, "pit": true, "fly": 1.2}
+
+
+func _throw(c) -> void:
+	if not _carrying() or not _local_alive(c) or _finished():
+		return
+	var now := Time.get_ticks_msec()
+	if now - _throw_sent_ms < 1000:
+		return
+	_throw_sent_ms = now
+	var plan := _plan_throw(c)
+	var n := _seq + 1
+	var pos: Vector3 = plan["pos"]
+	throw_log.append([n, pos, bool(plan["pit"]), (pos - c.global_position).length()])
+	print("%s throw idolthrow_%d to %s pit=%s (%.1f m)" % [TAG, n, str(pos), str(plan["pit"]), (pos - c.global_position).length()])
+	CoopSync.map_event("idolthrow_%d" % n, {"n": n, "giver": _my_sid(), "giver_by": CoopSync.local_name,
+			"from": _arr(plan["from"]), "pos": _arr(pos), "pit": bool(plan["pit"]), "fly": float(plan["fly"]), "at": now}, false)
+
+
+func _on_throw(data: Dictionary) -> void:
+	# the authority writes the idol onto the ground
+	if not CoopSync.map_is_authority():
+		return
+	var n := int(data.get("n", 0))
+	var giver := _sid(data.get("giver", ""))
+	var from := str(data.get("_from", _my_sid()))
+	var why := ""
+	if _finished():
+		why = "done"
+	elif n != _seq + 1 or giver != _holder_sid or giver == "" or from != giver or _ground:
+		why = "stale"
+	if why != "":
+		last_refusal = {"n": n, "why": why}
+		print("%s refused throw n=%d from %s: %s" % [TAG, n, giver, why])
+		CoopSync.map_event("idolno_%d" % n, {"n": n, "to": giver, "why": why}, false)
+		return
+	CoopSync.map_event("idolpass_%d" % n, {"n": n, "id": "", "by": "", "giver": giver,
+			"giver_by": str(data.get("giver_by", "")), "ground": true, "pos": data.get("pos", []),
+			"from": data.get("from", []), "pit": _b(data.get("pit", false)), "fly": float(data.get("fly", 0.6)),
+			"orphan": false, "confirm": false}, true)
+
+
+func _update_grab(c, alive: bool, now: int) -> void:
+	# walking over a thrown idol picks it up (the authority decides a race)
+	if not _ground or not alive or _finished() or now < _ground_ms:
+		return
+	var d: Vector3 = c.global_position - _ground_pos
+	var flat := Vector2(d.x, d.z).length()
+	if _is_me(_ground_thrower) and not _grab_armed:
+		if now - _ground_ms >= int(THROWER_GRAB_S * 1000.0) or flat > GRAB_R + 1.0:
+			_grab_armed = true
+		else:
+			return
+	if flat > GRAB_R or d.y > GRAB_DY or d.y < -GRAB_DY:
+		return
+	if now - _grab_sent_ms < GRAB_RESEND_MS:
+		return
+	_grab_sent_ms = now
+	var n := _seq + 1
+	print("%s grab idolgrab_%d (%.1f m)" % [TAG, n, flat])
+	CoopSync.map_event("idolgrab_%d" % n, {"n": n, "to": _my_sid(), "to_by": CoopSync.local_name, "at": now}, false)
+
+
+func _on_grab(data: Dictionary) -> void:
+	if not CoopSync.map_is_authority():
+		return
+	var n := int(data.get("n", 0))
+	var to := _sid(data.get("to", ""))
+	var from := str(data.get("_from", _my_sid()))
+	var why := ""
+	if _finished():
+		why = "done"
+	elif n != _seq + 1 or not _ground or to == "" or from != to:
+		why = "stale"
+	else:
+		var rn := _node_for_sid(to)
+		var reach := GRAB_HOST_REACH_LOOP if _b(CoopSync.get("_loopback")) else GRAB_HOST_REACH
+		if rn == null:
+			why = "dead"
+		elif rn.global_position.distance_to(_ground_pos) > reach + GRAB_DY:
+			why = "far"
+	if why != "":
+		print("%s refused grab n=%d by %s: %s" % [TAG, n, to, why])
+		return
+	CoopSync.map_event("idolpass_%d" % n, {"n": n, "id": to, "by": str(data.get("to_by", "")), "giver": "",
+			"giver_by": "", "pickup": true, "thrower": _ground_thrower, "screamed": _screamed,
+			"orphan": false, "confirm": false}, true)
+
+
+func _announce_throw(data: Dictionary, me_before: bool) -> void:
+	var who := str(data.get("giver_by", ""))
+	if who == "":
+		who = _name_of(_sid(data.get("giver", "")))
+	var pit := _b(data.get("pit", false))
+	print("%s thrown n=%d by %s pit=%s" % [TAG, int(data.get("n", 0)), who, str(pit)])
+	if me_before:
+		if pit:
+			CoopSync.show_banner("The pit will not keep it. The idol crawls back up beside you.", 4.0)
+		else:
+			CoopSync.show_banner("You threw the idol. It weeps where it lies. The Nest still hunts you.", 4.0)
+	else:
+		CoopSync.show_banner("%s threw the idol%s. Walk over it to pick it up." % [who, " (the pit gave it back)" if pit else ""], 4.0)
+
+
+func _announce_pickup(data: Dictionary, me_now: bool) -> void:
+	var who := holder_name()
+	var screamed := _b(data.get("screamed", false))
+	print("%s picked up n=%d by %s (thrower %s, screamed %s)" % [TAG, int(data.get("n", 0)), _holder_sid, str(data.get("thrower", "")), str(screamed)])
+	if me_now:
+		CoopSync.show_banner("You picked up the idol%s. Everything in the Nest hunts you now." % (" and it falls silent" if screamed else ""), 4.0)
+		if Game.audio != null and not _is_me(str(data.get("thrower", ""))):
+			Game.audio.play_dark_transition2()
+	else:
+		CoopSync.show_banner("%s picked up the idol." % who, 3.0)
+
+
+func _set_ground(on: bool, d: Dictionary, n: int) -> void:
+	if not on:
+		if _ground:
+			_ground = false
+			_ground_n = 0
+			_screamed = false
+			_free_ground_node()
+		return
+	if _ground and _ground_n == n:
+		return
+	_ground = true
+	_ground_n = n
+	_ground_pos = _v3(d.get("pos", []))
+	_ground_from = _v3(d.get("from", []), _ground_pos + Vector3.UP * 1.5)
+	_ground_pit = _b(d.get("pit", false))
+	_ground_fly = clampf(float(d.get("fly", 0.6)), 0.0, 2.5)
+	if Time.get_ticks_msec() - _load_ms < 5000:
+		_ground_fly = 0.0                        # a reload or a late join: it already lies there
+	_ground_thrower = _sid(d.get("giver", ""))
+	_ground_thrower_by = str(d.get("giver_by", ""))
+	_ground_ms = Time.get_ticks_msec() + int(_ground_fly * 1000.0)
+	_screamed = false
+	_scream_t = 0.0
+	_sob_t = randf_range(4.0, 7.0)
+	_grab_armed = false
+	_grab_sent_ms = -100000
+	_orphan_since = -1
+	_make_ground_node()
+
+
+func _free_ground_node() -> void:
+	if is_instance_valid(_ground_node):
+		_ground_node.queue_free()
+	_ground_node = null
+	_ground_glow = null
+	_weep = null
+	_cry = null
+
+
+func _sfx_stream(file: String, loop: bool) -> AudioStream:
+	var ss = _ss()
+	if ss != null and ss.has_method("_stream"):
+		var st = ss.call("_stream", file, loop)
+		if st is AudioStream:
+			return st
+	var full := DIR + "sfx/" + file
+	if not FileAccess.file_exists(full):
+		_warn("sfx " + file, "missing sound " + full)
+		return null
+	var ogg := AudioStreamOggVorbis.load_from_buffer(FileAccess.get_file_as_bytes(full))
+	if ogg != null:
+		ogg.loop = loop
+	return ogg
+
+
+func _make_ground_node() -> void:
+	_free_ground_node()
+	var root := Node3D.new()
+	root.name = "IdolOnGround"
+	root.set_meta("zonda_pin_decoy", true)       # CoopSync lets a pinned hunter go for it (v5.1)
+	root.set_meta("zonda_keep", true)
+	var ps = load("res://Art/Praxthos.glb")
+	if ps is PackedScene:
+		var model: Node3D = (ps as PackedScene).instantiate()
+		for co in model.find_children("*", "CollisionObject3D", true, false):
+			co.queue_free()
+		for mi in model.find_children("*", "MeshInstance3D", true, false):
+			var m3 := mi as MeshInstance3D
+			if m3.mesh == null:
+				continue
+			for si in m3.mesh.get_surface_count():
+				var src: Material = m3.get_active_material(si)
+				if src is BaseMaterial3D:
+					var dm: BaseMaterial3D = src.duplicate()
+					dm.distance_fade_mode = BaseMaterial3D.DISTANCE_FADE_DISABLED
+					dm.proximity_fade_enabled = false
+					m3.set_surface_override_material(si, dm)
+		var ab := AABB()
+		var first := true
+		for gi in model.find_children("*", "VisualInstance3D", true, false):
+			var tr := Transform3D.IDENTITY
+			var nd: Node = gi
+			while nd != null and nd != model:
+				if nd is Node3D:
+					tr = (nd as Node3D).transform * tr
+				nd = nd.get_parent()
+			var box: AABB = tr * (gi as VisualInstance3D).get_aabb()
+			if first:
+				ab = box
+				first = false
+			else:
+				ab = ab.merge(box)
+		var h: float = maxf(ab.size.y, maxf(ab.size.x, ab.size.z))
+		model.scale = Vector3.ONE * (0.5 / h if h > 0.001 else 0.3)
+		model.position = Vector3(0.0, -ab.position.y * model.scale.y, 0.0)
+		model.name = "Model"
+		root.add_child(model)
+	_ground_glow = OmniLight3D.new()
+	_ground_glow.name = "IdolScreamGlow"
+	_ground_glow.light_color = GLOW_COLOR
+	_ground_glow.light_energy = 0.0
+	_ground_glow.omni_range = 9.0
+	_ground_glow.shadow_enabled = false
+	_ground_glow.position = Vector3(0.0, 0.5, 0.0)
+	_ground_glow.set_meta("zonda_no_shadow", true)
+	_ground_glow.set_meta("zonda_keep", true)
+	_ground_glow.set_meta("zonda_not_real_light", true)
+	root.add_child(_ground_glow)
+	var bus := &"ZondaCave" if AudioServer.get_bus_index("ZondaCave") >= 0 else &"MainBus"
+	_weep = AudioStreamPlayer3D.new()
+	_weep.name = "Weep"
+	_weep.stream = _sfx_stream(SFX_WEEP[randi() % SFX_WEEP.size()], true)
+	_weep.volume_db = -4.0
+	_weep.unit_size = 3.0
+	_weep.max_distance = 32.0
+	_weep.bus = bus
+	_weep.position = Vector3(0.0, 0.4, 0.0)
+	root.add_child(_weep)
+	_cry = AudioStreamPlayer3D.new()
+	_cry.name = "Cry"
+	_cry.volume_db = 0.0
+	_cry.unit_size = 4.0
+	_cry.max_distance = 45.0
+	_cry.bus = bus
+	_cry.position = Vector3(0.0, 0.4, 0.0)
+	root.add_child(_cry)
+	var parent: Node = map if map != null else self
+	parent.add_child(root)
+	root.global_position = _ground_from if _ground_fly > 0.0 else _ground_pos
+	_ground_node = root
+
+
+func _update_ground(delta: float, now: int) -> void:
+	if not _ground:
+		return
+	if not is_instance_valid(_ground_node):
+		_make_ground_node()
+		if not is_instance_valid(_ground_node):
+			return
+	if _finished():
+		_free_ground_node()
+		return
+	var left := float(_ground_ms - now) / 1000.0
+	if left > 0.0 and _ground_fly > 0.0:
+		# in flight: a simple arc from the hand to where it lands, tumbling
+		var k := clampf(1.0 - left / _ground_fly, 0.0, 1.0)
+		var peak := maxf(1.2, _ground_from.distance_to(_ground_pos) * 0.12)
+		var p := _ground_from.lerp(_ground_pos, k) + Vector3.UP * (4.0 * peak * k * (1.0 - k))
+		if _ground_pit:
+			p = _ground_from.lerp(_ground_pos, k) + Vector3.UP * (sin(k * PI) * 2.0)
+		_ground_node.global_position = p
+		_ground_node.rotate_x(delta * 9.0)
+		return
+	_ground_node.global_position = _ground_pos
+	_ground_node.rotation = Vector3(0.0, _ground_node.rotation.y + delta * 0.15, 0.0)
+	var lying := float(now - _ground_ms) / 1000.0
+	if not _screamed:
+		if is_instance_valid(_weep) and _weep.stream != null and not _weep.playing and _weep.is_inside_tree():
+			_weep.play()
+		_sob_t -= delta
+		if _sob_t <= 0.0:
+			_sob_t = randf_range(5.0, 8.0)
+			_play_cry(SFX_SOB, -3.0, randf_range(0.9, 1.05), 4.0, 45.0)
+		if lying >= WEEP_S:
+			_scream()
+	else:
+		_scream_t -= delta
+		if _scream_t <= 0.0:
+			_scream_t = SCREAM_EVERY
+			_play_cry(SFX_SCREAM[randi() % SFX_SCREAM.size()], 3.0, randf_range(0.85, 1.0), 20.0, 260.0)
+			scream_log.append(now)
+		# the glow: a red pulse, brightest at each scream
+		var since := SCREAM_EVERY - _scream_t
+		var pulse := 0.5 + 0.5 * sin(float(now) / 180.0)
+		if is_instance_valid(_ground_glow):
+			_ground_glow.light_energy = 1.1 + 0.6 * pulse + 2.5 * exp(-since * 1.5)
+			_ground_glow.omni_range = 8.0 + 3.0 * exp(-since * 1.5)
+
+
+func _scream() -> void:
+	_screamed = true
+	_scream_t = 0.0                           # the first scream plays on this frame's check
+	if is_instance_valid(_weep):
+		_weep.stop()
+	print("%s the idol screams (n=%d, %.1f s on the ground)" % [TAG, _ground_n, float(Time.get_ticks_msec() - _ground_ms) / 1000.0])
+	CoopSync.show_banner("The idol SCREAMS. The Nest is coming for it.", 4.0)
+	var ln = CoopSync.lantern
+	if is_instance_valid(ln) and ln.has_method("curse_flare"):
+		ln.call("curse_flare")
+	_update_pins()
+
+
+func _play_cry(file: String, db: float, pitch: float, unit: float, maxd: float) -> void:
+	if not is_instance_valid(_cry) or not _cry.is_inside_tree():
+		return
+	var st := _sfx_stream(file, false)
+	if st == null:
+		return
+	_cry.stop()
+	_cry.stream = st
+	_cry.volume_db = db
+	_cry.pitch_scale = pitch
+	_cry.unit_size = unit
+	_cry.max_distance = maxd
+	_cry.play()
 
 
 # ---------------------------------------------------------------- dev test
@@ -1254,6 +1788,16 @@ class IdolTest extends Node:
 	var min_hp := 1000.0
 	var floor_t := -1.0
 	var end_t := -1.0
+	# v5.1 "throw"
+	var th_t := -1.0
+	var th_plan: Dictionary = {}
+	var th_yaw := 0.0
+	var th_d0 := -1.0
+	var th_scream_t := -1.0
+	var th_stations: Array = []
+	var th_si := 0
+	var th_pit_yaw := 0.0
+	var th_pit_found := false
 
 	func ok(key: String, cond: bool, text: String) -> void:
 		if checks.has(key):
@@ -1355,7 +1899,7 @@ class IdolTest extends Node:
 				_log_state(c)
 		if min_hp > float(c.health) and floor_t >= 0.0:
 			min_hp = float(c.health)
-		if variant != "solo" and t_idol >= 0.0 and float(c.health) < 50.0:
+		if t_idol >= 0.0 and float(c.health) < 50.0 and (variant != "solo"):
 			# the Nest nips an invincible tester down to 0, which would count as "not alive" and
 			# hand the idol on by the orphan rule mid-test: top it up (burns are measured from
 			# what take_damage is given, not from health)
@@ -1365,6 +1909,8 @@ class IdolTest extends Node:
 				_solo(c)
 			"race":
 				_race(c)
+			"throw":
+				_throwtest(c)
 			_:
 				_main(c)
 
@@ -1430,12 +1976,16 @@ class IdolTest extends Node:
 						"confirm idolpass_1 holder=%s passes=%d (%.2f s)" % [h._holder_sid, h.passes(), t - t_idol])
 				phase = 2
 		elif phase == 2:
+			# the burn curve (4, 5.2, 6.4) assumes the weight grew without a pause: a hunter that lost
+			# the tester for a second (it happens, the Nest is busy) shifted the 2nd tick. Gate forced, as in solo
+			h._test_force_hunted = true
 			_weight_checks()
 			# pass once three burns have landed (the stint is 20 s or more by then), or give up at 70 s
 			if (h.burn_log.size() >= 3 and t - t_idol >= 14.0) or t - t_idol > 70.0:
 				if h.burn_log.size() < 3:
 					ok("burn", false, "burn: only %d ticks in 70 s (w=%.1f, hunted=%s)" % [h.burn_log.size(), h._w, str(h._hunted)])
 				req_t = t
+				h._test_force_hunted = false
 				_try_pass1()
 				phase = 3
 		elif phase == 3:
@@ -1498,15 +2048,22 @@ class IdolTest extends Node:
 			var gap := float(tick_ms - tell_ms) / 1000.0
 			ok("telegraph", tell_ms >= 0 and gap >= 0.55 and gap <= 0.65, "telegraph %.2f s between the sizzle and the burn" % gap)
 		if h.burn_log.size() >= 3 and not checks.has("burn"):
-			var want := [4.0, 5.2, 6.4]
+			# v5.1: the law, not a fixed curve. The weight grows 1.0/s with a living teammate and 0.6/s
+			# without, and the loopback Ghost's count flickers, so (4, 5.2, 6.4) was luck. Each tick must be
+			# _burn_damage(w at that tick) (2 x (2 + 0.3 (w - 20)), capped), the first about 4, and rising.
 			var got: Array = []
 			var good := true
+			var prev := 0.0
 			for i in 3:
 				var d := float(h.burn_log[i][1])
-				got.append("%.2f" % d)
-				if absf(d - want[i]) > 0.3:
+				var wi := float(h.burn_log[i][2])
+				got.append("%.2f at w %.1f" % [d, wi])
+				if absf(d - h._burn_damage(wi)) > 0.05 or d < prev:
 					good = false
-			ok("burn", good, "burn (%s) want (4, 5.2, 6.4)" % ", ".join(PackedStringArray(got)))
+				prev = d
+			if absf(float(h.burn_log[0][1]) - 4.0) > 0.3:
+				good = false
+			ok("burn", good, "burn (%s) = 2 x (2 + 0.3 (w - 20)), first ~4, rising" % ", ".join(PackedStringArray(got)))
 
 	func _after_pass1(c) -> void:
 		var dt := t - p1
@@ -1571,28 +2128,8 @@ class IdolTest extends Node:
 				ok(k, false, "%s: the Ghost's knight is missing" % k)
 		if dt >= 3.0 and not checks.has("drain"):
 			ok("drain", h._w <= w_p1 - 2.0, "drain w %.1f -> %.1f in 3 s" % [w_p1, h._w])
-		# the Ghost tries to pass it back after 3 s: too soon
-		if dt >= 3.0 and cling_t < 0.0:
-			cling_t = t
-			h.last_refusal = {}
-			h.last_recv_refusal = {}
-			_ghost_passes_back()
-		if cling_t >= 0.0 and not checks.has("cling"):
-			if _retryable(h._seq + 1) and cling_tries < 4 and h._stint_s() < 5.0:
-				# only reach turned it down (a shove moved me): the Ghost tries again while the idol
-				# still clings to it, so the authority's cling rule is what gets tested
-				if t - cling_t >= BACK_GAP:
-					cling_tries += 1
-					print("%s cling try %d: the last pass-back was turned down for reach (%s)" % [TAG, cling_tries + 1, _why_no_pass()])
-					cling_t = t
-					h.last_refusal = {}
-					h.last_recv_refusal = {}
-					_ghost_passes_back()
-			elif not h.last_refusal.is_empty() or h._seq >= 3 or t - cling_t > 1.5:
-				ok("cling", h._seq == 2 and int(h.last_refusal.get("n", 0)) == 3 and str(h.last_refusal.get("why", "")) == "cling",
-						"cling rejected (refusal %s, seq %d, recv %s)" % [str(h.last_refusal), h._seq, str(h.last_recv_refusal)])
-		# after 10 s it goes through
-		if dt >= 10.0 and pass2_t < 0.0:
+		# v5.1: no cling, the Ghost passes it straight back after 3 s and it goes through
+		if dt >= 3.0 and pass2_t < 0.0:
 			pass2_t = t
 			h.last_refusal = {}
 			h.last_recv_refusal = {}
@@ -1603,6 +2140,8 @@ class IdolTest extends Node:
 				ok("pass2", h._holder_sid == me() and mine() and h._seq == 3 and h.passes() == 2,
 						"pass2 holder=%s seq=%d passes=%d mine=%s (try %d)" % ["me" if h._holder_sid == me() else h._holder_sid, h._seq,
 						h.passes(), str(mine()), pass2_tries + 1])
+				ok("no cling", t - p1 < 6.0 and str(h.last_refusal.get("why", "")) != "cling",
+						"no cling: passed straight back %.1f s after the first pass (refusal %s)" % [t - p1, str(h.last_refusal)])
 				CoopSync.set("loop_ghost_weight", 0)
 			elif _retryable(h._seq + 1) and pass2_tries < 6:
 				if t - pass2_t >= BACK_GAP:
@@ -1712,7 +2251,7 @@ class IdolTest extends Node:
 				phase = 3
 		elif phase == 3:
 			if t - req_t >= 1.0:
-				ok("solo banner", h.last_g_msg == "There is no one to take it. Get it out.", "solo no-pass banner '%s'" % h.last_g_msg)
+				ok("solo banner", h.last_g_msg == "There is no one to take it. Get it out, or tap G to throw it.", "solo no-pass banner '%s'" % h.last_g_msg)
 				# away from the Nest (nothing may bite here), the gate forced open and the weight
 				# pre-loaded so 70 s holds about 30 burn ticks: the floor must hold every one
 				var sp = c.get("original_global_position_in_level")
@@ -1728,6 +2267,225 @@ class IdolTest extends Node:
 			if t - floor_t >= 70.0:
 				ok("floor", min_hp >= BURN_FLOOR and h.burn_log.size() >= 3 and h.floor_skips >= 1,
 						"floor min health %.0f over 70 s (%d burns, %d skipped by the floor)" % [min_hp, h.burn_log.size(), h.floor_skips])
+				_review_grep()
+				_finish(c)
+
+	# ---- "throw" (v5.1): tap G throws, the ground idol weeps, then screams and calls the Nest
+	func _look_yaw(c, yaw: float, pitch: float = 0.0) -> void:
+		if map.has_method("debug_look"):
+			var eye: Vector3 = c.global_position + Vector3.UP * 1.5
+			var dir := Vector3(-sin(yaw), tan(pitch), -cos(yaw))
+			map.call("debug_look", eye + dir * 10.0)
+		elif c.get("PlayerCamera") != null:
+			c.PlayerCamera.set_camera_rotation(Vector3(pitch, yaw, 0.0))
+
+	func _nearest_hunter_to(p: Vector3) -> float:
+		var best := INF
+		for cent in Game.centipedes:
+			if is_instance_valid(cent) and cent is Node3D and cent.is_inside_tree() and h._pinned(cent, map.get("hunt_pin_groups")):
+				best = minf(best, p.distance_to((cent as Node3D).global_position))
+		for q in crawlers():
+			if q is Vector3:
+				best = minf(best, p.distance_to(q))
+		return best
+
+	func _throwtest(c) -> void:
+		if phase == 0:
+			if t < 2.0:
+				return
+			_begin(c)
+			take_idol()
+			t_idol = t
+			phase = 1
+		elif phase == 1:
+			if h._seq >= 1 or t - t_idol > 1.0:
+				ok("confirm", h._seq == 1 and h._holder_sid == me() and h.passes() == 0,
+						"confirm idolpass_1 holder=%s passes=%d" % [h._holder_sid, h.passes()])
+				th_t = t
+				th_yaw = 0.0
+				th_plan = {}
+				_look_yaw(c, 0.0)
+				phase = 2
+		elif phase == 2:
+			# the range: plan a throw on 8 headings (level view), keep the longest one on rock
+			if t - th_t < 0.25:
+				return
+			var k := int(round(th_yaw / (PI / 4.0)))
+			var plan: Dictionary = h._plan_throw(c)
+			var dist: float = (plan["pos"] as Vector3).distance_to(c.global_position)
+			print("%s plan heading %d: %.1f m pit=%s" % [TAG, k, dist, str(plan["pit"])])
+			if not bool(plan["pit"]) and (th_plan.is_empty() or dist > float(th_plan["dist"])):
+				th_plan = plan.duplicate()
+				th_plan["dist"] = dist
+				th_plan["yaw"] = th_yaw
+			th_yaw += PI / 4.0
+			if k >= 7:
+				var best := float(th_plan.get("dist", 0.0))
+				ok("range", best >= 11.0 and best <= 19.0, "throw range %.1f m on the longest open heading (want about 15)" % best)
+				_look_yaw(c, float(th_plan.get("yaw", 0.0)))
+				th_t = t
+				phase = 3
+			else:
+				_look_yaw(c, th_yaw)
+				th_t = t
+		elif phase == 3:
+			if t - th_t < 0.4:
+				return
+			th_plan = h._plan_throw(c)
+			h._test_hold_g(0.1)                     # a tap: the throw
+			th_t = t
+			phase = 4
+		elif phase == 4:
+			if h._seq >= 2 or t - th_t > 3.0:
+				var gp: Vector3 = h._ground_pos
+				var sent: Vector3 = h.throw_log[-1][1] if not h.throw_log.is_empty() else Vector3(INF, INF, INF)
+				var dist_sent := float(h.throw_log[-1][3]) if not h.throw_log.is_empty() else -1.0
+				ok("throw", h._seq == 2 and h._ground and h._holder_sid == "" and not mine() and h.passes() == 0 \
+						and gp.distance_to(sent) < 0.05 and dist_sent > 3.0,
+						"throw seq=%d ground=%s holder='%s' mine=%s passes=%d lies %.2f m from where it was thrown, %.1f m from the thrower (%.1f s)" % [h._seq,
+						str(h._ground), h._holder_sid, str(mine()), h.passes(), gp.distance_to(sent), dist_sent, t - th_t])
+				th_t = t
+				phase = 5
+		elif phase == 5:
+			if t - th_t < 1.0:
+				return
+			if not checks.has("hunt thrower"):
+				var pins = CoopSync.get("hunt_pins")
+				var pr = map.call("idol_prey") if map.has_method("idol_prey") else null
+				ok("hunt thrower", pins is Dictionary and pins.get("idol") == Game.climber and pr == Game.climber,
+						"the Nest hunts the thrower while it weeps (pin=%s prey=%s)" % [str(pins.get("idol") if pins is Dictionary else null), str(pr)])
+			if t - th_t >= float(h._ground_fly) + 0.5 and not checks.has("weep"):
+				var wp = h._weep
+				ok("weep", is_instance_valid(wp) and wp.playing and wp.stream != null and not h._screamed,
+						"it weeps on the ground (playing=%s)" % str(wp.playing if is_instance_valid(wp) else null))
+			if h._screamed:
+				th_scream_t = t
+				var lying := float(Time.get_ticks_msec() - h._ground_ms) / 1000.0
+				ok("scream time", lying >= WEEP_S - 0.1 and lying <= WEEP_S + 0.6, "it screamed after %.1f s on the ground" % lying)
+				th_d0 = _nearest_hunter_to(h._ground_pos)
+				phase = 6
+			elif t - th_t > WEEP_S + 5.0:
+				ok("scream time", false, "no scream %.0f s after the throw" % (t - th_t))
+				_finish(c)
+		elif phase == 6:
+			var el := t - th_scream_t
+			if el >= 1.0 and not checks.has("scream"):
+				var gl = h._ground_glow
+				var pins2 = CoopSync.get("hunt_pins")
+				var decoy = h._ground_node
+				var pr2 = map.call("idol_prey") if map.has_method("idol_prey") else null
+				var cents_ok := true
+				var n_pinned := 0
+				for cent in Game.centipedes:
+					if is_instance_valid(cent) and cent is Node3D and cent.is_inside_tree() and cent.visible \
+							and cent.process_mode != Node.PROCESS_MODE_DISABLED and h._pinned(cent, map.get("hunt_pin_groups")) \
+							and cent.has_meta("zonda_hunt_pin"):
+						n_pinned += 1
+						if CoopSync.call("target_player_for", cent) != decoy:
+							cents_ok = false
+				ok("scream", h.scream_log.size() >= 1 and is_instance_valid(gl) and gl.light_energy > 1.0 \
+						and pins2 is Dictionary and pins2.get("idol") == decoy and pr2 == decoy and cents_ok,
+						"the scream calls the Nest (screams %d, glow %.2f, pin=decoy %s, prey=decoy %s, %d pinned hunters on it %s)" % [
+						h.scream_log.size(), gl.light_energy if is_instance_valid(gl) else -1.0,
+						str(pins2 is Dictionary and pins2.get("idol") == decoy), str(pr2 == decoy), n_pinned, str(cents_ok)])
+			if el >= 1.5 and not checks.has("brood prey"):
+				var br = h._brood()
+				var lp := str(br.get("last_prey_name")) if br != null and br.get("last_prey_name") != null else "?"
+				ok("brood prey", br == null or lp == "IdolOnGround", "the brood goes for the idol (last prey '%s')" % lp)
+			if el >= 9.5 and not checks.has("screams again"):
+				ok("screams again", h.scream_log.size() >= 2, "it screams again while it lies there (%d screams)" % h.scream_log.size())
+			if el >= 10.0 and not checks.has("converge"):
+				var d1 := _nearest_hunter_to(h._ground_pos)
+				ok("converge", d1 < 1e8 and (d1 <= th_d0 + 0.5 or d1 < 8.0), "the Nest closes on the idol: nearest %.1f m -> %.1f m in 9 s" % [th_d0, d1])
+				# walk over it
+				park(h._ground_pos + Vector3.UP * 1.0)
+				th_t = t
+				phase = 7
+		elif phase == 7:
+			if h._seq >= 3:
+				ok("pickup", h._seq == 3 and not h._ground and h._holder_sid == me() and mine() and h.passes() == 0 \
+						and not is_instance_valid(h._ground_node),
+						"walked over it: holder=%s mine=%s passes=%d ground idol gone=%s (%.1f s)" % ["me" if h._holder_sid == me() else h._holder_sid,
+						str(mine()), h.passes(), str(not is_instance_valid(h._ground_node)), t - th_t])
+				th_t = t
+				var st = map.get("L")
+				th_stations = []
+				if st is Dictionary:
+					for s in st.get("stations", []):
+						if s is Dictionary and int(s.get("biome", -1)) <= 2:
+							th_stations.append(s["pos"])
+				th_si = 0
+				phase = 8
+			elif t - th_t > 4.0:
+				ok("pickup", false, "no pickup 4 s after walking onto it (seq %d, dist %.1f)" % [h._seq,
+						Game.climber.global_position.distance_to(h._ground_pos)])
+				_finish(c)
+		elif phase == 8:
+			# find a ledge where a throw goes into the pit: stations in the upper rift, 8 headings each
+			if t - th_t < 0.6:
+				return
+			if th_si >= mini(th_stations.size(), 40):
+				ok("pit", false, "no station with a throw into the pit found")
+				_review_grep()
+				_finish(c)
+				return
+			var sp = th_stations[(th_si * 7) % th_stations.size()]
+			th_si += 1
+			var spos := Vector3(float(sp[0]), float(sp[1]), float(sp[2]))
+			park(spos + Vector3.UP * 1.2)
+			th_t = t
+			phase = 9
+		elif phase == 9:
+			if t - th_t < 0.8:
+				return
+			th_yaw = 0.0
+			_look_yaw(c, th_yaw, -0.15)
+			th_t = t
+			phase = 13
+		elif phase == 13:
+			if t - th_t < 0.25:
+				return
+			var plan2: Dictionary = h._plan_throw(c)
+			if bool(plan2["pit"]):
+				th_pit_yaw = th_yaw
+				print("%s pit found at station %d heading %.0f deg" % [TAG, th_si, rad_to_deg(th_yaw)])
+				th_t = t
+				phase = 10
+			elif th_yaw >= 7.0 * PI / 4.0 - 0.01:
+				th_t = t
+				phase = 8
+			else:
+				th_yaw += PI / 4.0
+				_look_yaw(c, th_yaw, -0.15)
+				th_t = t
+		elif phase == 10:
+			if t - th_t < 0.1:
+				return
+			th_plan = h._plan_throw(c)
+			if not bool(th_plan["pit"]):
+				th_t = t
+				phase = 8                            # shoved off the spot: look for another
+				return
+			h._test_hold_g(0.1)
+			th_t = t
+			phase = 11
+		elif phase == 11:
+			if h._seq >= 4 or t - th_t > 3.0:
+				var gp2: Vector3 = h._ground_pos
+				var near := gp2.distance_to(Game.climber.global_position)
+				ok("pit", h._seq == 4 and h._ground and h._ground_pit and near < 3.5,
+						"a throw into the pit comes back beside the thrower (pit=%s, %.1f m from the thrower)" % [str(h._ground_pit), near])
+				th_t = t
+				phase = 12
+		elif phase == 12:
+			# standing next to it: the thrower picks it up again after 2 s
+			if h._seq >= 5:
+				ok("pit pickup", h._holder_sid == me() and mine() and t - th_t >= THROWER_GRAB_S - 0.3,
+						"the thrower picks it up again after %.1f s" % (t - th_t))
+				_review_grep()
+				_finish(c)
+			elif t - th_t > 6.0:
+				ok("pit pickup", false, "no pickup 6 s after the pit throw (dist %.1f)" % Game.climber.global_position.distance_to(h._ground_pos))
 				_review_grep()
 				_finish(c)
 

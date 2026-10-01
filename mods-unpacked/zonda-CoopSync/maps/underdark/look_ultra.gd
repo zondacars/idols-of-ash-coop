@@ -42,7 +42,7 @@ extends RefCounted
 
 const TEX_DIR := "res://mods-unpacked/zonda-CoopSync/maps/underdark/tex/"
 const MANIFEST := TEX_DIR + "manifest.json"
-const BIOMES := 10                    # 10 bone and 11 bark keep their look
+const BIOMES := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12]     # 10 bone and 11 bark keep their look (v5.1: + 12 DRY GULCH)
 const MAX_PX := 512
 const WALL_TARGET := 0.125            # mean linear luminance of the shipped wall surface (Rock.png x ROck_03 detail at 0.27)
 const FLOOR_TARGET := 0.147           # the same for floors (Wall_04.png x Shell_Colorized detail at the noise mask)

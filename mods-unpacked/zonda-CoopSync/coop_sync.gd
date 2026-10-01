@@ -5,7 +5,7 @@ const MOD_DIR := "res://mods-unpacked/zonda-CoopSync/"
 # check) can never find a 4.8 lobby. From 4.8 on, the "coop_ver" lobby data does the gating.
 const LOBBY_TAG := "ZondaCoopSync2"
 const LOBBY_TAG_OLD := "ZondaCoopSync1"
-const MOD_VERSION := "5.0"
+const MOD_VERSION := "5.1"
 const MAX_MEMBERS := 4
 const SYNC_HZ := 60.0
 const CH_FAST := 0
@@ -108,6 +108,16 @@ var idol_weight := 0              # 0..98, the holder's own PC only (streamed in
 var loop_ghost_weight := 0        # loopback tests: the Ghost's streamed idol weight
 var omen_file := RELIC_FILE       # the file every trophy AND relic write goes to; tests point it elsewhere
 var omen_tier := 0                # 0..4, the best omen trophy tier over every map ([omen] section)
+# v5.1 NOISE (sound-aware creatures: the sidewinder, the stalkers, the bat colonies). How loud MY
+# voice is, measured from what this PC actually sends (so F7 mute, a closed mic or push-to-talk
+# let go are silence): 0 silent, 1 whisper, 2 talking, 3 shouting. Streamed in "nz"; a teammate's
+# is remote_player.noise_tier. noise_of(node) reads either.
+var noise_tier := 0
+var noise_db := -90.0
+var noise_force := -1                     # tests: -1 real; 0..3 a fixed tier for everyone; 9 = heard from anywhere
+var _noise_hold := 0.0
+const NOISE_DB := [-52.0, -38.0, -24.0]      # RMS dBFS at or over these: whisper, talking, shouting
+const NOISE_R := [0.0, 5.0, 12.0, 30.0]     # how far a sound-aware creature hears each tier (m)
 var save_run: Node = null         # saved runs: file format, writes, players table (save_run.gd)
 var save_prompt: Node = null      # the CONTINUE / NEW RUN panel and the guests' hold panel (save_prompt.gd)
 var test_files := false           # use_test_files() ran in this launch
@@ -720,6 +730,12 @@ func map_loaded(scene: String, fresh: bool) -> void:
 	var s: Dictionary = save_run.has_save(key)
 	if s.is_empty() or bool(s.get("finished", false)):
 		return
+	if bool(s.get("older", false)):
+		# v5.1: a run saved on another build of this map (v5.0's, say) would put its checkpoints and
+		# its stored events on rock that moved: it is never offered. The file stays until a new save.
+		print("[SAVE] the saved run is from another build of this map (mod %s): not offered, a new run starts" % str(s.get("mod", "?")))
+		show_banner("Your saved run was made on an older version of this map, so it cannot be continued. A new run starts.", 7.0)
+		return
 	save_prompt.show_for(key, s)
 	_hold_keepalive_t = 0.0                  # the guests are held on the next frame (and every 4 s)
 	var auto: String = save_run.auto_answer()
@@ -884,6 +900,8 @@ func use_test_files() -> void:
 	if test_files:
 		return
 	test_files = true
+	if noise_force < 0:
+		noise_force = 9                           # v5.1: tests written before the sound rules keep their old hunts
 	if is_instance_valid(save_run):
 		save_run.use_test_dir()
 	omen_file = "user://zonda_cosmetics_test.cfg"
@@ -1203,6 +1221,8 @@ func _pin_target(c: Node, players: Array) -> Node3D:
 	var t = hunt_pins.get(str(c.get_meta("zonda_hunt_pin")))
 	if not is_instance_valid(t) or not (t is Node3D) or not (t as Node3D).is_inside_tree():
 		return null
+	if (t as Node3D).has_meta("zonda_pin_decoy"):
+		return t                        # v5.1: the screaming idol on the ground calls the Nest to it
 	var alive: Array = players if not players.is_empty() else _alive_player_nodes()
 	return t if alive.has(t) else null
 
@@ -1250,7 +1270,7 @@ func target_attached_claw_node(c: Node3D) -> Node3D:
 	if not is_instance_valid(c) or _lure_applies(c):
 		return null
 	var n := target_player_for(c)
-	if n == null:
+	if n == null or n.has_meta("zonda_pin_decoy"):
 		return null
 	if n == Game.climber:
 		if Game.climber.activeClimberState is ClimberState_Attached and Game.climber.activeClimberState._time_in_state > 2.0:
@@ -1933,6 +1953,8 @@ func _broadcast_state() -> void:
 		msg["idl"] = 1 + clampi(idol_weight, 0, 98)
 	if omen_tier > 0:
 		msg["om"] = omen_tier           # the omen trophy tier: the charm on your lantern (absent = 0)
+	if noise_tier > 0:
+		msg["nz"] = noise_tier          # v5.1: how loud my voice is (absent = silent)
 	if is_instance_valid(lantern) and bool(lantern.get("oil_enabled")):
 		msg["ol"] = int(round(float(lantern.get("oil")) * 100.0))   # lamp oil %, for sharing (G)
 	if p.Rope and p.Rope.is_setup and p.activeClimberState and p.activeClimberState.is_rope_active() and is_instance_valid(p.Rope._claw) and p.Rope._claw.visible:
@@ -2691,7 +2713,54 @@ func _on_remote_unhook() -> void:
 
 # ---------------------------------------------------------------- voice chat (v4.9)
 
+func _measure_noise(bytes: PackedByteArray) -> void:
+	# v5.1: the level of what I am sending (decoded like a teammate would hear it), smoothed
+	if voice == null or not voice.has_method("decode"):
+		return
+	var pcm: PackedFloat32Array = voice.decode(bytes)
+	if pcm.is_empty():
+		return
+	var acc := 0.0
+	for x in pcm:
+		acc += x * x
+	var db := 10.0 * log(acc / pcm.size() + 1e-12) / log(10.0)
+	noise_db = maxf(db, noise_db)                 # instant attack, the release is in _noise_decay
+	_noise_hold = 0.35
+
+
+func _noise_decay(delta: float) -> void:
+	_noise_hold -= delta
+	if _noise_hold <= 0.0:
+		noise_db = maxf(-90.0, noise_db - 60.0 * delta)
+	var t := 0
+	for i in NOISE_DB.size():
+		if noise_db >= float(NOISE_DB[i]):
+			t = i + 1
+	noise_tier = t
+
+
+func noise_of(n) -> int:
+	# 0..3 for the local climber or a teammate's knight; anything else is silent
+	if n == null or not is_instance_valid(n):
+		return 0
+	if noise_force >= 0 and noise_force <= 3:
+		return noise_force
+	if noise_force == 9:
+		return 2                                  # the old tests: as loud as the old triggers assumed
+	if n == Game.climber:
+		return noise_tier
+	var v = n.get("noise_tier")
+	return int(v) if v != null else 0
+
+
+func noise_radius(n) -> float:
+	if noise_force == 9:
+		return 1e6                                # a dev test that predates the sound rules: hunted as before
+	return float(NOISE_R[clampi(noise_of(n), 0, 3)])
+
+
 func _voice_tick(delta: float) -> void:
+	_noise_decay(delta)
 	# every frame in a session: refill the bandwidth bucket, poll the mic every 40 ms
 	if voice == null:
 		return
@@ -2704,6 +2773,7 @@ func _voice_tick(delta: float) -> void:
 	var bytes: PackedByteArray = voice.poll_capture()
 	if bytes.is_empty():
 		return
+	_measure_noise(bytes)
 	_voice_seq += 1
 	var msg := {"t": "v", "from": _my_steam_id, "q": _voice_seq, "d": bytes}
 	var data: PackedByteArray = var_to_bytes(msg)

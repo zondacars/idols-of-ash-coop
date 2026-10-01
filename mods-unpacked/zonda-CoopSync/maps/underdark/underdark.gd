@@ -67,6 +67,8 @@ const LOOKS := [
 	# 10 and 11 are surfaces, not places: bone (the Ribs) and bark (the great roots)
 	[Color(1.9, 1.8, 1.5), Color(1.9, 1.8, 1.5), Color(0.36, 0.34, 0.3), Color(0.066, 0.068, 0.062), 0.84, 0.1],
 	[Color(0.4, 0.27, 0.16), Color(0.46, 0.31, 0.18), Color(0.36, 0.25, 0.16), Color(0.082, 0.056, 0.03), 0.84, 0.1],
+	# 12 DRY GULCH (v5.1): the dry lake bed and its ghost town, dust the colour of old bone and bad teeth
+	[Color(0.72, 0.66, 0.54), Color(0.66, 0.6, 0.5), Color(0.44, 0.4, 0.31), Color(0.078, 0.07, 0.05), 0.84, 0.15],
 ]
 
 var L: Dictionary = {}
@@ -147,18 +149,21 @@ var _bruise_told := false
 const AMB_GAIN := 1.9
 # light that falls down the rift from far above, per biome. It is what lets you see a balcony
 # 300 m away. Off inside the side caves.
-const SKYGLOW := [0.25, 0.25, 0.25, 0.28, 0.3, 0.2, 0.25, 0.15, 0.0, 0.0]
+const SKYGLOW := [0.25, 0.25, 0.25, 0.28, 0.3, 0.2, 0.25, 0.15, 0.0, 0.0, 0.0, 0.0, 0.22]
 # The game's colour ramp crushes anything darker than about 0.12 after its 2x brightness, and its
 # sand and rock textures are dark to begin with, so floors in the ambient-only biomes rendered
 # black (measured: 76 to 95% of floor pixels under 4% brightness). Lift the albedo, not the lights.
 # v4.8: Sunken Village (5), the Nest (8) and the root bark (11) read black in NORMAL, so they get
 # the same lift as their neighbours. LANTERN still scales all of it by BRIGHT_ALB.
-const WALL_LIFT := [1.15, 1.18, 1.27, 1.75, 1.42, 1.3, 1.15, 1.3, 1.65, 1.0, 1.0, 1.3]
-const FLOOR_LIFT := [1.36, 1.42, 1.57, 2.2, 1.78, 1.6, 1.39, 1.6, 2.0, 1.0, 1.0, 1.6]
+const WALL_LIFT := [1.15, 1.18, 1.27, 1.75, 1.42, 1.3, 1.15, 1.3, 1.65, 1.0, 1.0, 1.3, 1.25]
+const FLOOR_LIFT := [1.36, 1.42, 1.57, 2.2, 1.78, 1.6, 1.39, 1.6, 2.0, 1.0, 1.0, 1.6, 1.5]
 # how bright the void (the background past the rock) is against each biome's fog tint. Below 1 the
 # pit reads darker than the fogged rock in front of it, so it looks bottomless. The Mouth (open to
 # the surface) and the Burrows (already black) keep the old look.
-const VOID_DIM := [1.0, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 1.0, 0.35, 0.35]
+const VOID_DIM := [1.0, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 0.35, 1.0, 0.35, 0.35, 0.35]
+# v5.1: the looks that are PLACES (dressed by ULTRA HD, given rock sheen): 0-9 and 12; 10 bone and 11 bark are surfaces
+static func is_place_look(i: int) -> bool:
+	return (i >= 0 and i < 10) or i == 12
 const VIEW_RANGE := 425.0        # the campaign shows 150-300 m of void; the rift needs the same
 const SOLID_RANGE := 150.0
 const BRIGHT := [0.08, 1.0]                        # ambient and the glow down the rift: LANTERN (near black) or NORMAL
@@ -244,7 +249,12 @@ var _oil_phase_t := 0.0
 const FEATURES := [["light", "light.gd"], ["omen", "omen.gd"], ["idol", "idol_host.gd"],
 		["shades", "shades.gd"], ["hearth", "hearth.gd"], ["harriers", "harriers.gd"],
 		["noclip", "noclip_probe.gd"], ["sfxaudit", "sfx_audit.gd"], ["darkaudit", "dark_audit.gd"], ["shadeaudit", "shade_audit.gd"],
-		["surfaces", "surfaces.gd"]]   # wave 2 inserts ["setpieces", "setpieces.gd"] before surfaces
+		["town", "town.gd"], ["sidewinder", "sidewinder.gd"],        # v5.1: DRY GULCH and its sand-swimmer
+		["squeezes", "squeezes.gd"],                                  # v5.1: a crawl at each biome change
+		["setpieces", "setpieces.gd"],                                # v5.1: the Span Falls, the Chandelier
+		["hearing", "hearing.gd"],                                    # v5.1: the sound rules' dev test (inert in play)
+		["echoes", "echoes.gd"],                                      # v5.1: bloodstain echoes and chalk notes
+		["surfaces", "surfaces.gd"]]
 # surfaces.gd stays LAST: it tunes how every material takes the lantern, after the others built theirs
 # non-persistent event prefixes that must never be once-gated (every repeat is a new event)
 const REPEATABLE_CORE := ["crumble_", "drop_", "bell_", "stalkbite_", "cbite_", "cent_"]
@@ -502,7 +512,7 @@ func _run_state() -> Dictionary:
 # _apply_material_brightness, so it follows F5.
 const ROCK_SHEEN := [[0.84, 0.30, 0.6], [0.86, 0.20, 0.6], [0.75, 0.50, 0.6], [0.82, 0.30, 0.6],
 		[0.72, 0.60, 0.6], [0.82, 0.28, 0.6], [0.72, 0.55, 0.6], [0.88, 0.25, 0.6], [0.74, 0.50, 0.6],
-		[0.86, 0.22, 0.6], [0.72, 0.12, 0.35], [0.92, 0.10, 0.6]]
+		[0.86, 0.22, 0.6], [0.72, 0.12, 0.35], [0.92, 0.10, 0.6], [0.88, 0.22, 0.6]]
 # The lantern on the floor (owner request 2026-09-30, "the lantern must reflect off the floor"; troubleshot in game
 # the same day). The flame meets a floor at a shallow angle, and in LANTERN light two things ate that light: the
 # game's screen-space AO held DIRECT light at full strength (ssao_light_affect 1.0; ULTRA HD already caps it at 0.3,
@@ -578,7 +588,9 @@ func _regive_rock() -> void:
 	# NORMAL PIXELS again after ULTRA HD: look_ultra restores the textures it recorded at setup, which
 	# do not include the map's own soft normals (its snapshot takes a runtime normal map for gfx's),
 	# so the rock gets its sheen back here. Biomes 0-9 only: bone and bark are never dressed.
-	for i in mini(10, _wall_mat.size()):
+	for i in _wall_mat.size():
+		if not is_place_look(i):
+			continue
 		_give_sheen(_wall_mat[i], i, false)
 		if i < _floor_mat.size():
 			_give_sheen(_floor_mat[i], i, true)
@@ -668,11 +680,11 @@ func _apply_pixel_filter() -> void:
 	if reduced:
 		tf = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
 	for i in _wall_mat.size():
-		if _ultra_on and i < 10:
+		if _ultra_on and is_place_look(i):
 			continue                       # wearing the ULTRA HD photos: they keep their smooth filter
 		(_wall_mat[i] as BaseMaterial3D).texture_filter = tf
 	for i in _floor_mat.size():
-		if _ultra_on and i < 10:
+		if _ultra_on and is_place_look(i):
 			continue
 		(_floor_mat[i] as BaseMaterial3D).texture_filter = tf
 	for m in _dress_mat:
@@ -716,7 +728,9 @@ func _remap_ultra_rough() -> void:
 	# ULTRA HD photo roughness, remapped around the biome's own roughness (design 2A): the raw photo
 	# maps reach 0.0 (a pinpoint lobe on every wet texel). r' = clamp(r_biome + 0.5 x (r_photo - mean),
 	# 0.5, 1.0), material roughness 1.0 x that map. Cached per source map and target.
-	for i in mini(10, _wall_mat.size()):
+	for i in _wall_mat.size():
+		if not is_place_look(i):
+			continue
 		for m in [_wall_mat[i], _floor_mat[i] if i < _floor_mat.size() else null]:
 			var sm := m as StandardMaterial3D
 			if sm == null or sm.roughness_texture == null or sm.roughness_texture.has_meta("zonda_rough"):
@@ -3357,7 +3371,7 @@ func _parts_setup() -> void:
 	layers.sort_custom(func(a, b): return float(a[0]) > float(b[0]))
 	_bounds.clear()
 	for ly in layers:
-		if not _bounds.is_empty() and float(ly[0]) >= float(_bounds[-1]["bottom"]) - 30.0:
+		if not _bounds.is_empty() and float(ly[0]) >= float(_bounds[-1]["bottom"]) - 6.0:   # v5.1: 30 -> 6, so DRY GULCH is a part
 			var b: Dictionary = _bounds[-1]
 			b["bottom"] = minf(float(b["bottom"]), float(ly[1]))
 			b["top"] = maxf(float(b["top"]), float(ly[0]))
@@ -3529,8 +3543,13 @@ func _nc_part_release(id: String) -> void:
 	if k <= _fol_part:
 		return
 	var old := _fol_part
+	var old_f: Node3D = _follower
 	if is_instance_valid(_follower):
 		_nc_leave_behind(_follower, old)
+		# v5.1: the one left behind comes to the hole the team went through (squeezes.gd)
+		var sqm := feature("squeezes")
+		if sqm != null and sqm.has_method("on_part_change"):
+			sqm.call("on_part_change", old_f, old, k)
 	_follower = null
 	_fol_part = k
 	_burrow_parked = false
@@ -3655,6 +3674,9 @@ func _pt_band(cid: String):
 	return null
 
 
+var _pt_lid_k := 1
+
+
 func _update_parts_test(delta: float) -> void:
 	# developer test (maps/underdark/parts.flag; solo host; the test save folder; you cannot die
 	# during it): the squeezes and parts, the territorial bands clipped at the Lid, then the Follower
@@ -3673,8 +3695,10 @@ func _update_parts_test(delta: float) -> void:
 				print("[PARTS] squeeze %s at %s top %.1f bottom %.1f r %.1f layer=%s open=%s" % [str(q["name"]), str(q["pos"]),
 						float(q["top"]), float(q["bottom"]), float(q["r"]), str(q["layer"]), str(q["open"])])
 			_pt_check("boundaries", _bounds.size() >= 1, "%d" % _bounds.size())
-			_pt_check("part of THE FAR WALL", part_of(_pt_cp(2)) == 0, "%d" % part_of(_pt_cp(2)))
-			_pt_check("part of FUNGAL HOLLOW", part_of(_pt_cp(4)) == 1, "%d" % part_of(_pt_cp(4)))
+			# v5.1: more squeezes above the Lid (the Throat) shift the numbers: test against the Lid's own part
+			_pt_lid_k = part_of(Vector3(0.0, LID_BOTTOM - 5.0, 0.0))
+			_pt_check("part of THE FAR WALL", part_of(_pt_cp(2)) == _pt_lid_k - 1, "%d (the Lid's part %d)" % [part_of(_pt_cp(2)), _pt_lid_k])
+			_pt_check("part of FUNGAL HOLLOW", part_of(_pt_cp(4)) == _pt_lid_k, "%d" % part_of(_pt_cp(4)))
 			var bm := Vector3.ZERO
 			for z in _burrow_zones:
 				if str(z.get("name", "")) == "Burrow Mouth":
@@ -3707,9 +3731,9 @@ func _update_parts_test(delta: float) -> void:
 			_pt_step = 3
 			_pt_at = _pt_t
 		3:
-			if _fol_part < 1 and _pt_t - _pt_at < 8.0:
+			if _fol_part < _pt_lid_k and _pt_t - _pt_at < 8.0:
 				return
-			_pt_check("past the Lid: part 1", _fol_part == 1 and CoopSync.map_event_done("cent_follower_p1"), "part %d" % _fol_part)
+			_pt_check("past the Lid: part %d" % _pt_lid_k, _fol_part == _pt_lid_k and CoopSync.map_event_done("cent_follower_p%d" % _pt_lid_k), "part %d" % _fol_part)
 			var old_ok: bool = is_instance_valid(_pt_old) and _left_behind.has(_pt_old) and int(_pt_old.get_meta("zonda_part", -1)) == 0 and _pt_old.has_meta("zonda_territory")
 			_pt_check("the part 0 Follower stays behind", old_ok, str(_pt_old.get_meta("zonda_territory", null)) if is_instance_valid(_pt_old) else "gone")
 			debug_park(_pt_cp(5) + Vector3.UP * 0.3)
@@ -3717,11 +3741,11 @@ func _update_parts_test(delta: float) -> void:
 			_pt_step = 4
 			_pt_at = _pt_t
 		4:
-			var f_ok: bool = is_instance_valid(_follower) and str(_follower.get_meta("zonda_cid", "")) == "follower_p1:0"
+			var f_ok: bool = is_instance_valid(_follower) and str(_follower.get_meta("zonda_cid", "")) == "follower_p%d:0" % _pt_lid_k
 			if not f_ok and _pt_t - _pt_at < 16.0:
 				return
 			var fp: Vector3 = _follower.global_position if is_instance_valid(_follower) else Vector3.ZERO
-			_pt_check("part 1 wakes its own Follower", f_ok and part_of(fp) == 1 and not in_squeeze(fp), "at %s" % str(fp))
+			_pt_check("part %d wakes its own Follower" % _pt_lid_k, f_ok and part_of(fp) == _pt_lid_k and not in_squeeze(fp), "at %s" % str(fp))
 			var op: Vector3 = _pt_old.global_position if is_instance_valid(_pt_old) else Vector3.ZERO
 			_pt_check("the old one was never moved past the Lid", is_instance_valid(_pt_old) and _pt_old != _follower and op.y > LID_TOP - 6.0, "old at %s" % str(op))
 			c.prevent_player_death = false
@@ -4009,9 +4033,20 @@ func _follower_spot(players: Array):
 			continue
 		var score := absf(dmin - fol_aim)
 		if score < best_score:
+			if _low_roof(pos):
+				continue                          # v5.1: 3 m up would be inside the rock (it woke stuck there)
 			best_score = score
 			best = pos + Vector3(0, 3.0, 0)
 	return best
+
+
+func _low_roof(pos: Vector3) -> bool:
+	# rock within 3.6 m above a station (only when that rock collides now; unknown counts as clear,
+	# as before v5.1)
+	if not is_solid_at(pos + Vector3(0, 1.5, 0), 4.0):
+		return false
+	var q := PhysicsRayQueryParameters3D.create(pos + Vector3(0, 0.3, 0), pos + Vector3(0, 3.6, 0), 1)
+	return not get_world_3d().direct_space_state.intersect_ray(q).is_empty()
 
 
 func _place_ambience() -> void:
@@ -4385,6 +4420,14 @@ func _update_finish(delta: float) -> void:
 		return
 	if not _at_finish(c.global_position):
 		_fin_wait_t = 0.0
+		return
+	var fi := feature("idol")
+	if fi != null and fi.has_method("on_ground") and bool(fi.call("on_ground")):
+		# v5.1: a thrown idol has to be picked up and carried out
+		_fin_wait_t -= 0.25
+		if _fin_wait_t <= 0.0:
+			_fin_wait_t = 4.0
+			CoopSync.show_banner("The idol lies back there. Someone has to carry it out.", 3.5)
 		return
 	var alive: Array = CoopSync.alive_player_nodes()
 	var inside := 0
@@ -5472,8 +5515,9 @@ func is_finished() -> bool:
 func idol_prey() -> Node3D:
 	# the idol holder the Nest hunts (the idol module), or null
 	var f := feature("idol")
-	if f != null and f.has_method("holder_node"):
-		var n = f.call("holder_node")
+	if f != null and (f.has_method("prey_node") or f.has_method("holder_node")):
+		# v5.1: the holder, or with the idol on the ground the last thrower / the screaming idol
+		var n = f.call("prey_node") if f.has_method("prey_node") else f.call("holder_node")
 		if n is Node3D and is_instance_valid(n):
 			return n
 	return null
@@ -5740,7 +5784,7 @@ class Weather extends Node3D:
 	const BY_BIOME := {
 		0: ["dust"], 1: ["bone_ash"], 2: ["spores", "spores_big"], 3: ["dust", "drips_light"],
 		4: ["drips", "mist_motes"], 5: ["dust_violet"], 6: ["glitter"], 7: ["ash", "sparks"],
-		8: ["red_motes"], 9: [],
+		8: ["red_motes"], 9: [], 12: ["dust"],
 	}
 	const PARTICLES_ON := true
 	const SPELL_ON := Vector2(40.0, 80.0)      # seconds a spell lasts
@@ -6740,6 +6784,16 @@ class Stalker extends Node3D:
 	var rp_pos: Vector3
 	var rp_yaw := 0.0
 	var retreat := 0.0
+	# v5.1 SOUND (owner pick: "sidewinder, stalker and bat colonies"): it is blind. It hunts the
+	# players it HEARS (their voice tier: whisper 5 m, talking 12, shouting 30; running 14, walking
+	# 5, standing 0; anyone within 3 m), searches where it last heard someone for 8 s, then goes home.
+	# It still only moves while nobody watches it.
+	var _heard_at := Vector3.ZERO
+	var _heard_ms := -100000
+	var _gait: Dictionary = {}             # player instance id -> [pos, ms, speed]
+	var heard_log: Array = []              # tests: [ms, name, radius]
+	const HEAR_NEAR := 3.0
+	const SEARCH_MS := 8000
 	# v5.0 no-clip
 	var tp := 0                            # its teleports (streamed: a guest snaps once per change)
 	var lift := 1.23                       # the body rides this far above its foot (the head's bottom + 0.1)
@@ -6841,6 +6895,29 @@ class Stalker extends Node3D:
 			if (p - c).length() < float(z[1]) + 6.0:
 				return true
 		return false
+
+	var d_hear_last := 0.0
+
+	func hear_radius(p: Node3D, now_ms: int) -> float:
+		# v5.1: how far away this player can be heard: their voice tier or their gait
+		var id := p.get_instance_id()
+		var q := p.global_position
+		var e = _gait.get(id)
+		var sp := 0.0
+		if e != null:
+			var dt := float(now_ms - int(e[1])) / 1000.0
+			if dt > 0.05:
+				sp = lerpf(float(e[2]), Vector2(q.x - (e[0] as Vector3).x, q.z - (e[0] as Vector3).z).length() / dt, 0.5)
+				_gait[id] = [q, now_ms, sp]
+			else:
+				sp = float(e[2])
+		else:
+			_gait[id] = [q, now_ms, 0.0]
+		var r := 0.0 if sp < 1.2 else (5.0 if sp < 5.2 else 14.0)
+		if CoopSync.has_method("noise_radius"):
+			r = maxf(r, float(CoopSync.call("noise_radius", p)))
+		d_hear_last = r
+		return r
 
 	func _seen_by(p: Vector3, cam: Camera3D) -> bool:
 		if cam == null:
@@ -6954,15 +7031,23 @@ class Stalker extends Node3D:
 		var players := CoopSync.alive_player_nodes()
 		var nearest: Node3D = null
 		var nd := 1e9
+		var now_ms := Time.get_ticks_msec()
 		for p in players:
 			if not _in_zone(p.global_position):
 				continue
 			if nc and not _nc_may_hunt(p.global_position):
 				continue                       # 7A: nobody in a squeeze, nobody in another part of the map
 			var d: float = (p.global_position - me).length()
+			if d > maxf(hear_radius(p, now_ms), HEAR_NEAR):
+				continue                       # v5.1: it cannot hear this one
 			if d < nd:
 				nd = d
 				nearest = p
+		if nearest != null:
+			if now_ms - _heard_ms > 1500:
+				heard_log.append([now_ms, str(nearest.name), d_hear_last])
+			_heard_at = nearest.global_position
+			_heard_ms = now_ms
 		# seen by the local camera (not a dead host's spectator camera), or by a living teammate's
 		# real view (their camera yaw and pitch, from their eyes)
 		var seen := false
@@ -6990,6 +7075,10 @@ class Stalker extends Node3D:
 			_tgt_feet = nearest.global_position.y - PLAYER_HALF_H
 			if not sfx_breath.playing and nd < 40.0:
 				sfx_breath.play()
+		elif now_ms - _heard_ms < SEARCH_MS and _in_zone(_heard_at):
+			# v5.1: it lost you: it creeps to where it last heard someone, listening
+			target_pos = _heard_at + Vector3.UP * 0.8
+			_tgt_feet = _heard_at.y - PLAYER_HALF_H
 		else:
 			target_pos = home
 			_tgt_feet = home.y
@@ -7856,6 +7945,8 @@ class MusicDirector extends Node:
 		[[DOOM, 0.07], null, null],
 		[[DOOM, 0.08], [WLONG, 0.09], null],
 		[[D004, 0.035], null, null],
+		null, null,
+		[[WIND, 0.9], [WSHORT, 0.05], null],                 # 12 DRY GULCH (v5.1): wind and a thin string
 	]
 	var players: Array = []
 	var target_path: Array = ["", "", ""]
@@ -7874,7 +7965,7 @@ class MusicDirector extends Node:
 			players.append(p)
 
 	func set_biome(b: int) -> void:
-		if b < 0 or b >= SETS.size():
+		if b < 0 or b >= SETS.size() or SETS[b] == null:
 			return
 		var set_: Array = SETS[b]
 		for i in 3:
@@ -8158,7 +8249,7 @@ class BatSwarm extends Node3D:
 		if not live:
 			if Engine.get_process_frames() % 10 != 0:
 				return
-			if (c.global_position - global_position).length() < trig:
+			if _heard(c):
 				if NCX.on() and not NCX.solid(global_position, 10.0):
 					return                     # C5: its rock is not loaded yet: again at the next check
 				_burst()
@@ -8210,6 +8301,31 @@ class BatSwarm extends Node3D:
 			b.scale = Vector3(1.0 + 0.55 * sin(t * 27.0 + i * 1.7), 1.0, 1.0)
 		if t > 7.5:
 			queue_free()
+
+	func burst_radius(n: Node3D) -> float:
+		# v5.1 SOUND: how near a player gets before the colony bursts. Quiet (standing, walking,
+		# a whisper) 40% of the old trigger, running 80%, talking the old trigger, shouting 2.5 times it.
+		var k := 0.4
+		if n == Game.climber:
+			var v = n.get("velocity")
+			if v is Vector3 and Vector2((v as Vector3).x, (v as Vector3).z).length() > 5.2:
+				k = 0.8
+		var tier := int(CoopSync.call("noise_of", n)) if CoopSync.has_method("noise_of") else 2
+		if tier >= 3:
+			k = maxf(k, 2.5)
+		elif tier == 2:
+			k = maxf(k, 1.0)
+		elif tier == 1:
+			k = maxf(k, 0.42)
+		return trig * k
+
+	func _heard(c: Node3D) -> bool:
+		if (c.global_position - global_position).length() < burst_radius(c):
+			return true
+		for rp in CoopSync.remote_players():
+			if is_instance_valid(rp) and ((rp as Node3D).global_position - global_position).length() < burst_radius(rp):
+				return true                   # a loud teammate near the roost bursts it for you too
+		return false
 
 	func _drop(i: int) -> void:
 		bats.remove_at(i)

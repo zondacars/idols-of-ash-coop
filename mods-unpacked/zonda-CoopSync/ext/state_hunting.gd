@@ -47,7 +47,8 @@ func physics_tick(delta: float) -> void:
 		# no-clip (v5.0, A10 and 7A, only while the no-clip helper is on): never at the bell's lure (it
 		# idles by the bell instead of biting into its cylinder), and not for 2.5 s after a lunge gave up
 		# at a gap narrower than its head (ext/centipede.gd), so it does not snarl in a loop at the mouth
-		if target and (dist_to_target < 4.0 or (dist_to_target < lerpf(7.0, 9.0, _centipede.stamina) and randf() < _centipede.stamina * _centipede.stamina)) and not _centipede.has_meta("zonda_lit") \
+		# v5.1: never a lunge at the screaming idol on the ground (the Nest gathers round it)
+		if target and not target.has_meta("zonda_pin_decoy") and (dist_to_target < 4.0 or (dist_to_target < lerpf(7.0, 9.0, _centipede.stamina) and randf() < _centipede.stamina * _centipede.stamina)) and not _centipede.has_meta("zonda_lit") \
 				and not _nc_hold_lunge(target):
 			var los_ray: PhysicsRayQueryParameters3D = PhysicsRayQueryParameters3D.create(target.global_position, _centipede.global_position, 1)
 			var los_results: Dictionary = _centipede.get_world_3d().direct_space_state.intersect_ray(los_ray)

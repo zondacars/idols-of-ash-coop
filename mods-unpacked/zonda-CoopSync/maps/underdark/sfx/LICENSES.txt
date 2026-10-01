@@ -438,3 +438,96 @@ stone_groan_844329_1.ogg
     source: "Stone Slab Door Grinding - Heavy Rock Scrape (Mono)" by NahuelMartinez (Freesound #844329)
     url: https://freesound.org/people/NahuelMartinez/sounds/844329/
     licence: CC0 1.0 (Creative Commons 0)
+
+Added in ZondaCoopSync v5.1 (2026-09-30): the idol on the ground (weeping beds, a sob, two screams).
+Each licence was checked live on the sound's own page on 2026-09-30 (the page links to
+publicdomain/zero/1.0). Same processing: mono, 44.1 kHz, filtered, beds -23 LUFS with a 1 s
+crossfaded loop seam, oneshots -14 to -20 LUFS with a -1 dBFS peak ceiling, Ogg Vorbis.
+Source audio: the Freesound HQ previews.
+
+idol_weep_403911.ogg
+    source: "063 Weeping Loop.wav" by fran_ky (Freesound #403911)
+    url: https://freesound.org/people/fran_ky/sounds/403911/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_weep_359154.ogg
+    source: "Muffled Female Cry.wav" by HorrorAudio (Freesound #359154)
+    url: https://freesound.org/people/HorrorAudio/sounds/359154/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_sob_172738_1.ogg
+    source: "crying woman.wav" by AlucardsBride (Freesound #172738)
+    url: https://freesound.org/people/AlucardsBride/sounds/172738/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_scream_333832_1.ogg
+    source: "Demonic Woman Scream.wav" by nick121087 (Freesound #333832)
+    url: https://freesound.org/people/nick121087/sounds/333832/
+    licence: CC0 1.0 (Creative Commons 0)
+idol_scream_469141_1.ogg
+    source: "Ghost Scream" by onderwish (Freesound #469141)
+    url: https://freesound.org/people/onderwish/sounds/469141/
+    licence: CC0 1.0 (Creative Commons 0)
+
+Added in ZondaCoopSync v5.1 (2026-09-30): DRY GULCH (the clock toll, the saloon piano, the wind, creaking
+signs, the marshal's shot and spurs, the sidewinder's rattle, hiss and sand). Licences checked live on
+each sound's own page on 2026-09-30 (CC0). Same processing as above; the beds are looped with a 1 s seam,
+the toll is pitched down to 0.88.
+
+bed_gulch_piano_476558.ogg
+    source: "Scary 100 year piano sound.m4a" by liezen3 (Freesound #476558)
+    url: https://freesound.org/people/liezen3/sounds/476558/
+    licence: CC0 1.0 (Creative Commons 0)
+bed_gulch_wind_112296.ogg
+    source: "desertwind1FINAL.wav" by slugzilla (Freesound #112296)
+    url: https://freesound.org/people/slugzilla/sounds/112296/
+    licence: CC0 1.0 (Creative Commons 0)
+duel_shot_683175_1.ogg
+    source: "357 Magnum Revolver Gunshot with Tail" by Shark_Anthony (Freesound #683175)
+    url: https://freesound.org/people/Shark_Anthony/sounds/683175/
+    licence: CC0 1.0 (Creative Commons 0)
+duel_spur_400593_1.ogg
+    source: "Authentic Spurs.mp3" by TheAcidRomance (Freesound #400593)
+    url: https://freesound.org/people/TheAcidRomance/sounds/400593/
+    licence: CC0 1.0 (Creative Commons 0)
+duel_spur_400593_2.ogg
+    source: "Authentic Spurs.mp3" by TheAcidRomance (Freesound #400593)
+    url: https://freesound.org/people/TheAcidRomance/sounds/400593/
+    licence: CC0 1.0 (Creative Commons 0)
+duel_spur_828863_1.ogg
+    source: "Single Spur Step" by wjb_88 (Freesound #828863)
+    url: https://freesound.org/people/wjb_88/sounds/828863/
+    licence: CC0 1.0 (Creative Commons 0)
+sw_hiss_553374_1.ogg
+    source: "Snake Hiss" by xoiziox (Freesound #553374)
+    url: https://freesound.org/people/xoiziox/sounds/553374/
+    licence: CC0 1.0 (Creative Commons 0)
+sw_rattle_268580_1.ogg
+    source: "Rattle_Snake.wav" by 7h3_lark (Freesound #268580)
+    url: https://freesound.org/people/7h3_lark/sounds/268580/
+    licence: CC0 1.0 (Creative Commons 0)
+sw_rattle_559759_1.ogg
+    source: "edited 3- rattlesnake.wav" by logee72 (Freesound #559759)
+    url: https://freesound.org/people/logee72/sounds/559759/
+    licence: CC0 1.0 (Creative Commons 0)
+sw_rattle_559759_2.ogg
+    source: "edited 3- rattlesnake.wav" by logee72 (Freesound #559759)
+    url: https://freesound.org/people/logee72/sounds/559759/
+    licence: CC0 1.0 (Creative Commons 0)
+sw_sand_199395.ogg
+    source: "sand slide on glass FF676.aif" by martinimeniscus (Freesound #199395)
+    url: https://freesound.org/people/martinimeniscus/sounds/199395/
+    licence: CC0 1.0 (Creative Commons 0)
+town_creak_759692_1.ogg
+    source: "weathervane:  A metal weathervane or pub sign creaking in the wind. Foley" by Fenfright (Freesound #759692)
+    url: https://freesound.org/people/Fenfright/sounds/759692/
+    licence: CC0 1.0 (Creative Commons 0)
+town_creak_759692_2.ogg
+    source: "weathervane:  A metal weathervane or pub sign creaking in the wind. Foley" by Fenfright (Freesound #759692)
+    url: https://freesound.org/people/Fenfright/sounds/759692/
+    licence: CC0 1.0 (Creative Commons 0)
+town_creak_759692_3.ogg
+    source: "weathervane:  A metal weathervane or pub sign creaking in the wind. Foley" by Fenfright (Freesound #759692)
+    url: https://freesound.org/people/Fenfright/sounds/759692/
+    licence: CC0 1.0 (Creative Commons 0)
+town_toll_73678_1.ogg
+    source: "TollBell.wav" by daytripper (Freesound #73678)
+    url: https://freesound.org/people/daytripper/sounds/73678/
+    licence: CC0 1.0 (Creative Commons 0)

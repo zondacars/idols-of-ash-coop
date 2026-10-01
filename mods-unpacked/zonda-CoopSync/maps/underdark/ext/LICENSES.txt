@@ -7,3 +7,5 @@ ph/         Poly Haven models (1k)     https://polyhaven.com/models             
 quat/       Quaternius Ultimate Modular Ruins  https://quaternius.com/packs/ultimatemodularruins.html  CC0
 mon/        Quaternius Spider (LowPoly Animated Easy Enemies)  https://quaternius.com/packs/easyenemy.html  CC0 (details in mon/LICENSES.txt)
             Quaternius Bat (LowPoly Animated Monsters, the harrier)  https://poly.pizza/m/hNO9XvjlKa  CC0 (details in mon/LICENSES.txt)
+west/       "Low poly CC0: Western Objects Pack" by Lucian Pavel (OpenGameArt)  https://opengameart.org/content/low-poly-cc0-western-objects-pack  CC0
+            (v5.1, DRY GULCH: converted from the pack's FBX to one .glb per object, its palette textures embedded; licence CC0 checked on the page 2026-09-30)

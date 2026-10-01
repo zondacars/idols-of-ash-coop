@@ -37,6 +37,7 @@ var cam_yaw: float = 0.0
 var cam_pitch: float = 0.0
 const EYE_HEIGHT := 0.77                          # camera above this node (feet are 0.78 below it)
 var oil_pct: int = -1                             # this teammate's lamp oil % (-1 = no oil on this map)
+var noise_tier: int = 0                           # v5.1 "nz": 0 silent .. 3 shouting (CoopSync.noise_of)
 var _voice: Node3D = null                         # voice_emitter.gd (v4.9 voice chat)
 var _voice_on_cam := false
 
@@ -601,6 +602,7 @@ func update_state(msg: Dictionary) -> void:
 	if _label.outline_modulate != outline:
 		_label.outline_modulate = outline
 	oil_pct = int(msg.get("ol", -1))
+	noise_tier = clampi(int(msg.get("nz", 0)), 0, 3)
 	if idl and _idol == null and not _idol_failed:
 		_build_idol()
 	if _idol != null and _idol.visible != idl:

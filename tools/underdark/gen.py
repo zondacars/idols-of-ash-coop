@@ -673,6 +673,8 @@ def resolve_tubes(R, F, report, rng):
         pts = plan["pts"].copy()
         rs = plan["rs"].copy()
         d0 = plan["wdir"]
+        # v5.1: a squeeze tube wears its own biome's rock (the Burrows' tubes keep theirs)
+        tmat = int(plan["biome"]) * 2 if plan.get("squeeze") else BURROWS_MAT(R)
         rw = F.ray_to_rock(plan["start"], d0, 40.0, 0.2)
         if rw is None:
             report["errors"].append("tube %s: no wall found at its mouth" % plan["name"])
@@ -680,7 +682,7 @@ def resolve_tubes(R, F, report, rng):
         A = plan["start"] + d0 * rw
         pts[0] = A - d0 * 1.8
         R.mouth_zones.append((A, d0, rs[0] + 1.4, 9.0, _mouth_keep_y(F, A, d0, -1.0), -1.0))
-        R.tube_meshes.append(("collar", tubes.collar_mesh(A, d0, rs[0] - 0.15, 6.5, 4.5), BURROWS_MAT(R)))
+        R.tube_meshes.append(("collar", tubes.collar_mesh(A, d0, rs[0] - 0.15, 6.5, 4.5), tmat))
         cap_end = True
         if plan["true_route"]:
             # the end sits inside the next chamber: walk back to its wall
@@ -694,10 +696,10 @@ def resolve_tubes(R, F, report, rng):
                 Ae = last - dend * back
                 pts[-1] = Ae + dend * 1.8
                 R.mouth_zones.append((Ae, dend, rs[-1] + 1.4, 9.0, _mouth_keep_y(F, Ae, dend, 1.0), 1.0))
-                R.tube_meshes.append(("collar", tubes.collar_mesh(Ae, dend, rs[-1] - 0.15, 6.5, 4.5), BURROWS_MAT(R)))
+                R.tube_meshes.append(("collar", tubes.collar_mesh(Ae, dend, rs[-1] - 0.15, 6.5, 4.5), tmat))
                 cap_end = False
         mesh, spts, srs, T = tubes.tube_mesh(pts, rs, cap_end=cap_end)
-        R.tube_meshes.append(("tube", mesh, BURROWS_MAT(R)))
+        R.tube_meshes.append(("tube", mesh, tmat))
         total = tubes.path_length(spts)
         dec = plan["decor"]
         # decor along the path
@@ -786,18 +788,25 @@ def resolve_tubes(R, F, report, rng):
         if dec.get("end_text"):
             p, t, _ = tubes.along(spts, total - 4.0)
             L["texts"].append({"pos": v3(p), "r": 3.0, "text": dec["end_text"]})
-        # biome zones so the fog, music and HUD know you are in the burrows
+        # biome zones so the fog, music and HUD know you are in the burrows (a squeeze: in its own biome)
         s = 0.0
         while s < total:
             p, t, _ = tubes.along(spts, s)
-            L["zones"].append({"name": plan["name"], "biome": world.BURROWS, "center": v3(p), "radius": 14.0,
+            L["zones"].append({"name": plan["name"], "biome": int(plan["biome"]) if plan.get("squeeze") else world.BURROWS,
+                               "center": v3(p), "radius": 14.0,
                                "floor": round(float(p[1]) - 1.0, 2), "top": round(float(p[1]) + 2.0, 2)})
             s += 22.0
+        if plan.get("squeeze"):
+            # the runtime dresses the squeeze along its real (smoothed) centre line
+            for e in L.get("squeezes", []):
+                if e.get("name") == plan["name"]:
+                    e["path"] = [v3(spts[i]) for i in range(0, len(spts), 3)] + [v3(spts[-1])]
+                    e["length_m"] = round(float(total), 1)
         # v49 K12 review: the tube's own centre line and radii, so a flask can sit on the real tube
         # floor (centre - 0.55 r) at the real end of a dead end. On R, not in L, so never written.
         R._tube_ways = getattr(R, "_tube_ways", {})
         R._tube_ways[plan["name"]] = (spts, srs, float(total))
-        if plan["true_route"]:
+        if plan["true_route"] and not plan.get("squeeze"):
             for ts in (18.0, 58.0, 96.0):
                 p, t, _ = tubes.along(spts, min(ts, total - 3))
                 L["tour"].append({"pos": v3(p + np.array([0, 0.2, 0])), "look": v3(p + t * 6.0), "label": "burrows %d m" % int(ts)})
@@ -1835,6 +1844,11 @@ def main():
     print("intents resolved (%.1fs)" % (time.time() - t0))
     report["warnings"] += R.L.pop("warnings_gen", [])          # v49 (#71): planned terraces that were not built
     repair_stations(R, F, report)
+    import wave2
+    wave2.place_hearths(R, F, report)          # v5.1: the False Hearths go live
+    wave2.home_rooms(R, F, report)             # v5.1: room for the Shades (shades.gd prefers roomy homes)
+    import setpieces
+    setpieces.build(R, F, report, OUT, write_glb)  # v5.1: the Span Falls, the Chandelier (setpieces.glb)
     unbury_lanterns(R, F, report)
     snap_stalker_homes(R, F, report)
 
@@ -1853,7 +1867,7 @@ def main():
         results = pool.map(mesh_block, jobs, chunksize=1)
     print("meshed (%.1fs)" % (time.time() - t0))
 
-    nb = max(len(world.BIOMES), 12)
+    nb = max(len(world.BIOMES), 13)
     mat_names = []
     for b in range(nb):
         mat_names += ["B%d_W" % b, "B%d_F" % b]
@@ -1957,7 +1971,7 @@ def main():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    pal = ["#c8b89a", "#e8e0c8", "#5fd68a", "#8b5a2b", "#4a8f9a", "#9a9aa8", "#8fc0ff", "#ff6a2a", "#b0203a", "#6b5a3a", "#ffffff", "#5a3a1a"]
+    pal = ["#c8b89a", "#e8e0c8", "#5fd68a", "#8b5a2b", "#4a8f9a", "#9a9aa8", "#8fc0ff", "#ff6a2a", "#b0203a", "#6b5a3a", "#ffffff", "#5a3a1a", "#d8b060"]
     fig, axs = plt.subplots(1, 2, figsize=(22, 11))
     for bi, groups in results:
         if not groups:

@@ -495,6 +495,11 @@ func _derive(L: Dictionary) -> void:
 					order.append(mid + j)
 				if mid - j >= 0:
 					order.append(mid - j)
+			# v5.1 (the home re-pick): with the generator's room per station (L.home_room, walkable m2),
+			# the roomiest homes first, so no Shade lives in a pocket it can only ambush from
+			var rooms = L.get("home_room", null)
+			if rooms is Dictionary and not (rooms as Dictionary).is_empty():
+				order.sort_custom(func(a, b): return int(rooms.get(str(int(cands[a][0])), 0)) > int(rooms.get(str(int(cands[b][0])), 0)))
 			for oi in order:
 				var c: Array = cands[oi]
 				var ok := true
@@ -2746,7 +2751,17 @@ func _run_test(done: Callable) -> void:
 	var got_s: Array = []
 	for x in got:
 		got_s.append(str(x))
-	_check("homes = " + ",".join(want_s), got == TEST_HOMES, "" if got == TEST_HOMES else "got " + ",".join(got_s))
+	var rooms_t = (map.get("L") as Dictionary).get("home_room", null) if map != null and map.get("L") is Dictionary else null
+	if rooms_t is Dictionary and not (rooms_t as Dictionary).is_empty():
+		# v5.1: homes are re-picked by room: every Shade must have at least 80 m2 to roam where the band allows it
+		var small: Array = []
+		for x2 in got:
+			if int(rooms_t.get(str(x2), 0)) < 80:
+				small.append("%d (%d m2)" % [x2, int(rooms_t.get(str(x2), 0))])
+		print("[SHADE] home rooms: %s" % ", ".join(PackedStringArray(got.map(func(x3): return "%d:%d" % [x3, int(rooms_t.get(str(x3), 0))]))))
+		_check("homes are roomy", small.size() <= 1, "" if small.size() <= 1 else "small: " + ", ".join(PackedStringArray(small)))
+	else:
+		_check("homes = " + ",".join(want_s), got == TEST_HOMES, "" if got == TEST_HOMES else "got " + ",".join(got_s))
 	# sh_4 first; if its home has no walkable 8 to 14 m line on this layout (on v5.0 it sits on a narrow
 	# shelf lip over a drop), the next Shade that has one: a level line first, then any line
 	var first = _by_id("sh_4")

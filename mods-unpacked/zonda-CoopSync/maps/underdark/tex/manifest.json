@@ -128,5 +128,18 @@
   ],
   "source": "Ground048",
   "mean_lin_lum": 0.25
+ },
+ "12": {
+  "albedo": "gulch/albedo.jpg",
+  "normal": "gulch/normal.jpg",
+  "rough": "gulch/rough.jpg",
+  "uv_scale": 0.11,
+  "tint": [
+   1.06,
+   0.99,
+   0.88
+  ],
+  "source": "Ground105",
+  "mean_lin_lum": 0.27
  }
 }

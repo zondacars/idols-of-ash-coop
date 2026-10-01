@@ -34,3 +34,13 @@ Outputs `out/underdark.glb`, `out/layout.json`, `out/report.json` (validation: c
 Run `python gen.py out`, then copy `out/underdark.glb` and `out/layout.json` into `mods-unpacked/zonda-CoopSync/maps/underdark/`.
 
 v4.2 adds `Builder.terrace()` (a fallen slab the route walks across), `hard_routes()` (the secret ladders and their relics) and the map-side weather, rescue and relic code lives in `maps/underdark/underdark.gd` and `coop_sync.gd`.
+
+
+## v5.1: Dry Gulch, the squeezes, the set pieces
+
+`python gen.py out` now also writes `out/setpieces.glb` (copy it next to `underdark.glb`).
+
+- `wave2.py`: DRY GULCH. The rift is stretched at the bottom of the Drowned Galleries (`rift_gap`), a dry lake bed (`TownPlugSolid`) seals it there, and the ghost town's plan goes to `L["town"]` (the buildings are built at runtime by `town.gd`). Everything under it is the old route, built from the same random numbers, only lower (`rift_world.sy`). Also `rift_riders` (`L["rift"]`: axis and radius samples, the great shelves), `place_hearths` (the False Hearths, with a grown overhang where no natural chimney fits) and `home_rooms` (walkable room per Shade home).
+- `squeezes.py`: a crawl tube at each biome change, between the last balcony above and the first one below, without moving either; every squeeze is a part boundary in `L["squeezes"]`.
+- `setpieces.py`: THE SPAN FALLS and THE CHANDELIER COMES DOWN. The falling pieces are cut out of the field (the same solids, clipped) and meshed on their own into `setpieces.glb`; the stubs and stumps stay in the cave. Writes `L["span"]` (with the Miners' Pegs) and `L["chandelier"]`.
+- New content draws from its own random streams, so the old stream (and every old choice) is unchanged.

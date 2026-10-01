@@ -26,6 +26,14 @@ STRATA = [(t * Z, b * Z, bi) for (t, b, bi) in
           [(-30, -330, MOUTH), (-330, -765, OSSUARY), (-765, -1185, FUNGAL), (-1185, -1575, ROOTS),
            (-1575, -1965, DROWNED), (-1965, -2365, VILLAGE), (-2365, -2765, CRYSTAL), (-2765, -3230, FOUNDRY)]]
 LID = (-772.0 * Z, -792.0 * Z)
+GAP_AT = None      # v5.1: (y_ins, dy) once DRY GULCH has stretched the rift; sy() moves the old depths under it
+
+
+def sy(y):
+    """An old fixed depth, moved down with everything else that lies under the town."""
+    if GAP_AT is None or y >= GAP_AT[0]:
+        return y
+    return y - GAP_AT[1]
 LAKE_Y = -3205.0 * Z
 
 
@@ -859,6 +867,9 @@ def hard_routes(B):
                 return False
         if y_lo < LID[0] + 40 and y_hi > LID[1] - 20:
             return False
+        tm = L.get("town_meta")
+        if tm and y_lo < tm["plug"][0] + 60 and y_hi > tm["plug"][1] - 30:
+            return False                                  # v5.1: never down through the town's lake bed
         return True
 
     # v49 (#2): a secret ladder may skip embers and checkpoints, never something the team was sent
@@ -1051,9 +1062,13 @@ def megastructures(B):
         B.solids.append(cone)
         tip = cone.tip()
         made += 1
+        rec = {"k": k, "cone": cone, "ln": ln, "r0": r0, "light": None, "lantern": None}     # v5.1: THE CHANDELIER COMES DOWN
         if k % 2 == 0:
             L["lights"].append({"pos": v3(tip + np.array([0, -7.0, 0])), "color": [0.35, 1.0, 0.7], "energy": 0.6, "range": 62.0})
             L["lanterns"].append({"pos": v3(tip + np.array([0, -2.5, 0])), "color": [0.35, 1.0, 0.7], "s": 3.4})
+            rec["light"] = L["lights"][-1]
+            rec["lantern"] = L["lanterns"][-1]
+        B.chand_rec = getattr(B, "chand_rec", []) + [rec]
     L["landmarks"].append({"name": "The Chandelier", "pos": v3([float(cx), y_base - 80, float(cz)]), "n": made})
     B.tour(B.spot(1.0, y_base - 120.0, 22.0) - np.array([0, 1.8, 0]), [float(cx), y_base - 60.0, float(cz)], "The Chandelier")
     L["tour"][-1]["air"] = True
@@ -1193,6 +1208,8 @@ def build(seed):
                             "spawn": [v3(m1.arrival + np.array([0, 3.0, 0]))]})
     lobe = B.under(17.0, switchback=False)
     B.run(MOUTH, -330 * Z, chain_every=2, chain_n=(3, 5), len_rng=(34, 64), dy_rng=(15.0, 19.5), gap_chance=0.25, terraces=(-185 * Z,))
+    import squeezes as SQ                     # v5.1: a crawl tube at each biome change (squeezes.py)
+    SQ.squeeze_side(B, "the Throat")
 
     # ---------------------------------------------------------------- 1 OSSUARY
     info = B.shelf(OSSUARY, 44, lobe_p=17.0, label="OSSUARY")
@@ -1205,6 +1222,7 @@ def build(seed):
     info = B.shelf(OSSUARY, 30, lobe_p=17.0, p=14.0)
     R.text(info["pts"][-1], 8.0, "A bridge of fallen stone, broken in the middle. The far side is a hook's throw away.")
     p0, p1 = B.span(OSSUARY, 14.0, 5.0, 9.0, 0.3, gap=10.0)
+    B.span_rec = {"p0": p0, "p1": p1, "beams": list(B.solids[-2:]), "near_shelf": B.shelves[-1]}     # v5.1: THE SPAN FALLS
     B.tour(B.along(p0, p1, 0.1), B.along(p0, p1, 0.9), "The Span")
     for f in (0.2, 0.42, 0.58, 0.8):
         L["lights"].append({"pos": v3(B.along(p0, p1, f, 5.0)), "color": GLOW[OSSUARY], "energy": 1.1, "range": 30.0})
@@ -1315,7 +1333,10 @@ def build(seed):
     B.enter_wall(0.5 * (info["a0"] + info["a1"]))
     t = R.tunnel(FUNGAL, [(40, 9, 70), (40, 9, 80)], r=5.5)
     R.intents.append(("gate", dict(id=gate_k, kind="kilns", need=4, tunnel=t, dist=12.0)))
-    B.tunnel_to_rift(ROOTS, r=5.5, slope=0.12)
+    y_gate = B.y
+    t_rk = B.tunnel_to_rift(ROOTS, r=5.5, slope=0.12)
+    SQ.squeeze_passage(B, "the Root Knot", "roots", list(t["points"]) + list(t_rk["points"]), y_gate + 2.0, B.y - 2.0,
+                       t["points"][0], t_rk["points"][-1])
 
     # ---------------------------------------------------------------- 3 ROOTWORKS
     info = B.landing(ROOTS, BIOMES[ROOTS], "Roots of something that should not be this deep. They cross the whole rift, wall to wall, thick as streets. You will have to walk them.")
@@ -1375,6 +1396,7 @@ def build(seed):
         if k < 3:
             B.under(rng.uniform(15, 19), switchback=True)
     B.under(18.0)
+    SQ.squeeze_side(B, "the Culvert")
 
     # ---------------------------------------------------------------- 4 DROWNED GALLERIES
     info = B.shelf(DROWNED, 46, lobe_p=18.0, label=BIOMES[DROWNED])
@@ -1420,6 +1442,11 @@ def build(seed):
     B.chain(DROWNED, 12, above=info["pts"][-1])
     B.under(18.0, switchback=False)
     B.run(DROWNED, -1965 * Z, terraces=(-1890 * Z,))
+
+    # ---------------------------------------------------------------- 12 DRY GULCH (v5.1, wave2.py)
+    # the Spillway, the dry lake bed with the ghost town, the Adit; everything below sits 90 m lower
+    import wave2
+    wave2.dry_gulch(B)
 
     # ---------------------------------------------------------------- 5 SUNKEN VILLAGE
     info = B.shelf(VILLAGE, 50, lobe_p=18.0, p=14.0, label=BIOMES[VILLAGE])
@@ -1470,7 +1497,9 @@ def build(seed):
             L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(B.spot(B.a, B.y, 8.0)), 12.0], "spawn": [v3(B.spot(B.a + 0.4, B.y + 12, 3.0))]})
         info = B.landing(VILLAGE, "VILLAGE, FAR SIDE" if cross == 0 else "VILLAGE, LAST HOUSES", None, length=40.0)
         B.under(16.0)
-        B.run(VILLAGE, (-2160 if cross == 0 else -2365) * Z, terraces=((-2080 * Z,) if cross == 0 else (-2290 * Z,)))
+        B.run(VILLAGE, sy((-2160 if cross == 0 else -2365) * Z), terraces=((sy(-2080 * Z),) if cross == 0 else (sy(-2290 * Z),)))
+
+    SQ.squeeze_side(B, "the Crypt Gap")
 
     # ---------------------------------------------------------------- 6 CRYSTAL VEINS
     info = B.shelf(CRYSTAL, 46, lobe_p=18.0, p=13.0, label=BIOMES[CRYSTAL])
@@ -1500,7 +1529,8 @@ def build(seed):
             L["centipedes"].append({"id": R.next_id("cen"), "trigger": [v3(info["pts"][-1]), 10.0], "spawn": [v3(B.spot(B.a + 0.5, B.y + 10, 3.0))]})
         B.under(17.0)
         B.run(CRYSTAL, B.y - rng.uniform(40, 60), chain_every=2, chain_n=(3, 4))
-    B.run(CRYSTAL, -2765 * Z, chain_every=1, terraces=(-2620 * Z,))
+    B.run(CRYSTAL, sy(-2765 * Z), chain_every=1, terraces=(sy(-2620 * Z),))
+    SQ.squeeze_side(B, "the Vent")
 
     # ---------------------------------------------------------------- 7 THE FOUNDRY
     info = B.shelf(FOUNDRY, 50, lobe_p=18.0, p=14.0, label=BIOMES[FOUNDRY])
@@ -1511,7 +1541,7 @@ def build(seed):
     # iron gantries bolted to the wall: long, narrow, and the vents do not care that you are there
     foundry_shelf = False
     while B.y > LAKE_Y + 120:
-        if not foundry_shelf and B.y < -2890.0 * Z:
+        if not foundry_shelf and B.y < sy(-2890.0 * Z):
             foundry_shelf = True
             info = B.shelf(FOUNDRY, 30)
             lobe_t = B.terrace(FOUNDRY)
@@ -1727,6 +1757,9 @@ def build(seed):
             q = B.spot(aa, q[1], 17.0)
             if B.in_terrace(q, 6.0) or LID[1] - 4.0 < q[1] < LID[0] + 4.0:          # v48: not inside the Lid's plug
                 continue
+            tm_ = L.get("town_meta")
+            if tm_ and tm_["plug"][1] - 4.0 < q[1] < tm_["plug"][0] + 6.0:          # v5.1: nor in the town's lake bed
+                continue
             L["lights"].append({"pos": v3(q), "color": GLOW[bi], "energy": 0.62, "range": 85.0})
             L["lanterns"].append({"pos": v3(B.spot(aa, q[1], 2.0)), "color": GLOW[bi], "s": round(rng.uniform(3.0, 4.6), 2)})
         yy -= 46.0
@@ -1738,6 +1771,8 @@ def build(seed):
     for i_, st_ in enumerate(L["stations"]):
         if i_ % 2 != 0 and st_["kind"] not in ("foothold", "platform", "hard"):
             continue
+        if st_["biome"] == 12:
+            continue                                      # v5.1: the town walk is lit by the town (town.gd)
         p_ = np.array(st_["pos"])
         a_ = rift.bearing(p_)
         y_ = float(p_[1]) + 2.6
@@ -1755,7 +1790,13 @@ def build(seed):
         st_["bottom"] += 8.0
     L["strata"][0]["top"] = 70.0
 
+    wave2.rift_riders(B)                    # v5.1: L.rift (axis, radius, the great shelves)
     R.solids = B.solids
     R.moves = B.moves
     R.rift = rift
+    R.shelves = B.shelves
+    R.terraces_info = B.terraces
+    R.span_rec = getattr(B, "span_rec", None)
+    R.chand_rec = getattr(B, "chand_rec", [])
+    R.builder = B
     return R

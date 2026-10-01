@@ -797,7 +797,7 @@ func _synth_now() -> Dictionary:
 		if not r.is_empty():
 			r["syn"] = i
 			r["biome"] = b
-			r["id"] = "fh1"
+			r["id"] = "fhT"            # v5.1: the real hearths are fh1..fh4, the test camp needs its own id
 			return r
 	return {}
 
@@ -1314,6 +1314,9 @@ func _chimney_ok(space: PhysicsDirectSpaceState3D, c: Vector3, ceil_y: float) ->
 		var p := c + Vector3(sin(a * TAU / 8.0), 0.0, cos(a * TAU / 8.0)) * CHIMNEY_R + Vector3.UP * 1.6
 		var hit := _ray(space, p, Vector3(p.x, ceil_y + CHIMNEY_DY + 0.5, p.z))
 		if hit.is_empty() or absf(float((hit["position"] as Vector3).y) - ceil_y) > CHIMNEY_DY:
+			if _test != "":
+				print("[HEARTH] chimney ray %d: %s (ceil %.2f, from %.2f, collider %s)" % [a, "no hit" if hit.is_empty() else "hit at %.2f" % float((hit["position"] as Vector3).y),
+						ceil_y, p.y, "" if hit.is_empty() else str(hit.get("collider"))])
 			return false
 	return true
 
@@ -2021,7 +2024,7 @@ func _synth_search(c) -> Dictionary:
 		if not r.is_empty():
 			r["syn"] = i
 			r["biome"] = b
-			r["id"] = "fh1"
+			r["id"] = "fhT"            # v5.1: the real hearths are fh1..fh4, the test camp needs its own id
 			print("[HEARTH] synth search: %d stations checked" % tried)
 			return r
 	print("[HEARTH] synth search: %d stations checked, none passed" % tried)

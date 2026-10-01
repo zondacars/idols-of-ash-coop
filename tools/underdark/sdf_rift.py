@@ -22,14 +22,23 @@ class Rift(Prim):
         self.amp = amp
         self.biome = strata[0][2]
 
-    def center(self, y):
+    def _remap(self, y):
+        # v5.1 (wave 2): the rift is stretched at DRY GULCH: everything under the gap sits gap[1] lower
         y = np.asarray(y, dtype=np.float64)
+        g = getattr(self, "gap", None)
+        if g is None:
+            return y
+        y_ins, dy = g
+        return np.where(y >= y_ins, y, np.where(y <= y_ins - dy, y + dy, y_ins))
+
+    def center(self, y):
+        y = self._remap(y)
         cx = self.base[0] + 42.0 * np.sin(y / 470.0 + 1.3) + 16.0 * np.sin(y / 190.0 + 0.4)
         cz = self.base[1] + 42.0 * np.cos(y / 420.0) + 16.0 * np.sin(y / 230.0 + 2.0)
         return cx, cz
 
     def radius(self, y):
-        return np.interp(y, self.ry, self.rr)
+        return np.interp(self._remap(y), self.ry, self.rr)
 
     def biome_at(self, y):
         y = np.asarray(y, dtype=np.float64)

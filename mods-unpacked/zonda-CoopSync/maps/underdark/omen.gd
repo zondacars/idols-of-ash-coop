@@ -102,7 +102,8 @@ const BLOOD := Color(0.62, 0.08, 0.06)
 # Early Brood eggs on THE SHELF III (wave 1): the six floor points B2 computed offline with GEN's
 # Field.floor_below (two SHELF III stations; 60% of the walk, 0 / +-5 / +-10 m along it, pushed
 # 10-16 m away from Rift.center(y); floor within 3 m), valid for this exact layout.json.
-const SHELF_EGGS := {"md5": "b52e68d50856d5515696627ecce4adfb", "pos": [
+# the v5.0 layout and the v5.1 one (Dry Gulch: SHELF III and the rock round it are unchanged)
+const SHELF_EGGS := {"md5": ["b52e68d50856d5515696627ecce4adfb", "ca276594d032aaf3b521f5563dac7261"], "pos": [
 	[394.24, -830.85, -33.75], [387.5, -830.85, -34.95], [386.0, -830.85, -33.23],
 	[380.76, -830.85, -36.16], [377.51, -830.85, -35.41], [374.26, -830.85, -34.67]]}
 const SHELF_A := Vector3(571.032, -830.749, -20.249)      # THE SHELF III, arrival
@@ -771,7 +772,7 @@ func _load_eggs() -> void:
 		_egg_source = "layout"
 	else:
 		var pts: Array = []
-		if FileAccess.get_md5(DIR + "layout.json") == str(SHELF_EGGS["md5"]):
+		if FileAccess.get_md5(DIR + "layout.json") in (SHELF_EGGS["md5"] as Array):
 			for p2 in SHELF_EGGS["pos"]:
 				pts.append(Vector3(float(p2[0]), float(p2[1]), float(p2[2])))
 			_egg_source = "table"
