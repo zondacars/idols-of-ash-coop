@@ -10,7 +10,7 @@ extends Node
 #   var oil := 1.0            0..1 of a full lantern
 #   var oil_enabled := false  a map sets it true while it runs; it switches itself off again when
 #                             the scene changes, so other levels never drain
-#   const OIL_SECONDS := 720.0   lit seconds in a full lantern
+#   const OIL_SECONDS := 1800.0   lit seconds in a full lantern
 #   var oil_taken := {}       flask ids this player already took (oil_flask.gd), kept across a
 #                             death reload, emptied by begin_oil_run(true)
 #   func begin_oil_run(fresh: bool)   fresh = full tank + every flask back; false = a death
@@ -75,7 +75,7 @@ var _near_k := 1.0
 var _near_target := 1.0
 var _near_t := 0.0
 
-const OIL_SECONDS := 720.0
+const OIL_SECONDS := 1800.0          # v5.1.1: 30 min lit (was 12, owner: "runs out tooooo quick")
 const OIL_LOW := 0.15
 const OIL_GIVE := 0.25
 const OIL_GIVE_MIN := 0.3

@@ -67,6 +67,21 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v5.1.1 (a cleanup):
+  - EVERYONE NEEDS v5.1.1 (lobbies are version-checked). Copy BOTH override.cfg and
+    the mods-unpacked folder again. A run saved in v5.1 CAN be continued.
+  - No more see-through props: models with open sides (the stone columns, rope coils,
+    tents, carts, monster heads and others) are drawn from both sides, and the round
+    and square columns have their tops and bottoms closed. They no longer look like
+    hollow rings from above.
+  - 65 man-made props that the map left stuck inside the rock (tents, crates, barrels,
+    pots, coffins, bodies) are lifted out when they were only slightly sunk, or left
+    out when they were buried deeper.
+  - The flat ruin walls (the game's cut-out "village" pieces) are solid slabs now,
+    not paper-thin sheets.
+  - LAMP OIL lasts longer: a full lantern burns for 30 minutes (was 12), and two
+    oil flasks now wait in The Mouth (the first one used to be 568 m down).
+
 NEW IN v5.1:
   - EVERYONE NEEDS v5.1 (lobbies are version-checked). Copy BOTH override.cfg and
     the mods-unpacked folder again. The map changed, so a run saved in v5.0 cannot
@@ -280,10 +295,10 @@ NEW IN v4.9:
     three ladders now start in The Mouth, in the Drowned Galleries, and at
     the foot of the Crystal Veins (down into the Foundry). 31 footholds in
     all, same violet light, same relics.
-  - LAMP OIL (THE UNDERDARK only): a full lantern burns for 12 minutes. Below
-    15% the flame dims and gutters; empty, it goes out. 19 flasks of oil
-    (+45% each) sit along the way, two or three per biome from the Ossuary
-    down. Hold G next to a teammate (within 3 m) to pour them a quarter of
+  - LAMP OIL (THE UNDERDARK only): a full lantern burns for 30 minutes. Below
+    15% the flame dims and gutters; empty, it goes out. 21 flasks of oil
+    (+45% each) sit along the way: two in The Mouth, then two or three per
+    biome from the Ossuary down. Hold G next to a teammate (within 3 m) to pour them a quarter of
     a full lantern from yours (you need at least 30%). A small gauge sits
     bottom-right. Oil only burns while the lantern
     is lit, and a death keeps your oil level and the flasks you took.

@@ -246,6 +246,69 @@ var _oil_before := 0.0
 var _oil_target: Node3D = null
 var _oil_phase_t := 0.0
 # ---- v5.0: feature modules and the map API
+# v5.1.1: models with open sides (holes in the mesh: tubes, sheets, scans cut flat) whose material draws one side
+# only. From the open side they read as hollow rings or vanish (the Mouth columns from above, the tents in rock).
+# Measured in game (open edges + cull mode) for every model the map places; these get two-sided copies.
+const OPEN_MODELS := {
+	"ext/nature/canoe.glb": true, "ext/nature/mushroom_red.glb": true, "ext/nature/mushroom_redGroup.glb": true,
+	"ext/nature/mushroom_redTall.glb": true, "ext/nature/mushroom_tan.glb": true,
+	"ext/nature/mushroom_tanGroup.glb": true, "ext/nature/mushroom_tanTall.glb": true, "ext/quat/Arch_Gothic.glb": true,
+	"ext/quat/Arch_Round.glb": true, "ext/quat/Barrel.glb": true, "ext/quat/Bookcase_Empty.glb": true,
+	"ext/quat/Bookcase_Full.glb": true, "ext/quat/Bricks.glb": true, "ext/quat/Candles_1.glb": true,
+	"ext/quat/Candles_2.glb": true, "ext/quat/Cart.glb": true, "ext/quat/Column_BridgeSupport.glb": true,
+	"ext/quat/Column_Round.glb": true, "ext/quat/Column_Round_Short.glb": true, "ext/quat/Column_Square.glb": true,
+	"ext/quat/Crate.glb": true, "ext/quat/DeadTree_1.glb": true, "ext/quat/DeadTree_2.glb": true,
+	"ext/quat/DeadTree_3.glb": true, "ext/quat/Pot1_Broken.glb": true, "ext/quat/Rail_Straight.glb": true,
+	"ext/quat/Stairs.glb": true, "ext/quat/Statue_Fox.glb": true, "ext/quat/Support_Tall.glb": true,
+	"ext/quat/Torch.glb": true, "ext/quat/Wall_ArchRound.glb": true, "ext/quat/Wall_ArchRound_Broken.glb": true,
+	"ext/quat/Wall_ArchRound_Overgrown.glb": true, "ext/quat/Wall_Broken.glb": true,
+	"ext/quat/Wall_Double_Hole.glb": true, "ext/quat/Wall_Overgrown.glb": true, "ext/west/Barrier.glb": true,
+	"ext/west/Cactus1.glb": true, "ext/west/Cactus2.glb": true, "ext/west/Crate.glb": true,
+	"ext/west/DeadTree.glb": true, "ext/west/DestroyedCrate.glb": true, "ext/west/Fence.glb": true,
+	"ext/west/Paper1.glb": true, "ext/west/Paper2.glb": true, "ext/west/Paper3.glb": true,
+	"ext/west/WaterTower.glb": true, "ext/west/WesternBarrel_hay.glb": true, "ext/west/WesternBarrel_water.glb": true,
+	"ext/west/WesternCart.glb": true, "ext/west/WesternCart_001.glb": true, "res://Art/Ancient_Kiln.glb": true,
+	"res://Art/Broken_Kiln.glb": true, "res://Art/Fallen_Rope.glb": true, "res://Art/Monster_Head.glb": true,
+	"res://Art/Rope_Fallen.glb": true, "res://Art/Sick_Woman.glb": true, "res://Art/Tent.glb": true,
+	"res://Art/WaterWheel.glb": true, "res://Art/Woman_Crouching.glb": true
+}
+var _two_sided_mats: Dictionary = {}
+var _fix_usec := 0                  # v5.1.1: time spent on the open-model fixes (two-sided + caps), printed with the build
+# v5.1.1: the round and square columns are tubes with no ends: from above, a ring. Their open ends get caps.
+const CAP_MODELS := {"ext/quat/Column_Round.glb": true, "ext/quat/Column_Round_Short.glb": true, "ext/quat/Column_Square.glb": true}
+# v5.1.1: man-made props the generator left inside the rock (checked against the final cave mesh, 27 samples
+# each, 15 cm tolerance): index in L.props -> [model file, lift in m]. A small sink is lifted out; a prop buried
+# deeper (or whole) is not placed. Natural pieces half-sunk on purpose and structures built into the rock are
+# not listed. Applied at load so layout.json (the saved-run fingerprint) stays the same.
+const PROP_FIX := {
+	41: ["wooden_crate_01.glb", -1.0], 42: ["wooden_lantern_01.glb", -1.0], 45: ["Tent.glb", -1.0],
+	54: ["wine_barrel_01.glb", -1.0], 56: ["wooden_barrels_01.glb", -1.0], 66: ["wooden_crate_02.glb", -1.0],
+	69: ["Tent.glb", -1.0], 76: ["wooden_crate_01.glb", 0.50], 90: ["wooden_barrels_01.glb", -1.0],
+	91: ["wooden_barrels_01.glb", -1.0], 205: ["Tent.glb", -1.0], 213: ["wooden_barrels_01.glb", -1.0],
+	214: ["wooden_barrels_01.glb", -1.0], 215: ["wooden_lantern_01.glb", -1.0], 231: ["Corpse_02.glb", -1.0],
+	234: ["Corpse_04.glb", -1.0], 242: ["coffin-old.glb", -1.0], 243: ["ceramic_pot.glb", 0.25],
+	270: ["coffin-old.glb", -1.0], 273: ["brass_candleholders.glb", -1.0], 461: ["antique_ceramic_vase_01.glb", 0.50],
+	479: ["coffin-old.glb", -1.0], 531: ["ceramic_pot.glb", -1.0], 565: ["coffin-old.glb", -1.0],
+	575: ["Corpse_02.glb", -1.0], 576: ["Corpse_03.glb", -1.0], 632: ["coffin.glb", -1.0],
+	634: ["brass_candleholders.glb", -1.0], 815: ["coffin-old.glb", 0.50], 835: ["coffin-old.glb", -1.0],
+	1362: ["Sick_Woman.glb", -1.0], 1367: ["wooden_bucket_02.glb", 0.50], 1368: ["Pot1_Broken.glb", -1.0],
+	1369: ["wooden_bucket_02.glb", -1.0], 1372: ["wine_barrel_01.glb", -1.0], 1382: ["Sick_Woman.glb", 0.50],
+	1391: ["ceramic_pot.glb", -1.0], 1401: ["Sick_Woman.glb", 0.50], 1441: ["Sick_Woman.glb", -1.0],
+	1581: ["wooden_bucket_02.glb", -1.0], 1582: ["ceramic_pot.glb", -1.0], 1593: ["Sick_Woman.glb", 0.50],
+	1629: ["ceramic_pot.glb", -1.0], 1643: ["ceramic_pot.glb", -1.0], 1654: ["Corpse_06.glb", -1.0],
+	1659: ["ceramic_pot.glb", -1.0], 1687: ["wooden_bucket_02.glb", 0.50], 1783: ["Cart.glb", -1.0],
+	1784: ["antique_ceramic_vase_01.glb", -1.0], 1786: ["wooden_stool_02.glb", -1.0], 1803: ["Cart.glb", -1.0],
+	1869: ["wooden_table_02.glb", -1.0], 1870: ["wooden_stool_02.glb", -1.0], 1896: ["wooden_stool_02.glb", -1.0],
+	2067: ["ceramic_pot.glb", -1.0], 2069: ["wooden_stool_02.glb", -1.0], 2129: ["wooden_table_02.glb", -1.0],
+	2535: ["wooden_crate_01.glb", -1.0], 2585: ["wooden_crate_01.glb", -1.0], 2766: ["picke_dirty_01.glb", -1.0],
+	2769: ["wooden_axe_02.glb", -1.0], 2833: ["old_military_crate.glb", -1.0], 2869: ["wooden_table_02.glb", -1.0],
+	2870: ["wooden_stool_02.glb", -1.0], 2910: ["wooden_bucket_01.glb", -1.0]
+}
+# v5.1.1: two flasks in THE MOUTH (the layout's first was 568 m down, in the Ossuary), on route shelves
+# v5.1.1: the game's flat cut-out ruin walls (zero thickness) are extruded into slabs this thick (model metres)
+const THICKEN_MODELS := {"res://Art/Village_Structure_01.glb": 0.3, "res://Art/Village_Structure_02.glb": 0.3, "res://Art/Village_Structure_04.glb": 0.3}
+var _thick_meshes: Dictionary = {}
+const EXTRA_OIL := [{"id": "oil_m1", "pos": [387.9, -201.6, -22.4], "biome": 0}, {"id": "oil_m2", "pos": [566.7, -295.5, 80.9], "biome": 0}]
 const FEATURES := [["light", "light.gd"], ["omen", "omen.gd"], ["idol", "idol_host.gd"],
 		["shades", "shades.gd"], ["hearth", "hearth.gd"], ["harriers", "harriers.gd"],
 		["noclip", "noclip_probe.gd"], ["sfxaudit", "sfx_audit.gd"], ["darkaudit", "dark_audit.gd"], ["shadeaudit", "shade_audit.gd"],
@@ -453,6 +516,7 @@ func _ready() -> void:
 	# after the replay: CoopSync decides here whether a saved run is offered (C12)
 	call_deferred("_announce_load")
 	built_ms = Time.get_ticks_msec() - t0
+	print("[Underdark] v5.1.1 open-model fixes took %d ms" % int(_fix_usec / 1000))
 	print("[Underdark] built in %d ms: %d chunks, %d props, %d external models (texture mipmaps %d ms)" % [built_ms, _chunks.size(), L.get("props", []).size(), _ext_placed, ext_mip_ms])
 
 
@@ -616,7 +680,7 @@ func _build_materials() -> void:
 		_floor_mat.append(fl)
 		var dm: StandardMaterial3D = w.duplicate()
 		dm.vertex_color_use_as_albedo = false
-		dm.cull_mode = BaseMaterial3D.CULL_BACK
+		dm.cull_mode = BaseMaterial3D.CULL_DISABLED      # v5.1.1: the kit stones have inside-out faces; one-sided they read as hollow rings
 		_dress_mat.append(dm)
 	_apply_material_brightness()
 	_mat_bar = StandardMaterial3D.new()
@@ -883,8 +947,16 @@ func _place_barriers() -> void:
 
 func _place_props() -> void:
 	var cache: Dictionary = {}
+	var pi := -1
+	var lift := 0.0
 	for p in L.get("props", []):
 		var path: String = p["scene"]
+		pi += 1
+		lift = 0.0
+		if PROP_FIX.has(pi) and path.ends_with("/" + str(PROP_FIX[pi][0])):
+			lift = float(PROP_FIX[pi][1])
+			if lift < 0.0:
+				continue                    # buried in the rock: not placed
 		var n: Node3D
 		if path.begins_with("ext/"):
 			n = _ext_instance(path, float(p.get("dim", 0.45)))
@@ -898,7 +970,7 @@ func _place_props() -> void:
 			if ps == null:
 				continue
 			n = ps.instantiate()
-		n.position = _v(p["pos"])
+		n.position = _v(p["pos"]) + Vector3.UP * lift
 		var r: Array = p["rot"]
 		n.rotation = Vector3(r[0], r[1], r[2])
 		n.scale = Vector3.ONE * float(p["scale"])
@@ -947,6 +1019,13 @@ func _place_props() -> void:
 			(mi as GeometryInstance3D).visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			if ruin:
 				(mi as GeometryInstance3D).material_override = _mat_ruin
+		if not ruin and not path.begins_with("ext/") and OPEN_MODELS.has(path):
+			_two_sided(n)
+		if THICKEN_MODELS.has(path):
+			var t_thick := Time.get_ticks_usec()
+			for tm in n.find_children("*", "MeshInstance3D", true, false):
+				_thicken(tm as MeshInstance3D, float(THICKEN_MODELS[path]))
+			_fix_usec += Time.get_ticks_usec() - t_thick
 
 
 # ------------------------------------------------------------------ external models
@@ -1080,6 +1159,11 @@ func _ext_instance(rel: String, dim: float) -> Node3D:
 		return null
 	var n: Node3D = t.duplicate()
 	n.set_meta("zonda_rel", rel)
+	if CAP_MODELS.has(rel):
+		var t_cap := Time.get_ticks_usec()
+		for cm in n.find_children("*", "MeshInstance3D", true, false):
+			_cap_holes(cm as MeshInstance3D)
+		_fix_usec += Time.get_ticks_usec() - t_cap
 	for mi in n.find_children("*", "MeshInstance3D", true, false):
 		var m := mi as MeshInstance3D
 		if m.mesh == null:
@@ -1098,6 +1182,8 @@ func _ext_instance(rel: String, dim: float) -> Node3D:
 				d.roughness_texture = null
 				d.roughness = 1.0
 				d.set_meta("zonda_rel", rel)
+				if OPEN_MODELS.has(rel):
+					d.cull_mode = BaseMaterial3D.CULL_DISABLED      # v5.1.1: an open model, seen from both sides
 				m.set_surface_override_material(si, d)
 	_ext_tmpl[key] = n
 	return n.duplicate()
@@ -1601,7 +1687,7 @@ func _place_oil() -> void:
 		push_warning("[Underdark] lantern.gd has no oil yet: no flasks placed")
 		return
 	var taken: Dictionary = OilFlask.taken_ids()
-	for e in L.get("oil", []):
+	for e in L.get("oil", []) + EXTRA_OIL:
 		if not (e is Dictionary):
 			continue
 		var fid := str(e.get("id", ""))
@@ -1615,6 +1701,211 @@ func _place_oil() -> void:
 		add_child(f)
 		_flasks.append(f)
 	print("[Underdark] oil: %s run, %d flasks placed (%d already taken)" % ["fresh" if _oil_fresh else "reloaded", _flasks.size(), taken.size()])
+
+
+func _thicken(m: MeshInstance3D, t: float) -> void:
+	# v5.1.1: a flat sheet becomes a closed slab: the front as it was, a back copy t behind it (facing
+	# away), and a wall along every open edge. Built once per source mesh, shared by every placement.
+	if m.mesh == null:
+		return
+	var key := m.mesh.get_instance_id()
+	if _thick_meshes.has(key):
+		m.mesh = _thick_meshes[key]
+		return
+	var src: Mesh = m.mesh
+	var out := ArrayMesh.new()
+	for s in src.get_surface_count():
+		var arr: Array = src.surface_get_arrays(s)
+		var V: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var UVa = arr[Mesh.ARRAY_TEX_UV]
+		var has_uv: bool = UVa is PackedVector2Array and (UVa as PackedVector2Array).size() == V.size()
+		var I = arr[Mesh.ARRAY_INDEX]
+		var idx: PackedInt32Array = I if I is PackedInt32Array and (I as PackedInt32Array).size() > 0 else PackedInt32Array(range(V.size()))
+		# the sheet's normal: the area-weighted sum of its triangle normals
+		var nsum := Vector3.ZERO
+		for ti in range(0, idx.size() - 2, 3):
+			nsum += (V[idx[ti + 1]] - V[idx[ti]]).cross(V[idx[ti + 2]] - V[idx[ti]])
+		if nsum.length() < 1e-9:
+			out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+			out.surface_set_material(out.get_surface_count() - 1, src.surface_get_material(s))
+			continue
+		var nn := nsum.normalized()
+		var off := -nn * t
+		var pv := PackedVector3Array()
+		var pn := PackedVector3Array()
+		var pu := PackedVector2Array()
+		var add_tri := func(a: Vector3, b: Vector3, c: Vector3, ua: Vector2, ub: Vector2, uc: Vector2) -> void:
+			var fn := (b - a).cross(c - a)
+			fn = fn.normalized() if fn.length() > 1e-12 else nn
+			pv.append(a); pv.append(b); pv.append(c)
+			pn.append(fn); pn.append(fn); pn.append(fn)
+			pu.append(ua); pu.append(ub); pu.append(uc)
+		var uv := func(i: int) -> Vector2:
+			return (UVa as PackedVector2Array)[i] if has_uv else Vector2.ZERO
+		var key_of: Dictionary = {}
+		var rep: Array = []
+		var ids := PackedInt32Array()
+		for vi in V.size():
+			var w: Vector3 = V[vi]
+			var k := "%d,%d,%d" % [roundi(w.x * 1000.0), roundi(w.y * 1000.0), roundi(w.z * 1000.0)]
+			if not key_of.has(k):
+				key_of[k] = rep.size()
+				rep.append(vi)
+			ids.append(int(key_of[k]))
+		var count: Dictionary = {}
+		var dir_edges: Array = []
+		for ti in range(0, idx.size() - 2, 3):
+			var a0: int = idx[ti]
+			var b0: int = idx[ti + 1]
+			var c0: int = idx[ti + 2]
+			add_tri.call(V[a0], V[b0], V[c0], uv.call(a0), uv.call(b0), uv.call(c0))                  # front
+			add_tri.call(V[a0] + off, V[c0] + off, V[b0] + off, uv.call(a0), uv.call(c0), uv.call(b0))  # back
+			for e in [[a0, b0], [b0, c0], [c0, a0]]:
+				var ia: int = ids[e[0]]
+				var ib: int = ids[e[1]]
+				var uk := "%d_%d" % [mini(ia, ib), maxi(ia, ib)]
+				count[uk] = int(count.get(uk, 0)) + 1
+				dir_edges.append([e[0], e[1], uk])
+		for de in dir_edges:
+			if int(count[de[2]]) != 1:
+				continue
+			var a1: int = de[0]
+			var b1: int = de[1]
+			add_tri.call(V[b1], V[a1], V[a1] + off, uv.call(b1), uv.call(a1), uv.call(a1))
+			add_tri.call(V[b1], V[a1] + off, V[b1] + off, uv.call(b1), uv.call(a1), uv.call(b1))
+		var ca: Array = []
+		ca.resize(Mesh.ARRAY_MAX)
+		ca[Mesh.ARRAY_VERTEX] = pv
+		ca[Mesh.ARRAY_NORMAL] = pn
+		ca[Mesh.ARRAY_TEX_UV] = pu
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ca)
+		out.surface_set_material(out.get_surface_count() - 1, src.surface_get_material(s))
+	_thick_meshes[key] = out
+	m.mesh = out
+
+
+func _cap_holes(m: MeshInstance3D) -> void:
+	# v5.1.1: close every open loop of the mesh (a tube's ends) with a fan from its centre, as an extra
+	# surface with the loop's own material, facing away from the model's middle
+	if m.mesh == null:
+		return
+	var src: Mesh = m.mesh
+	var out := ArrayMesh.new()
+	var mid := src.get_aabb().get_center()
+	var caps := 0
+	for s in src.get_surface_count():
+		var arr: Array = src.surface_get_arrays(s)
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		out.surface_set_material(out.get_surface_count() - 1, src.surface_get_material(s))
+		var V: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var UV = arr[Mesh.ARRAY_TEX_UV]
+		var I = arr[Mesh.ARRAY_INDEX]
+		var idx: PackedInt32Array = I if I is PackedInt32Array and (I as PackedInt32Array).size() > 0 else PackedInt32Array(range(V.size()))
+		var key_of: Dictionary = {}
+		var rep: Array = []                      # merged id -> first original vertex index
+		var ids := PackedInt32Array()
+		for vi in V.size():
+			var w: Vector3 = V[vi]
+			var k := "%d,%d,%d" % [roundi(w.x * 1000.0), roundi(w.y * 1000.0), roundi(w.z * 1000.0)]
+			if not key_of.has(k):
+				key_of[k] = rep.size()
+				rep.append(vi)
+			ids.append(int(key_of[k]))
+		var count: Dictionary = {}
+		var nxt: Dictionary = {}
+		for t in range(0, idx.size() - 2, 3):
+			var tri := [ids[idx[t]], ids[idx[t + 1]], ids[idx[t + 2]]]
+			for e in 3:
+				var a: int = tri[e]
+				var b: int = tri[(e + 1) % 3]
+				var uk := "%d_%d" % [mini(a, b), maxi(a, b)]
+				count[uk] = int(count.get(uk, 0)) + 1
+				nxt["%d>%d" % [a, b]] = b
+		var open_next: Dictionary = {}
+		for dk in nxt.keys():
+			var pr := str(dk).split(">")
+			var a2 := int(pr[0])
+			var b2 := int(pr[1])
+			if int(count["%d_%d" % [mini(a2, b2), maxi(a2, b2)]]) == 1:
+				open_next[a2] = b2
+		var used: Dictionary = {}
+		var cv := PackedVector3Array()
+		var cn := PackedVector3Array()
+		var cu := PackedVector2Array()
+		for start in open_next.keys():
+			if used.has(start):
+				continue
+			var loop: Array = []
+			var cur: int = start
+			while not used.has(cur) and open_next.has(cur) and loop.size() < 4096:
+				used[cur] = true
+				loop.append(cur)
+				cur = open_next[cur]
+			if loop.size() < 3 or cur != start:
+				continue
+			var c := Vector3.ZERO
+			var cuv := Vector2.ZERO
+			for li in loop:
+				c += V[rep[li]]
+				if UV is PackedVector2Array and (UV as PackedVector2Array).size() == V.size():
+					cuv += (UV as PackedVector2Array)[rep[li]]
+			c /= float(loop.size())
+			cuv /= float(loop.size())
+			var nrm := Vector3.ZERO
+			for j in loop.size():
+				var p0: Vector3 = V[rep[loop[j]]]
+				var p1: Vector3 = V[rep[loop[(j + 1) % loop.size()]]]
+				nrm += Vector3((p0.y - p1.y) * (p0.z + p1.z), (p0.z - p1.z) * (p0.x + p1.x), (p0.x - p1.x) * (p0.y + p1.y))
+			if nrm.length() < 1e-6:
+				continue
+			nrm = nrm.normalized()
+			var outward := nrm.dot(c - mid) >= 0.0
+			if not outward:
+				nrm = -nrm
+			for j in loop.size():
+				var a3: int = rep[loop[j]]
+				var b3: int = rep[loop[(j + 1) % loop.size()]]
+				var tri_v := [V[b3], V[a3], c] if outward else [V[a3], V[b3], c]
+				for q in tri_v:
+					cv.append(q)
+					cn.append(nrm)
+				if UV is PackedVector2Array and (UV as PackedVector2Array).size() == V.size():
+					var uvs := [(UV as PackedVector2Array)[b3], (UV as PackedVector2Array)[a3], cuv] if outward else [(UV as PackedVector2Array)[a3], (UV as PackedVector2Array)[b3], cuv]
+					for q2 in uvs:
+						cu.append(q2)
+				else:
+					for q3 in 3:
+						cu.append(Vector2.ZERO)
+			caps += 1
+		if cv.size() > 0:
+			var ca: Array = []
+			ca.resize(Mesh.ARRAY_MAX)
+			ca[Mesh.ARRAY_VERTEX] = cv
+			ca[Mesh.ARRAY_NORMAL] = cn
+			ca[Mesh.ARRAY_TEX_UV] = cu
+			out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ca)
+			out.surface_set_material(out.get_surface_count() - 1, src.surface_get_material(s))
+	if caps > 0:
+		m.mesh = out
+
+
+func _two_sided(n: Node) -> void:
+	# v5.1.1: every one-sided material on an open model gets a shared two-sided copy
+	var t0 := Time.get_ticks_usec()
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		for si in m.mesh.get_surface_count():
+			var src: Material = m.get_active_material(si)
+			if not (src is BaseMaterial3D) or (src as BaseMaterial3D).cull_mode != BaseMaterial3D.CULL_BACK:
+				continue
+			if not _two_sided_mats.has(src):
+				var d: BaseMaterial3D = src.duplicate()
+				d.cull_mode = BaseMaterial3D.CULL_DISABLED
+				_two_sided_mats[src] = d
+			m.set_surface_override_material(si, _two_sided_mats[src])
+	_fix_usec += Time.get_ticks_usec() - t0
 
 
 func _dim_materials(n: Node, k: float) -> void:
@@ -2022,7 +2313,9 @@ func _on_checkpoint(id: int, body: Node3D) -> void:
 # ------------------------------------------------------------------ traps
 
 func _place_crumbles() -> void:
-	var ps: PackedScene = load("res://Art/Sand_Shelf_Base.glb")
+	# v5.1.1: the game's whole sand shelf (its rock base AND its sand top). The base alone is an open
+	# bowl: solid from below, a hollow ring from above.
+	var ps: PackedScene = load("res://scenes/sand_shelf.tscn") if ResourceLoader.exists("res://scenes/sand_shelf.tscn") else load("res://Art/Sand_Shelf_Base.glb")
 	if ps == null:
 		return
 	for c in L.get("crumbles", []):
@@ -2122,6 +2415,7 @@ func _place_kilns() -> void:
 			n.position = pos
 			n.scale = Vector3.ONE * 0.8
 			add_child(n)
+			_two_sided(n)                 # v5.1.1: an open model (OPEN_MODELS)
 		var kiln := Kiln.new()
 		kiln.setup(str(k["gate"]), int(k["idx"]), pos)
 		add_child(kiln)
