@@ -67,6 +67,16 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v5.1.2 (nothing to walk through, nothing floating):
+  - EVERYONE NEEDS v5.1.2 (lobbies are version-checked). Copy BOTH override.cfg and
+    the mods-unpacked folder again. A run saved in v5.1 or v5.1.1 CAN be continued.
+  - Every walking spot of the route was checked in the game. 93 objects with nothing
+    solid in them stood right on the path (giant skulls and bone segments, stone
+    balls, kilns, mine frames, ruin walls, the standing bodies in the Drowned
+    Galleries), so you walked straight through them. They are moved a step aside.
+  - 37 objects floated in the air (mostly Fungal Hollow mushrooms, plus coffins,
+    crates, a canoe, a bookcase and the crouching women). They sit on the ground now.
+  - 5 of them had no clean spot and are left out.
 NEW IN v5.1.1 (a cleanup):
   - EVERYONE NEEDS v5.1.1 (lobbies are version-checked). Copy BOTH override.cfg and
     the mods-unpacked folder again. A run saved in v5.1 CAN be continued.

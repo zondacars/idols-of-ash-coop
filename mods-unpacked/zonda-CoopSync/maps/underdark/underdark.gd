@@ -306,6 +306,75 @@ const PROP_FIX := {
 }
 # v5.1.1: two flasks in THE MOUTH (the layout's first was 568 m down, in the Ossuary), on route shelves
 # v5.1.1: the game's flat cut-out ruin walls (zero thickness) are extruded into slabs this thick (model metres)
+# v5.1.2 QA: props with no collision that stood ON a walking spot (you walked through skulls, bone
+# segments, stone balls, kilns, ruin walls): index -> [model, dx, dz], slid sideways off the spot, checked
+# against the rock (not buried, still on the ground). Props that floated (an in-game ray found their real
+# support 0.3-3 m lower): [model, 0, 0, dy], dropped onto it. [model] alone = not placed.
+const PATH_FIX := {
+	93: ["wine_barrel_01.glb", 0, 0, -0.57], 194: ["Player_Corpse.glb", 0, 0, -0.49],
+	200: ["wooden_crate_01.glb", 0, 0, -0.44], 229: ["Corpse_04.glb", 0.50, 0.00],
+	232: ["Corpse_02.glb", 0, 0, -2.91], 266: ["Woman_Crouching.glb", 0, 0, -1.25],
+	294: ["Woman_Crouching.glb", 0, 0, -0.55], 448: ["Corpse_03.glb", 0.00, 0.25], 493: ["Corpse_03.glb"],
+	522: ["Monster_BodySection.glb", -0.88, 0.88], 523: ["Monster_UpperLeg.glb", 0.50, 0.00],
+	524: ["Monster_UpperLeg.glb", 0.00, 1.25], 525: ["Monster_Head.glb", 0.25, 0.00],
+	563: ["Woman_Crouching.glb", 0, 0, -0.42], 608: ["brass_candleholders.glb", 0, 0, -0.49],
+	630: ["Woman_Crouching.glb", 0, 0, -0.69], 773: ["gravestone-bevel.glb", 0.75, 0.00],
+	774: ["coffin.glb", 0, 0, -0.88], 775: ["gravestone-decorative.glb", 0.00, 0.25],
+	813: ["Monster_Head.glb", -1.24, 1.24], 819: ["antique_ceramic_vase_01.glb", 0.25, 0.00],
+	833: ["coffin.glb", 0, 0, -1.32], 834: ["gravestone-decorative.glb", 0, 0, -1.05],
+	870: ["namaqualand_boulders_01.glb", 0.18, 0.18], 883: ["mushroom_tanTall.glb", 0, 0, -1.84],
+	884: ["mushroom_tanTall.glb", 0, 0, -1.83], 896: ["mushroom_tan.glb", 0, 0, -2.63],
+	912: ["mushroom_tan.glb", 0, 0, -1.40], 916: ["mushroom_tanGroup.glb", 0, 0, -0.64],
+	947: ["mushroom_tanTall.glb", 0, 0, -0.53], 953: ["mushroom_tanGroup.glb", 0, 0, -1.22],
+	954: ["mushroom_redTall.glb", 0, 0, -0.78], 960: ["mushroom_redTall.glb", 0, 0, -0.71],
+	1126: ["mushroom_red.glb", 0, 0, -0.85], 1145: ["mushroom_redGroup.glb", 0, 0, -0.65],
+	1150: ["mushroom_red.glb", 0, 0, -0.64], 1165: ["mushroom_red.glb", 0, 0, -0.88],
+	1174: ["mushroom_tanGroup.glb", 0, 0, -0.92], 1183: ["mushroom_redTall.glb", 0, 0, -0.66],
+	1192: ["mushroom_tanTall.glb", 0, 0, -1.59], 1205: ["Monster_BodySection.glb", 0.00, 0.25],
+	1206: ["Monster_BodySection.glb", -0.75, 0.00], 1276: ["Monster_Head.glb", 2.75, 0.00],
+	1351: ["Monster_BodySection.glb", -0.18, 0.18], 1379: ["Corpse_01.glb", 0.53, 0.53],
+	1381: ["Corpse_02.glb", 0.75, 0.00], 1398: ["Corpse_01.glb", 0.75, 0.00],
+	1429: ["Monster_Head.glb", -1.25, 0.00], 1577: ["Corpse_02.glb", -0.00, -1.00],
+	1578: ["Corpse_06.glb", 0.00, 1.00], 1589: ["Corpse_03.glb", 0.75, 0.00], 1591: ["Corpse_02.glb", 0.53, 0.53],
+	1621: ["Monster_Head.glb", 0.88, -0.88], 1631: ["canoe.glb", 0, 0, -2.06],
+	1636: ["namaqualand_boulders_01.glb", 0.00, 0.25], 1664: ["Corpse_05.glb", 1.25, 0.00],
+	1683: ["Monster_BodySection.glb", 0.00, 1.25], 1691: ["Corpse_01.glb", -0.53, 0.53],
+	1692: ["Corpse_05.glb", -0.88, 0.88], 1772: ["Village_Structure_02.glb", 0.25, 0.00],
+	1794: ["Village_Structure_04.glb", 0.25, 0.00], 1795: ["Village_Structure_03.glb", 0.75, 0.00],
+	1810: ["Village_Structure_03.glb", 0.75, 0.00], 1824: ["Monster_BodySection.glb", 0.75, 0.00],
+	1825: ["Monster_UpperLeg.glb", 0.25, 0.00], 1827: ["Monster_Head.glb", -0.50, 0.00],
+	1831: ["Bookcase_Full.glb", 0, 0, -1.08], 1839: ["Village_Structure_02.glb", 0.25, 0.00],
+	1840: ["Village_Structure_03.glb", 0.75, 0.00], 1855: ["Village_Building.glb", 0, 0, -0.83],
+	1858: ["Village_Structure_01.glb", 0.25, 0.00], 1860: ["Building_Rect.glb", 0, 0, -2.63],
+	1868: ["wooden_crate_02.glb", 0, 0, -2.49], 1874: ["Village_Structure_03.glb", 0.00, 0.75],
+	1888: ["Monster_BodySection.glb"], 2055: ["Village_Structure_03.glb", -0.53, 0.53],
+	2058: ["Roof_Rect.glb", 0.25, 0.00], 2068: ["wooden_table_02.glb", 0, 0, -0.67],
+	2077: ["Village_Structure_04.glb", 0.25, 0.00], 2086: ["Column_Round_Short.glb", 0, 0, -1.05],
+	2099: ["Roof_Rect.glb", -0.00, -0.75], 2235: ["Monster_Head.glb", 0.71, 0.71],
+	2273: ["Monster_Head.glb", 0.71, -0.71], 2461: ["Monster_UpperLeg.glb", 0.25, 0.00],
+	2463: ["Monster_Head.glb", 0.75, 0.00], 2504: ["Tower_02.glb", -0.75, 0.00],
+	2508: ["Tower_02.glb", -0.25, 0.00], 2509: ["StoneSphere.glb", 3.36, -3.36],
+	2516: ["wood-support.glb", -0.71, 0.71], 2524: ["Broken_Kiln.glb", -1.50, 0.00],
+	2525: ["Tower_02.glb", -0.88, -0.88], 2533: ["wood-support.glb", 1.00, 0.00], 2540: ["Tower_02.glb"],
+	2542: ["Tower_02.glb", -0.18, -0.18], 2543: ["StoneSphere.glb"],
+	2556: ["Monster_BodySection.glb", -1.50, 0.00], 2557: ["Monster_UpperLeg.glb", 1.00, 0.00],
+	2563: ["wood-support.glb", 1.00, 0.00], 2576: ["Tower_02.glb", -0.35, -0.35],
+	2578: ["Tower_02.glb", -0.35, -0.35], 2583: ["wood-support.glb", 1.00, 0.00],
+	2736: ["Tower_02.glb", -3.50, 0.00], 2738: ["Tower_02.glb", -0.35, 0.35],
+	2743: ["wood-support.glb", 1.00, 0.00], 2748: ["StoneSphere.glb", -3.25, 0.00],
+	2757: ["Monster_BodySection.glb", -0.00, -1.00], 2758: ["Monster_UpperLeg.glb", 0.25, 0.00],
+	2761: ["wood-support.glb", 1.00, 0.00], 2763: ["wood-support.glb", 1.00, 0.00],
+	2767: ["BearTrap_Open.glb", 0, 0, -1.56], 2772: ["Tower_02.glb", -0.88, 0.88],
+	2774: ["wood-support.glb", -0.71, 0.71], 2776: ["wood-support.glb", 1.00, 0.00],
+	2781: ["namaqualand_boulders_01.glb", -1.59, 1.59], 2784: ["Tower_02.glb", -0.53, 0.53],
+	2793: ["wood-support.glb", 0.00, 1.00], 2805: ["Tower_02.glb"], 2830: ["wood-support.glb", 1.00, 0.00],
+	2841: ["Broken_Kiln.glb", 2.12, -2.12], 2842: ["Tower_02.glb", 0.75, 0.00],
+	2850: ["wood-support.glb", 1.00, 0.00], 2856: ["Ancient_Kiln.glb", 0.88, 0.88],
+	2857: ["Tower_02.glb", 0.35, 0.35], 2858: ["StoneSphere.glb", -3.01, -3.01],
+	2861: ["wood-support.glb", 1.00, 0.00], 2865: ["wood-support.glb", 1.00, 0.00],
+	2874: ["Ancient_Kiln.glb", -1.25, 0.00], 2875: ["Tower_02.glb", 1.94, -1.94],
+	2876: ["StoneSphere.glb", 2.12, -2.12], 2908: ["wood-support.glb", -0.71, 0.71]
+}
 const THICKEN_MODELS := {"res://Art/Village_Structure_01.glb": 0.3, "res://Art/Village_Structure_02.glb": 0.3, "res://Art/Village_Structure_04.glb": 0.3}
 var _thick_meshes: Dictionary = {}
 const EXTRA_OIL := [{"id": "oil_m1", "pos": [387.9, -201.6, -22.4], "biome": 0}, {"id": "oil_m2", "pos": [566.7, -295.5, 80.9], "biome": 0}]
@@ -957,6 +1026,12 @@ func _place_props() -> void:
 			lift = float(PROP_FIX[pi][1])
 			if lift < 0.0:
 				continue                    # buried in the rock: not placed
+		var shift := Vector3.ZERO
+		if PATH_FIX.has(pi) and path.ends_with("/" + str(PATH_FIX[pi][0])):
+			var pf: Array = PATH_FIX[pi]
+			if pf.size() < 3:
+				continue                    # no clean spot for it (see PATH_FIX): not placed
+			shift = Vector3(float(pf[1]), float(pf[3]) if pf.size() > 3 else 0.0, float(pf[2]))
 		var n: Node3D
 		if path.begins_with("ext/"):
 			n = _ext_instance(path, float(p.get("dim", 0.45)))
@@ -970,7 +1045,7 @@ func _place_props() -> void:
 			if ps == null:
 				continue
 			n = ps.instantiate()
-		n.position = _v(p["pos"]) + Vector3.UP * lift
+		n.position = _v(p["pos"]) + Vector3.UP * lift + shift
 		var r: Array = p["rot"]
 		n.rotation = Vector3(r[0], r[1], r[2])
 		n.scale = Vector3.ONE * float(p["scale"])
