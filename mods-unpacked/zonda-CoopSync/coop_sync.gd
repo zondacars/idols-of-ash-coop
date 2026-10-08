@@ -5,7 +5,7 @@ const MOD_DIR := "res://mods-unpacked/zonda-CoopSync/"
 # check) can never find a 4.8 lobby. From 4.8 on, the "coop_ver" lobby data does the gating.
 const LOBBY_TAG := "ZondaCoopSync2"
 const LOBBY_TAG_OLD := "ZondaCoopSync1"
-const MOD_VERSION := "5.1.2"
+const MOD_VERSION := "5.1.3"
 const MAX_MEMBERS := 4
 const SYNC_HZ := 60.0
 const CH_FAST := 0

@@ -23,7 +23,7 @@ extends Node
 #       coop_sync calls it every 40 ms while in a session. Calling it is also what tells this
 #       module a session is live: the mic is only ever opened while the polls keep coming
 #       (no poll for 0.5 s = mic closed, HUD mark hidden), except for monitoring (below).
-#   func decode(bytes: PackedByteArray) -> PackedFloat32Array
+#   func decode(bytes: PackedByteArray) -> PackedFloat32Array   (v5.1.3: 3x louder, soft-limited)
 #       Mono samples -1..1 at `sample_rate`. Empty on bad data. Handles "ZVA1" (a friend's
 #       picked microphone), the "ZVT1" test tone (only while THIS PC runs voice_test.flag) and
 #       Steam voice. Steam voice starts with the talker's SteamID, whose low 4 bytes can spell a
@@ -1173,7 +1173,28 @@ static func _resample_linear(src: PackedFloat32Array, from_rate: int, to_rate: i
 
 # ---------------------------------------------------------------- decode
 
+# v5.1.3: teammates' voices came through far too quiet (a headset mic picked in the MICROPHONE
+# box is recorded raw, with no automatic gain), so every received voice is played 3x louder
+# (+9.5 dB) with a soft limiter above 0.7, so loud talkers round off instead of crackling.
+const VOICE_BOOST := 3.0
+const BOOST_KNEE := 0.7
+
+
 func decode(bytes: PackedByteArray) -> PackedFloat32Array:
+	var pcm := _decode_raw(bytes)
+	if pcm.is_empty() or (_test and bytes.size() >= 4 and bytes[0] == 90 and bytes[1] == 86 and bytes[2] == 84 and bytes[3] == 49):
+		return pcm                          # the developer test tone stays at its own level
+	var room := 1.0 - BOOST_KNEE
+	for i in pcm.size():
+		var y: float = pcm[i] * VOICE_BOOST
+		var a := absf(y)
+		if a > BOOST_KNEE:
+			y = signf(y) * (BOOST_KNEE + room * tanh((a - BOOST_KNEE) / room))
+		pcm[i] = y
+	return pcm
+
+
+func _decode_raw(bytes: PackedByteArray) -> PackedFloat32Array:
 	if bytes.size() < 4:
 		return PackedFloat32Array()
 	# Steam voice starts with the talker's SteamID64, little-endian: its first 4 bytes are the

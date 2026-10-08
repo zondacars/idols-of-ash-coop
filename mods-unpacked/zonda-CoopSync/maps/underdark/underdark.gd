@@ -310,9 +310,11 @@ const PROP_FIX := {
 # segments, stone balls, kilns, ruin walls): index -> [model, dx, dz], slid sideways off the spot, checked
 # against the rock (not buried, still on the ground). Props that floated (an in-game ray found their real
 # support 0.3-3 m lower): [model, 0, 0, dy], dropped onto it. [model] alone = not placed.
+# v5.1.3: the corpse, stone ball and tower base that physically blocked the Throat and the Vent
+# crawls are not placed (StoneSphere, Corpse_0x, Tower_02 carry their own collision).
 const PATH_FIX := {
 	93: ["wine_barrel_01.glb", 0, 0, -0.57], 194: ["Player_Corpse.glb", 0, 0, -0.49],
-	200: ["wooden_crate_01.glb", 0, 0, -0.44], 229: ["Corpse_04.glb", 0.50, 0.00],
+	200: ["wooden_crate_01.glb", 0, 0, -0.44], 229: ["Corpse_04.glb"],
 	232: ["Corpse_02.glb", 0, 0, -2.91], 266: ["Woman_Crouching.glb", 0, 0, -1.25],
 	294: ["Woman_Crouching.glb", 0, 0, -0.55], 448: ["Corpse_03.glb", 0.00, 0.25], 493: ["Corpse_03.glb"],
 	522: ["Monster_BodySection.glb", -0.88, 0.88], 523: ["Monster_UpperLeg.glb", 0.50, 0.00],
@@ -352,7 +354,7 @@ const PATH_FIX := {
 	2077: ["Village_Structure_04.glb", 0.25, 0.00], 2086: ["Column_Round_Short.glb", 0, 0, -1.05],
 	2099: ["Roof_Rect.glb", -0.00, -0.75], 2235: ["Monster_Head.glb", 0.71, 0.71],
 	2273: ["Monster_Head.glb", 0.71, -0.71], 2461: ["Monster_UpperLeg.glb", 0.25, 0.00],
-	2463: ["Monster_Head.glb", 0.75, 0.00], 2504: ["Tower_02.glb", -0.75, 0.00],
+	2463: ["Monster_Head.glb", 0.75, 0.00], 2504: ["Tower_02.glb"],
 	2508: ["Tower_02.glb", -0.25, 0.00], 2509: ["StoneSphere.glb", 3.36, -3.36],
 	2516: ["wood-support.glb", -0.71, 0.71], 2524: ["Broken_Kiln.glb", -1.50, 0.00],
 	2525: ["Tower_02.glb", -0.88, -0.88], 2533: ["wood-support.glb", 1.00, 0.00], 2540: ["Tower_02.glb"],
@@ -373,7 +375,8 @@ const PATH_FIX := {
 	2857: ["Tower_02.glb", 0.35, 0.35], 2858: ["StoneSphere.glb", -3.01, -3.01],
 	2861: ["wood-support.glb", 1.00, 0.00], 2865: ["wood-support.glb", 1.00, 0.00],
 	2874: ["Ancient_Kiln.glb", -1.25, 0.00], 2875: ["Tower_02.glb", 1.94, -1.94],
-	2876: ["StoneSphere.glb", 2.12, -2.12], 2908: ["wood-support.glb", -0.71, 0.71]
+	2876: ["StoneSphere.glb", 2.12, -2.12], 2908: ["wood-support.glb", -0.71, 0.71],
+	236: ["StoneSphere.glb"], 2505: ["StoneSphere.glb"]                     # v5.1.3: solid, plugged the Throat and Vent exits
 }
 const THICKEN_MODELS := {"res://Art/Village_Structure_01.glb": 0.3, "res://Art/Village_Structure_02.glb": 0.3, "res://Art/Village_Structure_04.glb": 0.3}
 var _thick_meshes: Dictionary = {}

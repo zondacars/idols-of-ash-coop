@@ -67,6 +67,15 @@ wide, with 150-300 m sightlines).
   - Landmarks: THE RIBS (a ribcage the size of a street, grown into the
     Ossuary wall), THE CHANDELIER (18 stalactites hanging under the Lid),
     THE NEEDLES (rock spires standing in the lava lake).
+NEW IN v5.1.3 (louder voices, open crawls):
+  - EVERYONE NEEDS v5.1.3 (lobbies are version-checked). Copy BOTH override.cfg and
+    the mods-unpacked folder again. A saved run CAN be continued.
+  - Teammates' voices play 3 times louder, with a soft limiter so shouting rounds off
+    instead of crackling. (Still quiet? Pick STEAM MICROPHONE in the F2 MICROPHONE box:
+    Steam boosts a quiet headset mic on its own.)
+  - The way out of the Throat (the crawl from The Mouth into the Ossuary) and of the
+    Vent (in The Foundry) was plugged by a solid stone ball, a body on a stake and a
+    tower base. They are gone, the crawls are open.
 NEW IN v5.1.2 (nothing to walk through, nothing floating):
   - EVERYONE NEEDS v5.1.2 (lobbies are version-checked). Copy BOTH override.cfg and
     the mods-unpacked folder again. A run saved in v5.1 or v5.1.1 CAN be continued.

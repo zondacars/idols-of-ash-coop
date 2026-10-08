@@ -8,7 +8,7 @@ Unlike the earlier "ghost" co-op mod, this one runs a **shared world**: one set 
 
 - **See each other:** every teammate is an armored knight with a name tag and health, plus their rope and hook in real time. Movement is interpolated at 60 updates/second, and you hear your friends' hooks.
 - **Shared centipedes:** the host runs the AI, everyone else sees exactly the same centipede. Each centipede hunts the **closest player**; with several centipedes they spread out over different players.
-- **Version-checked, worldwide lobbies:** friends anywhere find your lobby, and nobody joins a session on a different build by mistake. A friend on an older build is told to update, so everyone is on v5.1.2 first.
+- **Version-checked, worldwide lobbies:** friends anywhere find your lobby, and nobody joins a session on a different build by mistake. A friend on an older build is told to update, so everyone is on v5.1.3 first.
 - **Shared progression:** the host picks the level and difficulty (campaign or sandbox); everyone follows automatically. Restarts and the ending are shared too. Health pickups are per player.
 - **Respawn and spectate:** each player gets 1 free respawn per run, placed on solid ground next to a living teammate. Die again and you spectate; **Jump** cycles who you watch. Checkpoints refresh respawns and revive spectators. **Rescue:** a player who runs out of respawns leaves a pale soul where they last stood, and a living teammate who stays next to it for 1.5 s pulls them back into the run on the spot (works on every map). When the last living player dies, the run restarts for the whole team.
 - **3D voice chat on every level, always on:** just talk, silence is never sent, and **F7** mutes your own mic. Pick the microphone in the **pause menu** (Esc > MICROPHONE) or the F2 panel: Steam's microphone by default, or any other input device (the mod then records it itself), with a live level meter. Voices come from your teammate's knight, fade with distance (out by about 70 m) and are muffled when rock is between you. In THE UNDERDARK they echo with the cave, long in the open rift and tight in tunnels, tuned per biome. A ((•)) mark shows over whoever is talking; the F2 panel has one voice volume slider (0 to 200%) and a Mute box for each teammate.
@@ -19,6 +19,8 @@ Unlike the earlier "ghost" co-op mod, this one runs a **shared world**: one set 
 ## Custom maps (Sandbox)
 
 ### THE UNDERDARK (v5.1, "The Great Rift")
+**v5.1.3:** teammates' voices play 3 times louder (soft-limited), and the solid stone ball, body and tower base that plugged the exits of the Throat and the Vent crawls are gone.
+
 **v5.1.2:** every walking spot was checked in the game: 93 objects you could walk straight through (giant skulls, bones, stone balls, kilns, frames, ruin walls, standing bodies) are moved a step off the path, and 37 floating ones (mostly mushrooms) now sit on the ground.
 
 **v5.1.1 (the cleanup):** lamp oil lasts 30 minutes and two flasks wait in The Mouth; the crumbling ledges, open-sided props and flat ruin walls are solid from every angle; 65 props the map had left inside the rock are lifted out or removed.
